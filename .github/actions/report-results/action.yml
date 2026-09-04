@@ -88,8 +88,19 @@ runs:
                 if isinstance(value, int):
                     total_failed += value
 
+            # A suite that ran nothing is broken, not clean: it means the
+            # toolchain, the binary or the corpus was missing. Counting it as a
+            # failure keeps a broken environment from reporting green.
+            empty = [TITLES.get(s, s) for s in slugs
+                     if results[s].get("total") in (0, "?", None)]
+            total_failed += len(empty)
+
             lines.append("")
-            lines.append(f"> ⚠️ **{total_failed} test(s) failed.**" if total_failed
+            if empty:
+                lines.append("> ❌ **No tests ran** in: " + ", ".join(empty) +
+                             " — the toolchain, the cir2c binary or the corpus "
+                             "was missing.")
+            lines.append(f"> ⚠️ **{total_failed} problem(s).**" if total_failed
                          else "> ✅ No failures.")
             table = "\n".join(lines)
 
@@ -113,5 +124,5 @@ runs:
       if: steps.report.outputs.total_failed != '0'
       shell: bash
       run: |
-        echo "::error::${{ steps.report.outputs.total_failed }} test(s) failed."
+        echo "::error::${{ steps.report.outputs.total_failed }} problem(s) — see the results table."
         exit 1

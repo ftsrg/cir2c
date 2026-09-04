@@ -175,6 +175,11 @@ print_summary() {
     echo -e "  output mismatch:    ${RED}$MISMATCH_TESTS${NC}   (linked & ran; wrong output/exit)"
     if [[ $interrupted -eq 1 ]]; then
         echo -e "${YELLOW}Run was interrupted; results above are partial.${NC}"
+    elif [[ $TOTAL_TESTS -eq 0 ]]; then
+        # Zero tests is never success: it means the toolchain, the cir2c binary
+        # or the corpus was missing. Saying "all passed" here would let a broken
+        # environment look green in CI.
+        echo -e "${RED}No tests ran — check the messages above.${NC}"
     elif [[ $FAILED_TESTS -eq 0 ]]; then
         echo -e "${GREEN}All tests passed!${NC}"
     else
@@ -874,8 +879,10 @@ else
     fi
 fi
 
-# Normal exit — EXIT trap prints summary
-if [[ $FAILED_TESTS -gt 0 ]]; then
+# Normal exit — EXIT trap prints summary.
+# A run that executed nothing exits non-zero too: an empty run means a missing
+# toolchain, binary or corpus, not a clean bill of health.
+if [[ $FAILED_TESTS -gt 0 || $TOTAL_TESTS -eq 0 ]]; then
     exit 1
 else
     exit 0
