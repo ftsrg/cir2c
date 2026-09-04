@@ -1,0 +1,91 @@
+# Copyright 2025 Budapest University of Technology and Economics
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Every commit message in this repository is a single subject line: no body, no
+# trailers, no AI-assistant attribution. See CONTRIBUTING.md. This check is what
+# makes that a rule rather than a preference.
+
+name: Commit messages
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Subject line only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need both endpoints of the PR range to enumerate its commits.
+          fetch-depth: 0
+
+      - name: Check every commit in this pull request
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          fail=0
+          while read -r sha; do
+            [ -n "$sha" ] || continue
+            subject=$(git log -1 --format=%s "$sha")
+
+            # Strip trailing blank lines before counting, so a message that just
+            # ends with a newline is not mistaken for having a body.
+            lines=$(git log -1 --format=%B "$sha" \
+                    | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' | wc -l)
+
+            if [ "$lines" -gt 1 ]; then
+              echo "::error::${sha:0:8} has a multi-line message. Subject line only — see CONTRIBUTING.md."
+              echo "         subject: $subject"
+              fail=1
+            fi
+
+            if git log -1 --format=%B "$sha" | grep -qiE '^\s*(co-authored-by|claude-session|generated-by|signed-off-by-ai)\s*:'; then
+              echo "::error::${sha:0:8} carries a trailer. Trailers are not used in this repository."
+              echo "         subject: $subject"
+              fail=1
+            fi
+
+            if git log -1 --format=%B "$sha" | grep -qiE 'claude|copilot|chatgpt|generated with'; then
+              echo "::error::${sha:0:8} mentions an AI assistant. Commit messages do not carry AI attribution."
+              echo "         subject: $subject"
+              fail=1
+            fi
+          done < <(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA")
+
+          if [ "$fail" -ne 0 ]; then
+            {
+              echo "## Commit message check failed"
+              echo
+              echo "Every commit in this repository is a **single subject line** —"
+              echo "no body, no trailers, no AI attribution. See CONTRIBUTING.md."
+              echo
+              echo "To fix a branch:"
+              echo '```bash'
+              echo 'git rebase -i <base>   # reword the offending commits'
+              echo '# or, to strip every body on the branch at once:'
+              echo 'git filter-branch -f --msg-filter "head -n 1" <base>..HEAD'
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "✅ All commit messages are a single subject line." >> "$GITHUB_STEP_SUMMARY"

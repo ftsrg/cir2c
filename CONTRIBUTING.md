@@ -88,8 +88,31 @@ python3 .github/scripts/add-license-header.py .github/scripts/license-header-apa
 git restore test/sources   # vendored LLVM corpus keeps its own header
 ```
 
-**Commits.** Present tense, one logical change each. Reference an issue when
-there is one.
+**Commits — subject line only.** Every commit message in this repository is a
+single line. No body, no bullet list, no trailers of any kind — including
+`Co-Authored-By:`, and including anything identifying an AI assistant. CI
+enforces this on every pull request; `git log --oneline` is the whole log.
+
+Present tense, one logical change each, and reference an issue in the subject
+(`Fix #7: …`) when there is one. Rationale that does not fit in a subject line
+belongs in the code as a comment, in `docs/`, or in the pull request — those are
+where a reader will actually look for it later.
+
+```
+Good:  Emit real assignment for trivial defaulted operator=
+Bad:   Emit real assignment for trivial defaulted operator=
+       <blank line>
+       CIR marks these with func_info<#cir.cxx_assign<…, trivial true>> and …
+```
+
+If a change genuinely cannot be explained in one line, that is usually a sign it
+should be more than one commit.
+
+Catch mistakes before CI does by enabling the repository's hooks once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
 
 ## Testing
 

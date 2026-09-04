@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+#
+# Copyright 2025 Budapest University of Technology and Economics
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Enforces this repository's one-rule commit convention locally, so a bad
+# message is caught at commit time rather than by CI. Enable with:
+#
+#   git config core.hooksPath .githooks
+#
+# See CONTRIBUTING.md.
+
+set -euo pipefail
+
+msg_file="$1"
+
+# Drop comment lines (git's own template) and trailing blank lines.
+body=$(grep -v '^#' "$msg_file" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')
+lines=$(printf '%s\n' "$body" | wc -l)
+
+fail=0
+
+if [ "$lines" -gt 1 ]; then
+    echo "commit-msg: this repository uses a single subject line — no body." >&2
+    fail=1
+fi
+
+if printf '%s\n' "$body" | grep -qiE '^\s*(co-authored-by|claude-session|generated-by)\s*:'; then
+    echo "commit-msg: trailers are not used in this repository." >&2
+    fail=1
+fi
+
+if printf '%s\n' "$body" | grep -qiE 'claude|copilot|chatgpt|generated with'; then
+    echo "commit-msg: commit messages do not carry AI attribution." >&2
+    fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+    echo >&2
+    echo "See CONTRIBUTING.md. Your message was left in $msg_file." >&2
+    exit 1
+fi
