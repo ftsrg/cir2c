@@ -69,9 +69,13 @@ runs:
                 results[slug] = {}
 
         if not results:
+            # No artifacts at all: the build failed, or every test job was
+            # skipped. This job is meant to be a required status check, so it
+            # must not pass when nothing was measured.
             table = ("## cir2c test results\n\n"
-                     "> ⚠️ No suite results were produced — check the test jobs.")
-            total_failed = 0
+                     "> ❌ **No suite results were produced** — the build failed "
+                     "or every test job was skipped.")
+            total_failed = 1
         else:
             slugs = list(results)
             names = [TITLES.get(s, s) for s in slugs]
