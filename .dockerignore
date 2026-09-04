@@ -1,0 +1,10 @@
+build/
+output/
+llvm-install/
+llvm-project/
+llvm-build/
+runtimes-build/
+test/
+docs/
+benchmarks/
+**/.cache/

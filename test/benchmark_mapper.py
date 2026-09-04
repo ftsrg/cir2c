@@ -28,8 +28,8 @@ from pathlib import Path
 from typing import TextIO
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent.parent
-RUNNER = SCRIPT_DIR / "run-cir2c.sh"
+REPO_ROOT = SCRIPT_DIR.parent
+RUNNER = REPO_ROOT / "run-cir2c.sh"
 GCC = "gcc"
 DEFAULT_YML_PATTERNS = ["**/*.yml"]
 DEFAULT_JOBS = 8

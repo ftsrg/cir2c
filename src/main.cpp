@@ -92,15 +92,18 @@ int main(int argc, char **argv) {
     input.assign((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
   }
 
-  // Workaround: the tablegen-generated AllocaOp parser has a bug where it
-  // consumes the comma and sets 'init' before verifying the keyword, so it
-  // only accepts ", init" and rejects any other qualifier with "expected 'init'".
-  // Known qualifiers emitted by clang that are not 'init':
+  // Legacy-input workaround. ClangIR used to spell AllocaOp's qualifiers as a
+  // comma-separated list, and its tablegen parser consumed the comma and set
+  // 'init' before verifying the keyword — so it accepted ", init" and rejected
+  // every other qualifier with "expected 'init'". The qualifiers clang emits
+  // that are not 'init' are:
   //   ", cleanup_dest_slot" — the C++ EH cleanup-destination slot
   //   ", const"             — a const-qualified catch-clause variable
   //                           (emitted for `catch (const T& e)`)
-  // The C emitter never inspects these flags, so it is safe to strip them
-  // before handing the text to the MLIR parser.
+  // LLVM >= 23 parses these with an `oilist` and no commas, so this strip is a
+  // no-op on CIR from a supported toolchain; it is kept only so text captured
+  // from an older ClangIR still parses. The C emitter never inspects these
+  // flags, so dropping them is safe either way.
   for (const std::string pattern : {", cleanup_dest_slot", ", const"}) {
     std::string::size_type pos = 0;
     while ((pos = input.find(pattern, pos)) != std::string::npos)

@@ -41,7 +41,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_LLVM_DIR = SCRIPT_DIR.parent.parent / "backend" / "examples" / "llvm-test-suite"
+DEFAULT_LLVM_DIR = SCRIPT_DIR / "sources" / "llvm-test-suite"
 
 GCC = "gcc"
 GXX = "g++"
@@ -125,7 +125,7 @@ def main() -> int:
         "--llvm-dir",
         type=Path,
         default=DEFAULT_LLVM_DIR,
-        help="Path to backend/examples/llvm-test-suite (default: auto-detected)",
+        help="Path to the llvm-test-suite corpus (default: test/sources/llvm-test-suite)",
     )
     parser.add_argument(
         "-j", "--jobs",

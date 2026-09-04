@@ -1,0 +1,26 @@
+#
+# Copyright 2025 Budapest University of Technology and Economics
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The llvm-project revision cir2c builds against. This is the single source of
+# truth: docker/build-llvm.sh clones it, the toolchain image bakes it in, and
+# the weekly release check compares it against upstream.
+#
+# It is a RELEASED tag on purpose — cir2c does not track llvm-project main.
+# Read docs/llvm-toolchain.md before changing it; moving the pin means
+# rebuilding the toolchain image and re-running the corpus test suites.
+#
+# Comments and blank lines are ignored; the first remaining line is the ref.
+
+llvmorg-23.1.0

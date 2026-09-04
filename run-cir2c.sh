@@ -20,8 +20,7 @@
 # system's libstdc++: libstdc++ keeps some container internals (e.g.
 # std::list's node-splice helpers) as out-of-line symbols ClangIR never sees a
 # body for, while libc++ keeps list/map/set/deque fully header-templated. Built
-# by docker/build-llvm.sh into backend/bin alongside clang; there is no flag to
-# opt out.
+# by docker/build-llvm.sh alongside clang; there is no flag to opt out.
 #
 # Exit codes: 0 success, 2 clang failed, 3 cir-opt failed, 4 cir2c failed
 #
@@ -38,17 +37,22 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
-CLANG="$SCRIPT_DIR/../llvm-install/bin/clang"
-CLANGPP="$SCRIPT_DIR/../llvm-install/bin/clang++"
-CIR_OPT="$SCRIPT_DIR/../llvm-install/bin/cir-opt"
-CIR2C="$SCRIPT_DIR/build/cir2c"
+# Resolves clang/clang++/cir-opt/libc++ and the cir2c binary; see the script for
+# the search order and the CIR2C_LLVM_PREFIX / CIR2C_BIN overrides.
+CIR2C_REPO_ROOT="$SCRIPT_DIR"
+# shellcheck source=scripts/cir-toolchain.sh
+source "$SCRIPT_DIR/scripts/cir-toolchain.sh"
+
+CLANG="$CIR_CLANG"
+CLANGPP="$CIR_CLANGXX"
+CIR2C="$CIR2C_BIN"
 
 # libc++ (built alongside clang by docker/build-llvm.sh) is the default C++
 # standard library for CIR generation: unlike libstdc++, it keeps list/map/
 # set/deque entirely header-templated, so ClangIR sees real bodies instead of
 # bodiless externs for container internals (e.g. std::list's node-splice
 # helpers) — see the no-externalize-std limitation notes in cir2c.
-LIBCXX_INCLUDE="$SCRIPT_DIR/../llvm-install/include/c++/v1"
+LIBCXX_INCLUDE="$CIR_LIBCXX"
 
 LANG=""
 STD=""
@@ -105,11 +109,10 @@ if [[ "$LANG" == "c++" ]]; then
 fi
 
 # Validate tools
-for tool in "$CLANG_BIN" "$CIR2C"; do
-    [[ -x "$tool" ]] || { echo "Error: tool not found: $tool" >&2; exit 1; }
-done
-[[ "$FLATTEN" == true ]] && { [[ -x "$CIR_OPT" ]] || { echo "Error: cir-opt not found: $CIR_OPT" >&2; exit 1; }; }
-[[ "$LANG" == "c++" ]] && { [[ -d "$LIBCXX_INCLUDE" ]] || { echo "Error: libc++ headers not found: $LIBCXX_INCLUDE (run docker/build-llvm.sh)" >&2; exit 1; }; }
+REQUIRE_FLAGS=()
+[[ "$FLATTEN" == true ]] && REQUIRE_FLAGS+=(--cir-opt)
+[[ "$LANG" == "c++" ]] && REQUIRE_FLAGS+=(--libcxx)
+cir_require_toolchain ${REQUIRE_FLAGS[@]+"${REQUIRE_FLAGS[@]}"} || exit 1
 
 # Temp file management
 _TEMPS=()
@@ -131,9 +134,11 @@ CIR_FILE=$(_tmpmlir "$MLIR_OUT")
     ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
     ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} || exit 2
 
-# Step 2: Preprocess — strip alloca qualifiers the tablegen AllocaOp parser
-# can't handle: ", cleanup_dest_slot" (C++ EH slot) and ", const"
-# (const-qualified catch variable). Safe to strip; C emitter ignores them.
+# Step 2: Preprocess — strip alloca qualifiers that ClangIR's AllocaOp parser
+# used to reject: ", cleanup_dest_slot" (C++ EH slot) and ", const"
+# (const-qualified catch variable). LLVM >= 23 spells these without commas and
+# parses them fine, so this is a no-op there; it is kept for CIR text produced
+# by an older toolchain. Safe either way — the C emitter ignores both flags.
 PRE_FILE=$(_tmpmlir "")
 sed -e 's/, cleanup_dest_slot\]/\]/g' \
     -e 's/, const\]/\]/g' \

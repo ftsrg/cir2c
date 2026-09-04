@@ -14,134 +14,140 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# cir2c Test Suite
-
-This directory contains the test infrastructure for `cir2c`.
-
-## Directory Structure
+# Test suite
 
 ```
 test/
-├── run_tests.sh              # Full test suite runner
-├── run-cir2c.sh              # Single-file pipeline (use for debugging)
-├── benchmark_mapper.py       # SV-COMP / .yml benchmark runner
-├── cir-preprocess.sh         # Alloca qualifier stripping (used by all scripts)
+├── run_tests.sh                # the runner for all three suites
+├── integration/input/          # small, targeted reproducers (the default suite)
+├── sources/llvm-test-suite/    # vendored LLVM SingleSource corpus (~2600 programs)
+├── benchmark_mapper.py         # SV-COMP-style .yml benchmark runner
 ├── generate-reference-outputs.py
-├── integration/
-│   ├── input/                # C and C++ source files for integration tests
-│   └── output/               # Generated files (created at test time)
-├── unit/                     # Unit test MLIR inputs (FileCheck / lit)
-├── llvm-eval/output/         # Created at test time (LLVM test suite results)
-└── esbmc-eval/output/        # Created at test time (esbmc-eval results)
+└── results2tex.py              # results.txt → LaTeX macros, for papers
 ```
 
-## Single-file pipeline
+Requires `bash`, GNU `parallel`, `python3`, and a built `cir2c` plus a ClangIR
+toolchain — see [../docs/building.md](../docs/building.md).
 
-For iterating on a single failing case, use `run-cir2c.sh` directly. It runs the full `clang → preprocess → [cir-opt flatten] → cir2c` pipeline in one command:
+## Running
+
+The short version, from a configured build directory:
 
 ```bash
-cir2c/test/run-cir2c.sh [OPTIONS] <input.c|cpp> <output.c>
+ctest --test-dir build --output-on-failure
 ```
 
-Options:
-
-| Option | Description |
-|---|---|
-| `--lang c\|c++` | Override language (default: inferred from file extension) |
-| `--std STD` | Override language standard (default: `c23` / `c++23`) |
-| `--flatten` | Run `cir-opt -cir-flatten-cfg` before `cir2c` |
-| `--mlir FILE` | Save the intermediate CIR MLIR to FILE |
-| `--flat-mlir FILE` | Save the flattened MLIR to FILE (implies `--flatten`) |
-| `--include DIR` | Add `-I DIR` to CIR generation (repeatable) |
-
-Exit codes:
-
-| Code | Meaning |
-|---|---|
-| 0 | Success |
-| 2 | `clang` / CIR generation failed |
-| 3 | `cir-opt` flatten failed |
-| 4 | `cir2c` mapping failed |
-
-Tool paths are resolved relative to the script: `clang`/`clang++`/`cir-opt` from `../../backend/bin/bin/`, `cir2c` from `../build/cir2c`.
-
-## Full test suite
+That runs the integration suite. To drive the runner directly:
 
 ```bash
-cd cir2c/test && bash run_tests.sh [--json-out <summary.json>]
+bash test/run_tests.sh                       # integration only (the default)
+RUN_LLVM=1 RUN_INTEGRATION=0 bash test/run_tests.sh
+JOBS=8 bash test/run_tests.sh --json-out /tmp/summary.json
 ```
-
-Runs up to three suites depending on environment variables (see below). Requires GNU `parallel`.
-
-### Environment variables
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RUN_INTEGRATION` | `1` | Run C and C++ integration tests |
-| `RUN_LLVM` | `0` | Run LLVM SingleSource end-to-end tests (large, slow) |
-| `RUN_ESBMC` | `0` | Run esbmc-eval coverage tests (large, slow) |
-| `JOBS` | `$(nproc)` | Parallelism for GNU parallel |
+| `RUN_INTEGRATION` | `1` | Integration tests |
+| `RUN_LLVM` | `0` | LLVM SingleSource end-to-end tests (large, slow) |
+| `RUN_ESBMC` | `0` | esbmc-eval coverage tests (large, slow; corpus not vendored) |
+| `JOBS` | `nproc` | Parallelism |
+| `LLVM_EVAL_DIR` | `test/sources/llvm-test-suite/` | LLVM corpus location |
+| `ESBMC_EVAL_DIR` | `test/sources/esbmc-eval/` | esbmc-eval corpus location |
+| `CIR2C_LLVM_PREFIX` | probed | ClangIR toolchain prefix |
+| `CIR2C_BUILD_DIR` | `build` | Where to find the `cir2c` binary |
 
-Pass `--json-out FILE` to write a machine-readable JSON summary at exit (used by CI to build PR comment tables).
+Flags: `--json-out FILE` writes a machine-readable summary (CI uses it to build
+the results table); `--externalize-std` / `--no-externalize-std` select the
+standard-library treatment (see [../docs/limitations.md](../docs/limitations.md#externalizing-the-standard-library)).
 
-### Suite 1: Integration tests (`RUN_INTEGRATION=1`)
+## Suite 1 — integration (`RUN_INTEGRATION=1`)
 
-Runs every `.c` file in `integration/input/` as a **C integration test** and every `.cpp` file as a **C++ integration test**. For each file the pipeline is:
+Every `.c` and `.cpp` file under `integration/input/`, run through the full
+pipeline; the test passes when the generated C compiles with `clang -fsyntax-only`.
 
-1. Generate CIR via `clang`/`clang++` (`-S -emit-cir`).
-2. Preprocess (strip alloca qualifiers that the MLIR parser cannot handle).
-3. Run `cir2c` to produce a `.c` output.
-4. Compile the generated C with `clang -c -fsyntax-only` to verify it is valid C.
+This is the suite to extend. Drop a minimal reproducer into
+`integration/input/`, named `test_<area>.<c|cpp>`, and it is picked up
+automatically — no registration anywhere. The current inputs cover arithmetic,
+casts, comparisons, control flow, arrays, structs, globals, floats, pointers,
+integer promotion, bit operations; C++ exception handling and RAII scopes;
+and virtual dispatch, including member pointers and multiple inheritance.
 
-A test passes when the generated C compiles without errors. Per-test logs and generated files are written to `integration/output/`.
+Per-test logs and generated C land in `integration/output/` (gitignored).
 
-Current integration test inputs include:
+## Suite 2 — LLVM SingleSource (`RUN_LLVM=1`)
 
-- **C tests**: `test_basic.c`, `test_arithmetic.c`, `test_comparisons.c`, `test_control_flow.c`, `test_functions.c`, `test_casts.c`, `test_unary.c`, `test_shifts.c`, `test_arrays.c`, `test_nested_arrays.c`, `test_structs.c`, `test_struct_float.c`, `test_globals.c`, `test_floats.c`, `test_floats_2.c`, `test_bools.c`, `test_pointer.c`, `test_unsigned.c`, `test_integer_promotion.c`, `test_compound.c`, `test_block_arg.c`, `test_nf_for.c`, `test_nf_while` / `test_nf_do_while.c`, `test_nf_break_continue.c`, `test_nf_switch_fallthrough.c`, `test_nf_nested.c`
-- **C++ EH/scope tests**: `test_eh_throw_catch.cpp`, `test_eh_raii_throw.cpp`, `test_eh_nested_try.cpp`, `test_eh_multiple_fns.cpp`, `test_eh_called_throw.cpp`, `test_nf_try.cpp`
-- **C++ scope/RAII tests**: `test_scope_raii.cpp`, `test_scope_early_return_dtor.cpp`, `test_scope_nested_raii_loop.cpp`, `test_scope_plain_block.cpp`, `test_scope_for_init.cpp`, `test_scope_if_init.cpp`, `test_scope_stmt_expr.cpp`
-- **C++ virtual dispatch tests**: `test_virtual_dispatch.cpp`, `test_virtual_multi.cpp`, `test_virtual_member_ptr.cpp`, `test_swap_vector.cpp`
+The vendored `sources/llvm-test-suite/` corpus. For each source with a
+`.reference_output` sibling: translate, compile, link, run, and compare stdout
+and exit code against the reference. Sources without a reference output are not
+run.
 
-### Suite 2: LLVM SingleSource end-to-end tests (`RUN_LLVM=1`)
+Output mismatches that reproduce with `clang -fclangir` directly are attributed
+to upstream ClangIR and counted as skipped rather than failed — cir2c cannot be
+more correct than the CIR it is handed.
 
-Requires the LLVM test suite at `../backend/examples/llvm-test-suite/`. For each source file that has a `.reference_output` sibling:
+`generate-reference-outputs.py` fills in missing `.reference_output` files by
+compiling and running each program with the system gcc/g++.
 
-1. Run the full pipeline (`clang → preprocess → cir2c`) to produce C.
-2. Compile and link with `clang`.
-3. Run the binary and compare stdout / exit code against `.reference_output`.
+## Suite 3 — esbmc-eval (`RUN_ESBMC=1`)
 
-Output mismatches that can be reproduced with `clang -fclangir` directly are attributed to upstream ClangIR bugs and counted as SKIPPED rather than failures.
+A C++ coverage corpus with no reference outputs; the pass condition is only that
+the generated C **compiles**. The corpus is not vendored here — point
+`ESBMC_EVAL_DIR` at a checkout of it.
 
-Tests without a `.reference_output` file are not run. Per-test logs go to `llvm-eval/output/`.
+## The blocklist
 
-### Suite 3: esbmc-eval coverage tests (`RUN_ESBMC=1`)
+The corpus suites skip tests whose generated CIR contains an operation that is
+knowingly out of scope — inline assembly, SIMD vectors, `__int128`, MSVC SEH.
+These count as skipped rather than failed, so the numbers reflect real coverage
+gaps rather than deliberate ones.
 
-Requires `../backend/examples/esbmc-eval/`. The pass condition is that the pipeline produces C that **compiles** (no reference output exists, so execution is not checked). Per-test logs go to `esbmc-eval/output/`.
+The list is the `BLOCKLIST_OPS` array at the top of `run_tests.sh`, one entry
+per line with a comment saying why. Add and remove entries freely; each entry is
+matched as a fixed substring against the `.mlir` text. Keep it in sync with
+[../docs/limitations.md](../docs/limitations.md#not-mapped-at-all).
 
-### CIR op blocklist
+## Result categories
 
-Both the LLVM and esbmc-eval suites skip tests whose generated CIR contains ops that are knowingly out of scope (e.g. `cir.asm`, `cir.vec.*`, `!cir.vector<`, `cir.int<s, 128>`, `cir.eh.setjmp`). These are reported as SKIPPED to avoid noise.
+The runner distinguishes failure modes, because they mean different things:
 
-## Benchmark runner (`benchmark_mapper.py`)
+| Category | Meaning |
+|---|---|
+| **Passed** | Generated C compiled, linked, ran, and matched the reference |
+| **Compiled, not run** | Valid C, but could not be linked (expected for unresolved C++-stdlib references) |
+| **Output mismatch** | Ran, but produced the wrong answer — a real bug |
+| **Mapper failed** | The pipeline could not produce C |
+| **Compile failed** | cir2c produced invalid C — a real bug |
+| **Skipped** | Blocklisted op, a CIR-generation failure upstream, or a known ClangIR divergence |
+| **Timed out** | Exceeded the 60 s per-test budget |
 
-For SV-COMP–style benchmarks expressed as `.yml` task files:
+"Mismatch" and "compile failed" are the two that always deserve investigation.
+
+## Benchmark runner
+
+For SV-COMP-style benchmarks expressed as `.yml` task files:
 
 ```bash
-python3 cir2c/test/benchmark_mapper.py <input-dir> [set-file-or-glob ...]
+python3 test/benchmark_mapper.py <input-dir> [set-file-or-glob ...]
 ```
-
-Options:
 
 | Flag | Meaning |
 |---|---|
-| `-c` / `--c-mode` | Use C mode (`clang -x c`) instead of the default C++ mode |
-| `-f` / `--flatten` | Run `cir-opt -cir-flatten-cfg` before `cir2c` |
-| `-o DIR` / `--output-dir DIR` | Keep per-case `.mlir` and `output.c` files in DIR |
+| `-c` / `--c-mode` | C mode (`clang -x c`) instead of the default C++ mode |
+| `-f` / `--flatten` | Run `cir-opt -cir-flatten-cfg` before cir2c |
+| `-o DIR` / `--output-dir DIR` | Keep per-case `.mlir` and `output.c` |
 
 Results are written to `output.txt` in the working directory.
 
-## Troubleshooting
+## Debugging a failure
 
-- Per-test logs (pipeline, compile, link, run) are in `integration/output/`, `llvm-eval/output/`, or `esbmc-eval/output/` depending on the suite.
-- Use `run-cir2c.sh --mlir tmp.mlir input.c output.c` to inspect the intermediate CIR for a failing case.
-- The alloca qualifier preprocessing (stripping `, cleanup_dest_slot` and `, const` from CIR text) is handled by `run-cir2c.sh` (and also inline in `cir2c/src/main.cpp`). `cir-preprocess.sh` is the standalone version used by legacy callers.
+1. Find the per-test log under `integration/output/`, `llvm-eval/output/` or
+   `esbmc-eval/output/`.
+2. Re-run the single case with the intermediate CIR saved:
+   ```bash
+   ./run-cir2c.sh --mlir /tmp/case.mlir path/to/case.cpp /tmp/case.c
+   ```
+3. Iterate on `cir2c /tmp/case.mlir /tmp/case.c` alone — that takes clang out of
+   the loop entirely.
+
+See [../docs/usage.md](../docs/usage.md#working-on-a-failing-case) for the
+longer version.

@@ -1,0 +1,190 @@
+# Copyright 2025 Budapest University of Technology and Economics
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: read
+  pull-requests: write   # needed to post/update the results comment
+
+env:
+  # The toolchain image carries the LLVM pinned in llvm-version.txt, with
+  # clang/clang++/cir-opt on PATH at /opt/cir/bin.
+  LLVM_IMAGE: ghcr.io/ftsrg/cir2c-llvm:latest
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ftsrg/cir2c-llvm:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCIR2C_LLVM_PREFIX=/opt/cir
+
+      - name: Build
+        run: cmake --build build --target cir2c -j "$(nproc)"
+
+      - name: Report versions
+        run: |
+          echo "cir2c: $(./build/cir2c --version)"
+          echo "LLVM pin: $(cat llvm-version.txt)"
+          clang --version | head -1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cir2c-binary
+          path: build/cir2c
+
+  test:
+    name: ${{ matrix.name }}
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ftsrg/cir2c-llvm:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Integration tests
+            slug: integration
+            env: RUN_INTEGRATION=1 RUN_LLVM=0 RUN_ESBMC=0
+            extra_flags: ''
+          - name: LLVM SingleSource tests
+            slug: llvm
+            env: RUN_INTEGRATION=0 RUN_LLVM=1 RUN_ESBMC=0
+            extra_flags: '--externalize-std'
+          - name: LLVM SingleSource tests (no-externalize-std)
+            slug: llvm-std
+            env: RUN_INTEGRATION=0 RUN_LLVM=1 RUN_ESBMC=0
+            extra_flags: '--no-externalize-std'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cir2c-binary
+          path: build/
+
+      - name: Prepare
+        run: |
+          chmod +x build/cir2c
+          apt-get update -qq
+          apt-get install -y --no-install-recommends parallel
+
+      - name: Run ${{ matrix.name }}
+        env:
+          CIR2C_LLVM_PREFIX: /opt/cir
+          CIR2C_BUILD_DIR: ${{ github.workspace }}/build
+        run: |
+          # The runner reports per-suite results in the JSON summary; a non-zero
+          # exit here would hide it, so failures are surfaced by the report step.
+          JOBS=4 ${{ matrix.env }} \
+            bash test/run_tests.sh ${{ matrix.extra_flags }} \
+              --json-out /tmp/${{ matrix.slug }}.json \
+            || true
+          cat /tmp/${{ matrix.slug }}.json
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.slug }}
+          path: /tmp/${{ matrix.slug }}.json
+
+  report:
+    name: Report results
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/report-results
+
+  license-headers:
+    name: License headers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Check for missing license headers
+        run: |
+          # The script adds headers in place; anything it modified was missing one.
+          python .github/scripts/add-license-header.py \
+            .github/scripts/license-header-apache
+
+          # The vendored LLVM test corpus carries the LLVM Project's own header.
+          git restore test/sources
+          python .github/scripts/add-license-header.py \
+            .github/scripts/license-header-apache-llvm \
+            test/sources/
+
+          MODIFIED=$(git diff --name-only)
+          if [ -n "$MODIFIED" ]; then
+            {
+              echo "## Files missing license headers"
+              echo
+              echo '```'
+              echo "$MODIFIED"
+              echo '```'
+              echo
+              echo "### How to fix"
+              echo '```bash'
+              echo "python3 .github/scripts/add-license-header.py .github/scripts/license-header-apache ."
+              echo "git restore test/sources"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::$(echo "$MODIFIED" | wc -l) file(s) missing license headers"
+            exit 1
+          fi
+          echo "✅ All files have proper license headers" >> "$GITHUB_STEP_SUMMARY"
+
+  shellcheck:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check every shell script
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            bash -n "$f" || { echo "::error file=$f::bash syntax error"; fail=1; }
+          done < <(git ls-files '*.sh')
+          exit $fail

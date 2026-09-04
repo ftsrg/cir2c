@@ -1,0 +1,106 @@
+# Copyright 2025 Budapest University of Technology and Economics
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Builds the self-contained binaries and publishes them as a GitHub release on
+# every push to main. LLVM is not rebuilt here — cir2c is compiled on top of the
+# toolchain image — so this takes minutes.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_notes:
+        description: Extra release notes (optional)
+        required: false
+        default: ''
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # create the release
+  packages: read    # pull the toolchain image
+
+jobs:
+  release:
+    name: Build and publish binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # cmake/GenerateVersion.cmake stamps the binary with the commit hash.
+          fetch-depth: 0
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build static binaries
+        run: ./scripts/build-static-binaries.sh
+
+      - name: Smoke-test the binaries
+        run: |
+          ./output/cir2c --version
+          ./output/clang --version | head -1
+          file output/cir2c | tee /dev/stderr | grep -q 'ELF 64-bit'
+
+      - name: Package
+        run: |
+          cp LICENSE output/LICENSE
+          cp README.md output/README.md
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          zip -r "cir2c-${SHORT_SHA}.zip" output/
+          {
+            echo "SHORT_SHA=${SHORT_SHA}"
+            echo "ARCHIVE=cir2c-${SHORT_SHA}.zip"
+            echo "LLVM_PIN=$(cat llvm-version.txt)"
+          } >> "$GITHUB_ENV"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXTRA_NOTES: ${{ inputs.release_notes }}
+        run: |
+          NOTES=$(cat <<EOF
+          Built from \`${GITHUB_SHA}\` against LLVM \`${LLVM_PIN}\`.
+
+          \`${ARCHIVE}\` contains statically linked \`cir2c\`, \`clang\`,
+          \`clang++\` and \`cir-opt\`, the Clang resource headers (\`include/\`),
+          the libc++ headers and static archives (\`libcxx/\`), and the LLVM
+          license. They depend only on libc.
+
+          \`\`\`bash
+          unzip ${ARCHIVE} && cd output
+          ./cir2c --version
+          \`\`\`
+
+          See [docs/usage.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/usage.md).
+
+          ${EXTRA_NOTES}
+          EOF
+          )
+          gh release create "${SHORT_SHA}" \
+            --title "cir2c ${SHORT_SHA}" \
+            --notes "${NOTES}" \
+            --target "${GITHUB_SHA}" \
+            "${ARCHIVE}"

@@ -918,7 +918,7 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
   }
 
   // Trivial defaulted copy/move-assignment operators (CIR
-  // special_member<cxx_assign<..., trivial true>>): CIR emits an essentially
+  // func_info<#cir.cxx_assign<..., trivial true>>): CIR emits an essentially
   // empty body for these — the actual semantics ("bitwise-copy the object")
   // is carried only by the `trivial` marker, not by any IR in the body — on
   // the assumption that whatever lowers this materializes the copy itself.
@@ -927,7 +927,7 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
   // assignment of such a type (e.g. std::basic_string's internal __rep
   // union) silently no-op'd. Detect this and emit the real assignment.
   if (hasBody) {
-    if (auto specialMember = cirFuncOp.getCxxSpecialMember()) {
+    if (auto specialMember = cirFuncOp.getFuncInfo()) {
       if (auto assignAttr = mlir::dyn_cast<cir::CXXAssignAttr>(*specialMember)) {
         bool returnsVoid = mlir::isa<mlir::NoneType>(rty) || mlir::isa<cir::VoidType>(rty);
         if (assignAttr.getIsTrivial() && bodyParamNames.size() == 2 &&

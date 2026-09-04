@@ -1,0 +1,117 @@
+# Copyright 2025 Budapest University of Technology and Economics
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Report Test Results
+description: >
+  Collect every suite's JSON summary, render one table into the job summary and
+  (on pull requests) into a sticky comment, and fail if any suite reported
+  failures.
+
+runs:
+  using: composite
+  steps:
+    # One artifact per suite, named results-<slug>; the pattern keeps this
+    # action working when suites are added to or removed from the CI matrix.
+    - name: Download all suite results
+      uses: actions/download-artifact@v4
+      with:
+        pattern: results-*
+        path: /tmp/results
+        merge-multiple: true
+      continue-on-error: true
+
+    - name: Build the results table
+      id: report
+      shell: bash
+      run: |
+        python3 - << 'PYEOF'
+        import json, os, pathlib
+
+        # Display name per known slug; unknown slugs fall back to the slug
+        # itself, so a new suite shows up without editing this action.
+        TITLES = {
+            "integration": "Integration",
+            "llvm":        "LLVM SingleSource",
+            "llvm-std":    "LLVM (no-ext-std)",
+            "esbmc":       "esbmc-eval",
+            "esbmc-std":   "esbmc-eval (no-ext-std)",
+        }
+        ROWS = [
+            ("Total",                "total"),
+            ("✅ Passed",             "passed"),
+            ("🔗 Compiled, not run",  "compiled_not_run"),
+            ("⏩ Skipped",             "skipped"),
+            ("⏱️ Timed out",           "timed_out"),
+            ("❌ **Failed**",          "failed"),
+            ("&nbsp;&nbsp;mapper failed",   "mapper_failed"),
+            ("&nbsp;&nbsp;compile failed",  "compile_failed"),
+            ("&nbsp;&nbsp;output mismatch", "mismatch"),
+        ]
+
+        results = {}
+        for path in sorted(pathlib.Path("/tmp/results").glob("*.json")):
+            slug = path.stem
+            try:
+                results[slug] = json.loads(path.read_text())
+            except Exception as exc:
+                print(f"warning: could not read {path}: {exc}")
+                results[slug] = {}
+
+        if not results:
+            table = ("## cir2c test results\n\n"
+                     "> ⚠️ No suite results were produced — check the test jobs.")
+            total_failed = 0
+        else:
+            slugs = list(results)
+            names = [TITLES.get(s, s) for s in slugs]
+            lines = ["## cir2c test results", "",
+                     "| Metric | " + " | ".join(names) + " |",
+                     "| --- | " + " | ".join("---:" for _ in slugs) + " |"]
+            for label, key in ROWS:
+                cells = " | ".join(str(results[s].get(key, "?")) for s in slugs)
+                lines.append(f"| {label} | {cells} |")
+
+            total_failed = 0
+            for slug in slugs:
+                value = results[slug].get("failed")
+                if isinstance(value, int):
+                    total_failed += value
+
+            lines.append("")
+            lines.append(f"> ⚠️ **{total_failed} test(s) failed.**" if total_failed
+                         else "> ✅ No failures.")
+            table = "\n".join(lines)
+
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"table<<EOF_TABLE\n{table}\nEOF_TABLE\n")
+            f.write(f"total_failed={total_failed}\n")
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+            f.write(table + "\n")
+
+        print(table)
+        PYEOF
+
+    - name: Comment on the pull request
+      if: github.event_name == 'pull_request'
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: cir2c-test-results
+        message: ${{ steps.report.outputs.table }}
+
+    - name: Fail if any suite reported failures
+      if: steps.report.outputs.total_failed != '0'
+      shell: bash
+      run: |
+        echo "::error::${{ steps.report.outputs.total_failed }} test(s) failed."
+        exit 1

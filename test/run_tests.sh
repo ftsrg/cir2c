@@ -27,16 +27,20 @@ NC='\033[0m' # No Color
 # Directories
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR/.."
-BUILD_DIR="$PROJECT_DIR/build"
 INTEGRATION_TEST_DIR="$SCRIPT_DIR/integration"
 INTEGRATION_INPUT_DIR="$INTEGRATION_TEST_DIR/input"
 INTEGRATION_OUTPUT_DIR="$INTEGRATION_TEST_DIR/output"
 
-# Tools
-CIR2C="$BUILD_DIR/cir2c"
-CLANGPP="$PROJECT_DIR/../llvm-install/bin/clang++"
-GCC="$PROJECT_DIR/../llvm-install/bin/clang"  # Use same clang for compilation checks
-RUNNER="$SCRIPT_DIR/../run-cir2c.sh"
+# Tools. cir-toolchain.sh resolves the ClangIR toolchain and the cir2c binary;
+# CIR2C_LLVM_PREFIX / CIR2C_BIN / CIR2C_BUILD_DIR override its choices.
+CIR2C_REPO_ROOT="$PROJECT_DIR"
+# shellcheck source=../scripts/cir-toolchain.sh
+source "$PROJECT_DIR/scripts/cir-toolchain.sh"
+
+CIR2C="$CIR2C_BIN"
+CLANGPP="$CIR_CLANGXX"
+GCC="$CIR_CLANG"  # Use the same clang for compilation checks
+RUNNER="$PROJECT_DIR/run-cir2c.sh"
 TIMEOUT=60
 JOBS=${JOBS:-$(nproc)}
 
@@ -78,13 +82,14 @@ blocklisted_op_in() {
 export -f blocklisted_op_in
 
 # Directories for E2E tests
-LLVM_EVAL_DIR="$SCRIPT_DIR/sources/llvm-test-suite/"
+LLVM_EVAL_DIR="${LLVM_EVAL_DIR:-$SCRIPT_DIR/sources/llvm-test-suite/}"
 LLVM_EVAL_OUTPUT_DIR="$SCRIPT_DIR/llvm-eval/output"
 
 # ESBMC-eval coverage corpus (C++ programs, no reference outputs). The pass
 # condition is just that the mapper produced C that COMPILES (linking optional).
-# Run by default; set RUN_ESBMC=0 to skip this step.
-ESBMC_EVAL_DIR="$PROJECT_DIR/../verification_analysis/sources/esbmc-eval/"
+# The corpus is not vendored into this repository (see test/README.md); point
+# ESBMC_EVAL_DIR at a checkout of it and set RUN_ESBMC=1 to run this suite.
+ESBMC_EVAL_DIR="${ESBMC_EVAL_DIR:-$SCRIPT_DIR/sources/esbmc-eval/}"
 ESBMC_EVAL_OUTPUT_DIR="$SCRIPT_DIR/esbmc-eval/output"
 RUN_ESBMC=${RUN_ESBMC:-0}
 RUN_LLVM=${RUN_LLVM:-0}

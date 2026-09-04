@@ -1,0 +1,22 @@
+# Build output
+build/
+output/
+*.log
+
+# LLVM toolchain, when built in-tree (docker/build-llvm.sh --prefix ./llvm-install)
+llvm-install/
+llvm-project/
+llvm-build/
+runtimes-build/
+
+# Test artifacts
+test/*/output/
+test/tmp/
+test/output.txt
+
+# Editors and tooling
+.vscode/settings.json
+.cache/
+compile_commands.json
+CLAUDE.md
+.claude/

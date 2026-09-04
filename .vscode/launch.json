@@ -1,0 +1,34 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "cir2c: Debug on ${input:mlirFile}",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/cir2c",
+      "args": ["${input:mlirFile}", "${workspaceFolder}/build/out.c"],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb",
+      "preLaunchTask": "cir2c: Build (Debug)",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "mlirFile",
+      "type": "promptString",
+      "description": "CIR .mlir file to map (e.g. from run-cir2c.sh --mlir)",
+      "default": "${workspaceFolder}/build/case.mlir"
+    }
+  ]
+}
