@@ -87,7 +87,7 @@ LLVM_EVAL_OUTPUT_DIR="$SCRIPT_DIR/llvm-eval/output"
 
 # ESBMC-eval coverage corpus (C++ programs, no reference outputs). The pass
 # condition is just that the mapper produced C that COMPILES (linking optional).
-# The corpus is not vendored into this repository (see test/README.md); point
+# The corpus is not vendored into this repository (see README.md); point
 # ESBMC_EVAL_DIR at a checkout of it and set RUN_ESBMC=1 to run this suite.
 ESBMC_EVAL_DIR="${ESBMC_EVAL_DIR:-$SCRIPT_DIR/sources/esbmc-eval/}"
 ESBMC_EVAL_OUTPUT_DIR="$SCRIPT_DIR/esbmc-eval/output"

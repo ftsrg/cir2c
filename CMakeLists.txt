@@ -20,7 +20,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # The oldest LLVM whose upstream ClangIR carries every CIR operation cir2c
-# maps. See docs/llvm-toolchain.md for the reasoning behind this floor.
+# maps. See the "LLVM toolchain" section of README.md for the reason.
 set(CIR2C_LLVM_MIN_VERSION 23.0)
 
 # ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ if(LLVM_PACKAGE_VERSION VERSION_LESS CIR2C_LLVM_MIN_VERSION)
     "cir2c needs LLVM >= ${CIR2C_LLVM_MIN_VERSION} (found ${LLVM_PACKAGE_VERSION}).\n"
     "Earlier releases predate the CIR operations cir2c maps — LLVM 22 and older\n"
     "still model arithmetic as a single `cir.binop` instead of `cir.add`/`cir.sub`/…\n"
-    "See docs/llvm-toolchain.md.")
+    "See the LLVM toolchain section of README.md.")
 endif()
 
 # The CIR dialect lives in clang's include tree, so an LLVM install built
@@ -111,7 +111,7 @@ if(NOT CIR2C_FOUND_CIR_HEADERS)
     "This LLVM install has no ClangIR headers: clang/CIR/Dialect/IR/CIRDialect.h "
     "was not found under any of ${CIR2C_INCLUDE_DIRS}.\n"
     "cir2c needs an LLVM built with -DCLANG_ENABLE_CIR=ON; "
-    "docker/build-llvm.sh produces one. See docs/building.md.")
+    "docker/build-llvm.sh produces one. See the Build section of README.md.")
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
@@ -215,7 +215,7 @@ else()
   message(FATAL_ERROR
     "libMLIRCIR not found in ${LLVM_LIB_DIR}. Without it the CIR dialect is not "
     "registered and every `cir.*` operation fails to parse. Point cir2c at an "
-    "LLVM built with -DCLANG_ENABLE_CIR=ON (see docs/building.md).")
+    "LLVM built with -DCLANG_ENABLE_CIR=ON (see the Build section of README.md).")
 endif()
 
 install(TARGETS cir2c RUNTIME DESTINATION bin)
@@ -225,7 +225,7 @@ install(TARGETS cir2c RUNTIME DESTINATION bin)
 # ---------------------------------------------------------------------------
 # `ctest` runs the integration suite: every source under test/integration/input
 # through the full clang → cir2c → clang pipeline. The larger corpora
-# (LLVM SingleSource, esbmc-eval) are opt-in — see test/README.md.
+# (LLVM SingleSource, esbmc-eval) are opt-in — see the Tests section of README.md.
 enable_testing()
 
 add_test(NAME version

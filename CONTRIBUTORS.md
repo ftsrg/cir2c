@@ -41,6 +41,6 @@ LLVM contributors who are bringing ClangIR into `llvm-project`.
 
 ## Adding yourself
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Please add
+Contributions are welcome — see [README.md](README.md#10-contribute). Please add
 yourself to the Authors list in the same pull request as your first substantive
 contribution.

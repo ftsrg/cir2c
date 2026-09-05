@@ -89,7 +89,7 @@ Build one with:      ./docker/build-llvm.sh --prefix ./llvm-install
 or pull the image:   docker pull ghcr.io/ftsrg/cir2c-llvm:latest
 or point at yours:   export CIR2C_LLVM_PREFIX=/path/to/llvm-install
 
-See docs/building.md.
+See the "Build" section of README.md.
 EOF
         return 1
     fi
@@ -101,7 +101,7 @@ EOF
     if [[ ! -x "$CIR_OPT" ]]; then
         echo "Error: $CIR_PREFIX has clang but no cir-opt, so it was almost certainly" >&2
         echo "built without -DCLANG_ENABLE_CIR=ON and cannot emit CIR." >&2
-        echo "See docs/building.md." >&2
+        echo 'See the "Build" section of README.md.' >&2
         return 1
     fi
 

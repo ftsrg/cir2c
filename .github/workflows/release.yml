@@ -94,7 +94,7 @@ jobs:
           ./cir2c --version
           \`\`\`
 
-          See [docs/usage.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/usage.md).
+          See [README.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/README.md#5-operation).
 
           ${EXTRA_NOTES}
           EOF

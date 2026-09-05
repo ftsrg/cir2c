@@ -18,7 +18,8 @@
 # the weekly release check compares it against upstream.
 #
 # It is a RELEASED tag on purpose — cir2c does not track llvm-project main.
-# Read docs/llvm-toolchain.md before changing it; moving the pin means
+# Read the "LLVM toolchain" section of README.md before changing it; moving the
+# pin means
 # rebuilding the toolchain image and re-running the corpus test suites.
 #
 # Comments and blank lines are ignored; the first remaining line is the ref.

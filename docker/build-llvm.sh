@@ -17,10 +17,11 @@
 # Builds LLVM+Clang+MLIR (with ClangIR, CLANG_ENABLE_CIR=ON) plus
 # libc++/libc++abi/libunwind, all as static archives, into a single install
 # prefix. Used by docker/llvm.Dockerfile, and runnable directly on a host
-# machine to produce the same toolchain without Docker — see docs/building.md.
+# machine to produce the same toolchain without Docker — see README.md.
 #
 # The LLVM revision is a released tag pinned in llvm-version.txt, NOT the tip of
-# upstream main. See docs/llvm-toolchain.md for why, and for how to move the pin.
+# upstream main. See the "LLVM toolchain" section of README.md for why, and for
+# how to move the pin.
 #
 # Requires: cmake, ninja, a C/C++ compiler (clang recommended), lld, git,
 # static zlib (libz.a + zlib.h).

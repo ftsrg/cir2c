@@ -17,7 +17,7 @@
 # job does: it compares llvm-version.txt against upstream's tags weekly and
 # opens (or updates) a single issue when a newer release is out.
 #
-# See docs/llvm-toolchain.md for the update procedure.
+# See the "LLVM toolchain" section of README.md for the update procedure.
 
 name: Check for a newer LLVM release
 
@@ -78,7 +78,7 @@ jobs:
           | Newest upstream release | \`${LATEST}\` |
 
           Updating is deliberate work, not automatic — see
-          [docs/llvm-toolchain.md](../blob/main/docs/llvm-toolchain.md#moving-the-pin):
+          [README.md](../blob/main/README.md#64-change-the-pin):
 
           1. Set \`llvm-version.txt\` to \`${LATEST}\`.
           2. Run the **LLVM toolchain image** workflow to rebuild the toolchain.

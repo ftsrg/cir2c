@@ -14,7 +14,7 @@
 
 # Every commit in this repository is a single subject line with no body and no
 # trailers, authored by a real person rather than an AI identity. See
-# CONTRIBUTING.md. This check is what makes that a rule rather than a preference.
+# README.md. This check is what makes that a rule rather than a preference.
 
 name: Commits
 
@@ -53,7 +53,7 @@ jobs:
                     | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' | wc -l)
 
             if [ "$lines" -gt 1 ]; then
-              echo "::error::${sha:0:8} has a multi-line message. Subject line only — see CONTRIBUTING.md."
+              echo "::error::${sha:0:8} has a multi-line message. Subject line only — see README.md."
               echo "         subject: $subject"
               fail=1
             fi
@@ -86,7 +86,7 @@ jobs:
               echo
               echo "Every commit in this repository is a **single subject line** —"
               echo "no body, no trailers, no AI attribution — and is authored by a"
-              echo "real person. See CONTRIBUTING.md."
+              echo "real person. See the Contribute section of README.md."
               echo
               echo "To fix a branch:"
               echo '```bash'

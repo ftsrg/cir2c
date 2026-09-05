@@ -19,7 +19,7 @@
 #
 #   git config core.hooksPath .githooks
 #
-# See CONTRIBUTING.md.
+# See the "Contribute" section of README.md.
 
 set -euo pipefail
 
@@ -48,6 +48,6 @@ fi
 
 if [ "$fail" -ne 0 ]; then
     echo >&2
-    echo "See CONTRIBUTING.md. Your message was left in $msg_file." >&2
+    echo "See the \"Contribute\" section of README.md. Your message was left in $msg_file." >&2
     exit 1
 fi
