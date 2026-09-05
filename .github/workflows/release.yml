@@ -73,7 +73,10 @@ jobs:
           {
             echo "SHORT_SHA=${SHORT_SHA}"
             echo "ARCHIVE=cir2c-${SHORT_SHA}.zip"
-            echo "LLVM_PIN=$(cat llvm-version.txt)"
+            # llvm-version.txt carries a licence header and comments. Feeding
+            # the whole file into GITHUB_ENV makes a multi-line value, which the
+            # env file format rejects. Take the revision only.
+            echo "LLVM_PIN=$(grep -vE '^[[:space:]]*(#|$)' llvm-version.txt | head -n1 | tr -d '[:space:]')"
           } >> "$GITHUB_ENV"
 
       - name: Create the release

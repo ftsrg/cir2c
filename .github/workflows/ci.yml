@@ -58,7 +58,7 @@ jobs:
       - name: Report versions
         run: |
           echo "cir2c: $(./build/cir2c --version)"
-          echo "LLVM pin: $(cat llvm-version.txt)"
+          echo "LLVM pin: $(grep -vE '^[[:space:]]*(#|$)' llvm-version.txt | head -n1 | tr -d '[:space:]')"
           clang --version | head -1
 
       - uses: actions/upload-artifact@v4
