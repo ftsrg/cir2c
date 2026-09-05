@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Every commit message in this repository is a single subject line: no body, no
-# trailers, no AI-assistant attribution. See CONTRIBUTING.md. This check is what
-# makes that a rule rather than a preference.
+# Every commit in this repository is a single subject line with no body and no
+# trailers, authored by a real person rather than an AI identity. See
+# CONTRIBUTING.md. This check is what makes that a rule rather than a preference.
 
-name: Commit messages
+name: Commits
 
 on:
   pull_request:
@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   check:
-    name: Subject line only
+    name: Message and authorship
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,6 +69,15 @@ jobs:
               echo "         subject: $subject"
               fail=1
             fi
+
+            # Commits are attributed to the person responsible for the change,
+            # never to an assistant that helped write it.
+            ident=$(git log -1 --format='%an <%ae> / %cn <%ce>' "$sha")
+            if printf '%s' "$ident" | grep -qiE 'anthropic\.com|noreply@openai|copilot@|@users\.noreply\.github\.com.*bot'; then
+              echo "::error::${sha:0:8} is authored or committed by an AI identity: $ident"
+              echo "         subject: $subject"
+              fail=1
+            fi
           done < <(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA")
 
           if [ "$fail" -ne 0 ]; then
@@ -76,16 +85,20 @@ jobs:
               echo "## Commit message check failed"
               echo
               echo "Every commit in this repository is a **single subject line** —"
-              echo "no body, no trailers, no AI attribution. See CONTRIBUTING.md."
+              echo "no body, no trailers, no AI attribution — and is authored by a"
+              echo "real person. See CONTRIBUTING.md."
               echo
               echo "To fix a branch:"
               echo '```bash'
               echo 'git rebase -i <base>   # reword the offending commits'
               echo '# or, to strip every body on the branch at once:'
               echo 'git filter-branch -f --msg-filter "head -n 1" <base>..HEAD'
+              echo '# to fix authorship:'
+              echo 'git config user.name "Your Name" && git config user.email you@example.com'
+              echo 'git rebase --exec "git commit --amend --no-edit --reset-author" <base>'
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-          echo "✅ All commit messages are a single subject line." >> "$GITHUB_STEP_SUMMARY"
+          echo "✅ All commits are a single subject line, authored by a person." >> "$GITHUB_STEP_SUMMARY"

@@ -108,7 +108,17 @@ Bad:   Emit real assignment for trivial defaulted operator=
 If a change genuinely cannot be explained in one line, that is usually a sign it
 should be more than one commit.
 
-Catch mistakes before CI does by enabling the repository's hooks once per clone:
+**Authorship.** Commits are attributed to the person responsible for the
+change — never to an assistant that helped write it. If you use an AI tool, the
+commit is still yours: set your own identity and leave it set.
+
+```bash
+git config user.name "Your Name"
+git config user.email you@example.com
+```
+
+Enable the repository's hooks once per clone, and both rules are checked before
+the commit is made rather than by CI afterwards:
 
 ```bash
 git config core.hooksPath .githooks
