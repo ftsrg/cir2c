@@ -750,30 +750,23 @@ The global-variable model has these other effects:
 
 ### 8.4 Flexible array members
 
-**WARNING: cir2c does not keep the initial values of a flexible array member.
-The generated program reads incorrect data.**
-
 A structure can end with an array that has no size:
 
 ```c
 struct one { int a; int values[]; } hobbit = {5, {1, 2, 3}};
 ```
 
-CIR keeps the correct initial values. It gives the initializer an array of three
-elements. But cir2c writes the member with the length from the declared type,
-which is zero:
+CIR gives the member the length 0, but it keeps the correct initial values in
+the initializer. cir2c gives the member the length from the initializer. Thus
+the values stay correct.
 
-```c
-struct one { int a; int values[0]; };
-struct one hobbit = {5, {1, 2, 3}};      /* The C compiler discards 1, 2, 3 */
-```
+The C compiler cannot initialize an array of length 0. If cir2c used the
+declared length, the compiler would discard the values, and the program would
+read the memory after the structure.
 
-The C compiler gives the warning "excess elements in array initializer" and
-discards the values. The program then reads the memory after the structure. The
-values are incorrect, and no message tells you.
-
-This is unsound. Do not verify a program that has an initialized flexible array
-member. The `UnitTests/2006-01-23-UnionInit` test in the corpus shows the fault.
+**Note: The structure becomes larger.** The member is always the last member,
+so no other member moves. `sizeof` increases. A calculation that uses `sizeof`
+to find a size gives a larger result, never a smaller one.
 
 ### 8.5 Structured output and flat output
 

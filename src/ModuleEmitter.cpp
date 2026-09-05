@@ -1716,6 +1716,51 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     }
   }
 
+  // Flexible array members. A record may end in `T name[]`, which CIR types as
+  // `!cir.array<T x 0>`, while a global's initializer carries the real element
+  // count. Emitting the member with length 0 makes the C compiler discard the
+  // surplus initializers ("excess elements in array initializer"), so the object
+  // silently reads whatever follows it in memory. Grow the member to the longest
+  // initializer seen for that record.
+  //
+  // Growing only appends storage: a flexible array member is always last, so the
+  // prefix layout is unchanged and no other field moves. sizeof() grows, which
+  // makes any size-derived allocation larger rather than smaller.
+  module->walk([&](cir::GlobalOp globalOp) {
+    auto iv = globalOp.getInitialValue();
+    if (!iv) return;
+    auto cr = mlir::dyn_cast<cir::ConstRecordAttr>(*iv);
+    if (!cr) return;
+    auto recTy = mlir::dyn_cast<cir::RecordType>(cr.getType());
+    if (!recTy || !recTy.isComplete()) return;
+
+    llvm::ArrayRef<mlir::Type> members = recTy.getMembers();
+    if (members.empty()) return;
+    const size_t lastIdx = members.size() - 1;
+    auto declaredArr = mlir::dyn_cast<cir::ArrayType>(members[lastIdx]);
+    if (!declaredArr) return;
+
+    mlir::ArrayAttr initElems = cr.getMembers();
+    if (initElems.size() <= lastIdx) return;
+    auto initTyped = mlir::dyn_cast<mlir::TypedAttr>(initElems[lastIdx]);
+    if (!initTyped) return;
+    auto initArr = mlir::dyn_cast<cir::ArrayType>(initTyped.getType());
+    if (!initArr || initArr.getSize() <= declaredArr.getSize()) return;
+
+    std::string sname = (recTy.getName() && !recTy.getName().getValue().empty())
+                            ? TypeMapper::recordCName(recTy.getName())
+                            : anonRecordCName(recTy);
+    auto sit = structFields.find(sname);
+    if (sit == structFields.end()) return;
+    for (FieldInfo &fi : sit->second) {
+      if (fi.index != static_cast<int>(lastIdx) || !fi.isArray || fi.dims.empty())
+        continue;
+      unsigned long long have = std::strtoull(fi.dims.front().c_str(), nullptr, 10);
+      if (initArr.getSize() > have)
+        fi.dims.front() = std::to_string(initArr.getSize());
+    }
+  });
+
   // Pre-scan: when std:: externalization is on, classify which std__ structs
   // are value-used (need a full definition) vs pointer-only (forward decl
   // suffices) vs unreferenced (skip entirely).
