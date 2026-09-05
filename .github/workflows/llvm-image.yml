@@ -39,8 +39,10 @@ on:
         default: ''
 
 concurrency:
-  group: llvm-image
-  cancel-in-progress: false
+  # One run for each workflow, branch and event. A new run cancels the run that
+  # it makes obsolete, so no job continues for a commit that is already old.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
