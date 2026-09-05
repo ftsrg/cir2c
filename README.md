@@ -26,8 +26,28 @@ C or C++ source  --clang -emit-cir-->  CIR  --cir2c-->  verifier-friendly C
 
 CIR is the ClangIR dialect of MLIR. Clang makes the CIR from the source code.
 
+## Cite this work
+
+**Note: The entry that follows is a placeholder. Replace it when the
+publication is available.**
+
+```bibtex
+@misc{cir2c,
+  author       = {Bajczi, Levente and {\'A}d{\'a}m, Zs{\'o}fia},
+  title        = {{cir2c}: A {ClangIR}-based Translator from {C}/{C++}
+                  to Verifier-Friendly {C}},
+  year         = {2026},
+  howpublished = {\url{https://github.com/ftsrg/cir2c}}
+}
+```
+
+Give also the version that you used. The `cir2c --version` command prints the
+commit. Each release contains the `llvm-version.txt` file, which gives the LLVM
+revision.
+
 ## Contents
 
+- [Cite this work](#cite-this-work)
 - [1. Description](#1-description)
 - [2. Get the binaries](#2-get-the-binaries)
 - [3. Requirements](#3-requirements)
@@ -81,8 +101,12 @@ libc. You do not have to build or install LLVM.
 
 ```bash
 gh release download --repo ftsrg/cir2c --pattern 'cir2c-*.zip'
-unzip cir2c-*.zip && cd output
+unzip cir2c-*.zip           # Makes the cir2c-<commit>/ directory
+cd cir2c-*/
 ```
+
+Each archive unpacks into a directory with the name of the release. Thus you can
+keep more than one release at the same time.
 
 The archive contains these items:
 
@@ -935,14 +959,7 @@ git config user.name "Your Name"
 git config user.email you@example.com
 ```
 
-Set the hooks one time for each clone. The hooks then examine the two rules
-before the commit:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-CI examines the same two rules for each pull request. Refer to
+CI examines the two rules for each pull request. Refer to
 `.github/workflows/commit-messages.yml`.
 
 ### 10.3 The code rules

@@ -69,10 +69,17 @@ jobs:
           cp LICENSE output/LICENSE
           cp README.md output/README.md
           SHORT_SHA=$(git rev-parse --short HEAD)
-          zip -r "cir2c-${SHORT_SHA}.zip" output/
+
+          # Rename the directory before zipping. Every archive used to unpack to
+          # a directory called "output", so two releases extracted side by side
+          # collided. The directory now carries the release name.
+          RELEASE_DIR="cir2c-${SHORT_SHA}"
+          mv output "${RELEASE_DIR}"
+          zip -r "${RELEASE_DIR}.zip" "${RELEASE_DIR}"
           {
             echo "SHORT_SHA=${SHORT_SHA}"
-            echo "ARCHIVE=cir2c-${SHORT_SHA}.zip"
+            echo "RELEASE_DIR=${RELEASE_DIR}"
+            echo "ARCHIVE=${RELEASE_DIR}.zip"
             # llvm-version.txt carries a licence header and comments. Feeding
             # the whole file into GITHUB_ENV makes a multi-line value, which the
             # env file format rejects. Take the revision only.
@@ -93,7 +100,7 @@ jobs:
           license. They depend only on libc.
 
           \`\`\`bash
-          unzip ${ARCHIVE} && cd output
+          unzip ${ARCHIVE} && cd ${RELEASE_DIR}
           ./cir2c --version
           \`\`\`
 

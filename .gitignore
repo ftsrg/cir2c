@@ -15,7 +15,6 @@ test/tmp/
 test/output.txt
 
 # Editors and tooling
-.vscode/settings.json
 .cache/
 compile_commands.json
 .claude/
