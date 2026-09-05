@@ -495,8 +495,14 @@ run_llvm_test() {
     local actual_out_file="$LLVM_EVAL_OUTPUT_DIR/${test_id}_actual.txt"
     local expected_out_file="$LLVM_EVAL_OUTPUT_DIR/${test_id}_expected.txt"
 
+    # The reference file ends with an optional "exit N" line. Read N from it.
+    # match() with three arguments is a GNU awk extension: under mawk, which is
+    # the awk in the toolchain image, it is a syntax error and the command
+    # prints nothing. expected_exit was then empty, bash read it as 0, and every
+    # test whose reference expects a non-zero exit was compared against the
+    # wrong value. RSTART/RLENGTH is POSIX and works in both awks.
     local expected_exit
-    expected_exit=$(awk 'END{if(match($0,/exit ([0-9]+)$/,a))print a[1];else print 0}' "$ref_file")
+    expected_exit=$(awk 'END{ if (match($0, /exit [0-9]+$/)) print substr($0, RSTART + 5, RLENGTH - 5) + 0; else print 0 }' "$ref_file")
     awk 'NR==1{prev=$0;next}{print prev;prev=$0}END{sub(/exit [0-9]+$/,"",prev);printf "%s",prev}' \
         "$ref_file" > "$expected_out_file"
 
