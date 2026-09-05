@@ -675,6 +675,7 @@ incorrect code. The corpus tests ignore these constructions. The
 | Floating-point classification | `cir.is_fp_class` | There is no portable C function. |
 | 128-bit integers | `cir.int<s,128>`, `cir.int<u,128>` | Not supported. This also stops cir2c. |
 | MSVC SEH | `cir.eh.setjmp`, `cir.eh.longjmp` | This control flow has no model here. |
+| Computed goto | `cir.indirect_br` | The GNU `&&label` and `goto *p` extensions have no ISO C equivalent. A sound translation must change the function into a switch statement on a label number. cir2c does not do this yet. |
 
 Clang cannot make CIR for some other constructions. In this condition,
 `run-cir2c.sh` returns exit code 2 and Clang gives the cause. Each LLVM release
@@ -747,7 +748,34 @@ The global-variable model has these other effects:
   do not operate on the `exit()`, `abort()` or `_exit` paths. These paths have no
   one text position.
 
-### 8.4 Structured output and flat output
+### 8.4 Flexible array members
+
+**WARNING: cir2c does not keep the initial values of a flexible array member.
+The generated program reads incorrect data.**
+
+A structure can end with an array that has no size:
+
+```c
+struct one { int a; int values[]; } hobbit = {5, {1, 2, 3}};
+```
+
+CIR keeps the correct initial values. It gives the initializer an array of three
+elements. But cir2c writes the member with the length from the declared type,
+which is zero:
+
+```c
+struct one { int a; int values[0]; };
+struct one hobbit = {5, {1, 2, 3}};      /* The C compiler discards 1, 2, 3 */
+```
+
+The C compiler gives the warning "excess elements in array initializer" and
+discards the values. The program then reads the memory after the structure. The
+values are incorrect, and no message tells you.
+
+This is unsound. Do not verify a program that has an initialized flexible array
+member. The `UnitTests/2006-01-23-UnionInit` test in the corpus shows the fault.
+
+### 8.5 Structured output and flat output
 
 The default structured output keeps the `for`, `while` and `if` statements and
 the scopes. Most verification tools examine this form more efficiently.
@@ -756,7 +784,7 @@ The two modes do not accept the same programs. A construction that fails in one
 mode can operate in the other mode. This is a limit. But it is also a useful
 test. Try the two modes when a translation fails.
 
-### 8.5 Types
+### 8.6 Types
 
 - The `long double` type becomes the nearest C type on the host. The
   `x86_fp80`, `bf16` and `fp16` types are in the output. But the bits are not
@@ -768,7 +796,7 @@ test. Try the two modes when a translation fails.
   tool with a different data model, for example a 32-bit model or a different
   byte sequence.
 
-### 8.6 Other information
+### 8.7 Other information
 
 - The output is not for a person to read in place of the source. The output is
   not for production use. The tests compile the output only to make sure that it
@@ -778,7 +806,7 @@ test. Try the two modes when a translation fails.
 - The `cir2c --version` command prints the commit of the build. The releases
   include the `llvm-version.txt` file. Record the two values with each result.
 
-### 8.7 Report a limit
+### 8.8 Report a limit
 
 If you find an approximation that is not in this list, make an issue. Give the
 input program, the `--mlir` output and the C output. Soundness problems have a
