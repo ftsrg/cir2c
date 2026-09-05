@@ -198,8 +198,29 @@ elseif(MLIRCIR_STATIC_LIBS)
   # link order that satisfies it is not worth maintaining by hand, so hand the
   # linker the whole directory inside a --start-group/--end-group pair.
   file(GLOB ALL_STATIC_LIBS CONFIGURE_DEPENDS "${LLVM_LIB_DIR}/*.a")
+
+  # ...but not the whole directory: docker/build-llvm.sh installs libc++,
+  # libc++abi and libunwind into the same prefix. Those exist for the programs
+  # cir2c *translates* (run-cir2c.sh compiles C++ input with -stdlib=libc++);
+  # cir2c itself is built against the host's libstdc++. Linking both C++
+  # runtimes is always wrong. With -static-libstdc++ it fails outright
+  # ("multiple definition of std::type_info::~type_info()"); without it the
+  # link silently resolves those symbols from libc++ instead. Drop them.
+  set(CIR2C_NON_LLVM_ARCHIVES
+      libc++.a libc++abi.a libc++experimental.a libunwind.a)
+  set(CIR2C_LINK_ARCHIVES "")
+  foreach(archive IN LISTS ALL_STATIC_LIBS)
+    get_filename_component(archive_name "${archive}" NAME)
+    if(archive_name IN_LIST CIR2C_NON_LLVM_ARCHIVES)
+      message(STATUS "  Excluding C++ runtime archive: ${archive_name}")
+    else()
+      list(APPEND CIR2C_LINK_ARCHIVES "${archive}")
+    endif()
+  endforeach()
+  set(ALL_STATIC_LIBS ${CIR2C_LINK_ARCHIVES})
+
   list(LENGTH ALL_STATIC_LIBS NUM_STATIC_LIBS)
-  message(STATUS "Linking all ${NUM_STATIC_LIBS} static libraries from ${LLVM_LIB_DIR}")
+  message(STATUS "Linking ${NUM_STATIC_LIBS} static libraries from ${LLVM_LIB_DIR}")
 
   if(NUM_STATIC_LIBS GREATER 0)
     target_link_libraries(cir2c PRIVATE
