@@ -27,6 +27,13 @@ on:
         description: Extra release notes (optional)
         required: false
         default: ''
+  # A commit that moves the LLVM pin has no toolchain image when it lands. The
+  # release for it is deferred (see the `toolchain` job) and published here once
+  # the image is built, so the binaries carry the LLVM the commit pins.
+  workflow_run:
+    workflows: [LLVM toolchain image]
+    types: [completed]
+    branches: [main]
 
 concurrency:
   # One run for each workflow, branch and event. A new run cancels the run that
@@ -38,13 +45,66 @@ permissions:
   contents: write   # create the release
   packages: read    # pull the toolchain image
 
+env:
+  # A workflow_run run is attached to the branch, not to the commit that started
+  # the image build, so it has to name that commit itself.
+  CHECKOUT_REF: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
 jobs:
+  # The published binaries must carry the LLVM this commit pins. Building them
+  # on `latest` would ship a release built against the previous toolchain for as
+  # long as the rebuild takes, under a version string that claims the new one.
+  toolchain:
+    name: Toolchain image
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+      pin: ${{ steps.image.outputs.pin }}
+      image: ${{ steps.image.outputs.image }}
+      ready: ${{ steps.image.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+
+      - id: image
+        uses: ./.github/actions/toolchain-image
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Record the commit being released
+        id: sha
+        run: echo "sha=${{ env.CHECKOUT_REF }}" >> "$GITHUB_OUTPUT"
+
+      - name: Report readiness
+        if: steps.image.outputs.ready != 'true'
+        env:
+          PIN: ${{ steps.image.outputs.pin }}
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          {
+            echo "## Release deferred"
+            echo
+            echo "\`llvm-version.txt\` pins \`${PIN}\`, and"
+            echo "\`${IMAGE}\` is not published yet."
+            echo
+            echo "The **LLVM toolchain image** workflow builds it (hours). The"
+            echo "release is published for this commit when that succeeds."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::Release deferred: no toolchain image for LLVM ${PIN} yet."
+
   release:
     name: Build and publish binaries
+    needs: toolchain
+    if: needs.toolchain.outputs.ready == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.toolchain.outputs.sha }}
           # cmake/GenerateVersion.cmake stamps the binary with the commit hash.
           fetch-depth: 0
 
@@ -57,16 +117,40 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Check whether this commit is already released
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          # The workflow_run trigger fires for every toolchain image build, not
+          # only the one this commit is waiting for, so the same commit can
+          # arrive here twice. The release tag is the commit, so re-publishing
+          # would fail on the existing tag rather than do anything useful.
+          if gh release view "$SHORT_SHA" > /dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Release $SHORT_SHA already exists; nothing to do."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build static binaries
+        if: steps.existing.outputs.skip == 'false'
+        env:
+          # Pin the base image to the revision this commit builds against,
+          # rather than the Dockerfile's floating `latest` default.
+          LLVM_IMAGE: ${{ needs.toolchain.outputs.image }}
         run: ./scripts/build-static-binaries.sh
 
       - name: Smoke-test the binaries
+        if: steps.existing.outputs.skip == 'false'
         run: |
           ./output/cir2c --version
           ./output/clang --version | head -1
           file output/cir2c | tee /dev/stderr | grep -q 'ELF 64-bit'
 
       - name: Package
+        if: steps.existing.outputs.skip == 'false'
         run: |
           cp LICENSE output/LICENSE
           cp README.md output/README.md
@@ -82,19 +166,18 @@ jobs:
             echo "SHORT_SHA=${SHORT_SHA}"
             echo "RELEASE_DIR=${RELEASE_DIR}"
             echo "ARCHIVE=${RELEASE_DIR}.zip"
-            # llvm-version.txt carries a licence header and comments. Feeding
-            # the whole file into GITHUB_ENV makes a multi-line value, which the
-            # env file format rejects. Take the revision only.
-            echo "LLVM_PIN=$(grep -vE '^[[:space:]]*(#|$)' llvm-version.txt | head -n1 | tr -d '[:space:]')"
           } >> "$GITHUB_ENV"
 
       - name: Create the release
+        if: steps.existing.outputs.skip == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXTRA_NOTES: ${{ inputs.release_notes }}
+          LLVM_PIN: ${{ needs.toolchain.outputs.pin }}
+          RELEASE_SHA: ${{ needs.toolchain.outputs.sha }}
         run: |
           NOTES=$(cat <<EOF
-          Built from \`${GITHUB_SHA}\` against LLVM \`${LLVM_PIN}\`.
+          Built from \`${RELEASE_SHA}\` against LLVM \`${LLVM_PIN}\`.
 
           \`${ARCHIVE}\` contains statically linked \`cir2c\`, \`clang\`,
           \`clang++\` and \`cir-opt\`, the Clang resource headers (\`include/\`),
@@ -114,5 +197,5 @@ jobs:
           gh release create "${SHORT_SHA}" \
             --title "cir2c ${SHORT_SHA}" \
             --notes "${NOTES}" \
-            --target "${GITHUB_SHA}" \
+            --target "${RELEASE_SHA}" \
             "${ARCHIVE}"

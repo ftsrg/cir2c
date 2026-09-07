@@ -1,0 +1,85 @@
+# Copyright 2025 Budapest University of Technology and Economics
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Resolve the toolchain image
+description: >
+  Names the ClangIR toolchain image for the LLVM revision this commit pins, and
+  reports whether it is published yet.
+
+  Every LLVM-dependent job must run against the revision in llvm-version.txt of
+  the commit under test. The floating `latest` tag cannot express that: after a
+  commit moves the pin, `latest` still points at the PREVIOUS toolchain for the
+  hours the rebuild takes, so a run that used it would test the new sources
+  against the old LLVM and report a result about neither. The revision-tagged
+  image either exists or does not, which is a question with an honest answer.
+
+inputs:
+  token:
+    description: Token used to read the package from GHCR.
+    required: true
+outputs:
+  pin:
+    description: The pinned llvm-project revision.
+    value: ${{ steps.resolve.outputs.pin }}
+  image:
+    description: Fully qualified image reference for that revision.
+    value: ${{ steps.resolve.outputs.image }}
+  ready:
+    description: '"true" when that image is published and pullable.'
+    value: ${{ steps.resolve.outputs.ready }}
+
+runs:
+  using: composite
+  steps:
+    - name: Log in to GHCR
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.token }}
+
+    - name: Resolve the image for the pinned revision
+      id: resolve
+      shell: bash
+      run: |
+        set -euo pipefail
+        PIN=$(grep -vE '^[[:space:]]*(#|$)' llvm-version.txt | head -n1 | tr -d '[:space:]')
+        if [ -z "$PIN" ]; then
+          echo "::error::llvm-version.txt names no revision"
+          exit 1
+        fi
+        # The image tag is the pin verbatim; llvm-image.yml publishes it under
+        # exactly this name. Tags may not contain '/' or start with '.' or '-',
+        # which no release tag or commit SHA does.
+        IMAGE="ghcr.io/${{ github.repository_owner }}/cir2c-llvm:${PIN}"
+
+        # buildx ships on every GitHub-hosted runner and needs no experimental
+        # flag, unlike `docker manifest`. Fall back to it anyway, so a runner
+        # image without buildx does not report a published image as missing.
+        if docker buildx imagetools inspect "$IMAGE" > /dev/null 2>&1 \
+           || DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
+          READY=true
+        else
+          READY=false
+        fi
+
+        {
+          echo "pin=$PIN"
+          echo "image=$IMAGE"
+          echo "ready=$READY"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "LLVM pin: $PIN"
+        echo "Image:    $IMAGE"
+        echo "Ready:    $READY"

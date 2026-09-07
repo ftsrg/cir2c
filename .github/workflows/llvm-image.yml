@@ -19,7 +19,11 @@
 # runs only when the pinned revision or the build recipe changes, or on demand.
 # Everything else reuses the published image.
 #
-# NOTE: this workflow must succeed once before CI and Release can run at all.
+# The image is published under the pinned revision as its tag. CI and Release
+# pull that tag, so they cannot run against a toolchain other than the one their
+# commit pins; while this build is in flight they defer, and its completion
+# triggers them. That means this workflow must succeed once before CI and
+# Release can produce a result at all — including after every pin bump.
 
 name: LLVM toolchain image
 
@@ -79,10 +83,24 @@ jobs:
         id: tags
         run: |
           PIN=$(grep -vE '^[[:space:]]*(#|$)' llvm-version.txt | head -n1 | tr -d '[:space:]')
-          TAGS="ghcr.io/${{ github.repository_owner }}/cir2c-llvm:latest"
-          TAGS="$TAGS,ghcr.io/${{ github.repository_owner }}/cir2c-llvm:$PIN"
+          REPO="ghcr.io/${{ github.repository_owner }}/cir2c-llvm"
+
+          # The revision tag is what CI and Release pull: it names the exact
+          # toolchain a commit pins, so a run either finds it or waits for it.
+          TAGS="$REPO:$PIN"
+
+          # `latest` is a convenience pointer for people, and only main may move
+          # it. Dispatching this workflow on a branch (the way a pin bump is
+          # prepared) must publish that branch's toolchain without repointing
+          # what everyone else pulls by default.
+          if [ "${{ github.ref }}" = "refs/heads/${{ github.event.repository.default_branch }}" ]; then
+            TAGS="$TAGS,$REPO:latest"
+          else
+            echo "Not on the default branch: publishing $PIN only, leaving latest alone."
+          fi
+
           if [ -n "${{ inputs.tag }}" ]; then
-            TAGS="$TAGS,ghcr.io/${{ github.repository_owner }}/cir2c-llvm:${{ inputs.tag }}"
+            TAGS="$TAGS,$REPO:${{ inputs.tag }}"
           fi
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
           echo "pin=$PIN"   >> "$GITHUB_OUTPUT"

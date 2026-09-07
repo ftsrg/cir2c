@@ -19,6 +19,14 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # A commit that moves the LLVM pin has no toolchain image when it lands: the
+  # image for the new revision takes hours to build. Such a run defers itself
+  # (see the `toolchain` job) and this trigger brings it back once the image is
+  # published, so main is tested against the LLVM it actually pins.
+  workflow_run:
+    workflows: [LLVM toolchain image]
+    types: [completed]
+    branches: [main]
 
 concurrency:
   # One run for each workflow, branch and event. A new run cancels the run that
@@ -32,21 +40,107 @@ permissions:
   pull-requests: write   # needed to post/update the results comment
 
 env:
-  # The toolchain image carries the LLVM pinned in llvm-version.txt, with
-  # clang/clang++/cir-opt on PATH at /opt/cir/bin.
-  LLVM_IMAGE: ghcr.io/ftsrg/cir2c-llvm:latest
+  # A workflow_run run is attached to the branch, not to the commit that started
+  # the image build, so it has to name that commit itself. Everything else tests
+  # the commit it was triggered by.
+  CHECKOUT_REF: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
+  # Resolves the ClangIR toolchain image for the LLVM revision THIS commit pins,
+  # and gates every LLVM-dependent job on it. Without this the jobs below would
+  # silently use whatever `latest` pointed at, which after a pin bump is the
+  # previous LLVM — new sources tested against the old toolchain.
+  toolchain:
+    name: Toolchain image
+    runs-on: ubuntu-latest
+    # workflow_run fires on every completion, including failures and
+    # cancellations. Only a successful image build gives us a new toolchain.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    outputs:
+      pin: ${{ steps.image.outputs.pin }}
+      image: ${{ steps.image.outputs.image }}
+      ready: ${{ steps.image.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+
+      - id: image
+        uses: ./.github/actions/toolchain-image
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Report readiness
+        env:
+          PIN: ${{ steps.image.outputs.pin }}
+          IMAGE: ${{ steps.image.outputs.image }}
+          READY: ${{ steps.image.outputs.ready }}
+        run: |
+          if [ "$READY" = true ]; then
+            {
+              echo "## Toolchain"
+              echo
+              echo "LLVM pin: \`${PIN}\`"
+              echo
+              echo "Image: \`${IMAGE}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "## No toolchain image for the pinned LLVM"
+            echo
+            echo "\`llvm-version.txt\` pins \`${PIN}\`, and"
+            echo "\`${IMAGE}\` is not published."
+            echo
+            echo "Every LLVM-dependent job is skipped rather than run against a"
+            echo "different toolchain, which would report a result about neither"
+            echo "the pinned LLVM nor the tested sources."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          case "${{ github.event_name }}" in
+            push|workflow_run)
+              # The image build is triggered by the same push. This run has
+              # nothing to test yet; the workflow_run trigger brings CI back
+              # when the image lands.
+              {
+                echo
+                echo "The **LLVM toolchain image** workflow builds it (hours)."
+                echo "CI re-runs automatically for this commit when it succeeds."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::Deferred: no toolchain image for LLVM ${PIN} yet. CI re-runs when the image build finishes."
+              ;;
+            *)
+              # Somebody is waiting on this answer, so give them a real one.
+              {
+                echo
+                echo "### How to fix"
+                echo
+                echo "Run the **LLVM toolchain image** workflow on this branch"
+                echo "(Actions → LLVM toolchain image → Run workflow), then"
+                echo "re-run this one. It takes hours: a pin bump is deliberate work."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::No toolchain image for LLVM ${PIN}. Build it before this branch can be tested."
+              exit 1
+              ;;
+          esac
+
   build:
     name: Build
+    needs: toolchain
+    if: needs.toolchain.outputs.ready == 'true'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/ftsrg/cir2c-llvm:latest
+      image: ${{ needs.toolchain.outputs.image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
 
       - name: Configure
         run: |
@@ -60,7 +154,7 @@ jobs:
       - name: Report versions
         run: |
           echo "cir2c: $(./build/cir2c --version)"
-          echo "LLVM pin: $(grep -vE '^[[:space:]]*(#|$)' llvm-version.txt | head -n1 | tr -d '[:space:]')"
+          echo "LLVM pin: ${{ needs.toolchain.outputs.pin }}"
           clang --version | head -1
 
       - uses: actions/upload-artifact@v4
@@ -70,10 +164,11 @@ jobs:
 
   test:
     name: ${{ matrix.name }}
-    needs: build
+    needs: [toolchain, build]
+    if: needs.toolchain.outputs.ready == 'true'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/ftsrg/cir2c-llvm:latest
+      image: ${{ needs.toolchain.outputs.image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -95,6 +190,8 @@ jobs:
             extra_flags: '--no-externalize-std'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
 
       - uses: actions/download-artifact@v4
         with:
@@ -129,11 +226,16 @@ jobs:
 
   report:
     name: Report results
-    needs: test
-    if: always()
+    needs: [toolchain, test]
+    # always(), so a failed suite is still reported — but only when the suites
+    # actually ran. With no toolchain image there are no results, and the action
+    # treats missing artifacts as a failure.
+    if: always() && needs.toolchain.outputs.ready == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
       - uses: ./.github/actions/report-results
 
   license-headers:
@@ -141,6 +243,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
 
       - uses: actions/setup-python@v5
         with:
@@ -183,6 +287,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
       - name: Syntax-check every shell script
         run: |
           fail=0
