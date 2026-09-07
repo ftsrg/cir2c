@@ -944,12 +944,25 @@ incorrect environment cannot show a good result.
 ### 9.3 Suite 1: the integration tests
 
 The runner processes each `.c` file and each `.cpp` file in
-`integration/input/`. A test is successful when the output C code compiles with
-the `clang -fsyntax-only` command.
+`integration/input/`. The bar has two levels:
+
+| The test program | What must be correct |
+|---|---|
+| Has no `main()` | The output C code compiles with the `clang -fsyntax-only` command. |
+| Has a `main()` | The output C code also links, runs, and gives the same exit code and the same output as the original program compiled natively. |
+
+The reference is the native run of the original program, not the exit code 0.
+Some tests in this suite stop with an error on purpose, and some give a computed
+value. Only the original program can say what is correct.
+
+The second level is what finds a wrong result. A lost destructor or an incorrect
+arithmetic operation makes correct C code, and thus a syntax examination cannot
+see it.
 
 Add your tests to this suite. Put a small test program in `integration/input/`
 with the name `test_<subject>.<c|cpp>`. The runner finds it automatically. No
-registration is necessary.
+registration is necessary. Give the program a `main()` that examines its own
+result, if you can.
 
 The tests examine arithmetic, casts, comparisons, control flow, arrays, records,
 globals, floating-point numbers, pointers, integer promotion and bit operations.

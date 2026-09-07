@@ -345,6 +345,58 @@ export -f clangir_also_diverges
 # Worker: C integration test
 # Outputs exactly one line: RESULT|test_name|message
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Behavioural check for runnable integration tests
+# ---------------------------------------------------------------------------
+# Most integration tests are collections of functions with no main(), so the
+# only thing checkable is that the generated C is valid. A test that defines
+# main() is also RUN, and its behaviour is compared against the ORIGINAL
+# program compiled natively — not against "exit 0". Tests here legitimately
+# abort (reach_error() benchmarks) or return a computed value, so the native
+# run is the only correct reference.
+#
+# This is what catches wrong-behaviour bugs: a dropped destructor or a
+# mis-mapped arithmetic op still produces perfectly valid C, so the syntax
+# check alone cannot see them.
+#
+# Echoes a result line and returns 1 when the caller should stop.
+run_selfchecking() {
+    local test_name="$1" src_file="$2" output_c_file="$3" lang="$4"
+    # No main() -> nothing to run, keep the syntax-only bar.
+    grep -qE '(^|[^[:alnum:]_])main[[:space:]]*\(' "$src_file" || return 0
+
+    local ref_bin="$INTEGRATION_OUTPUT_DIR/${test_name}_reference_binary"
+    local ref_log="$INTEGRATION_OUTPUT_DIR/${test_name}_reference_log.txt"
+    local ref_cc="$GCC"
+    [[ "$lang" == "c++" ]] && ref_cc="$CLANGPP"
+    # If the ORIGINAL program cannot be built or run natively we have no
+    # reference to compare against, so we cannot judge behaviour.
+    if ! "$ref_cc" -w "$src_file" -o "$ref_bin" -lm > "$ref_log" 2>&1; then
+        return 0
+    fi
+    local ref_out="$INTEGRATION_OUTPUT_DIR/${test_name}_reference_out.txt"
+    local ref_exit=0
+    timeout "$TIMEOUT" "$ref_bin" > "$ref_out" 2>/dev/null || ref_exit=$?
+    [[ $ref_exit -eq 124 ]] && return 0   # reference timed out; no usable reference
+
+    local binary_file="$INTEGRATION_OUTPUT_DIR/${test_name}_binary"
+    local link_log="$INTEGRATION_OUTPUT_DIR/${test_name}_link_log.txt"
+    if ! "$GCC" -w "$output_c_file" -o "$binary_file" -lm > "$link_log" 2>&1; then
+        echo "NOTRUN|$test_name|valid C, could not link"; return 1
+    fi
+    local actual_out="$INTEGRATION_OUTPUT_DIR/${test_name}_actual.txt"
+    local actual_exit=0
+    timeout "$TIMEOUT" "$binary_file" > "$actual_out" 2>/dev/null || actual_exit=$?
+
+    if [[ $actual_exit -ne $ref_exit ]]; then
+        echo "MISMATCH|$test_name|ran, exit code: expected $ref_exit, got $actual_exit"; return 1
+    fi
+    if ! diff -q "$ref_out" "$actual_out" > /dev/null 2>&1; then
+        echo "MISMATCH|$test_name|ran, output differs from the native reference"; return 1
+    fi
+    return 0
+}
+
 run_c_test() {
     local c_file="$1"
     local test_name pipeline_rc=0
@@ -381,6 +433,7 @@ run_c_test() {
         echo "COMPILE_FAILED|$test_name|compilation failed"; return
     fi
 
+    run_selfchecking "$test_name" "$c_file" "$output_c_file" c || return
     echo "PASSED|$test_name|"
 }
 
@@ -426,6 +479,7 @@ run_cpp_test() {
         echo "COMPILE_FAILED|$test_name|C++ qualified names in struct/union identifiers"; return
     fi
 
+    run_selfchecking "$test_name" "$cpp_file" "$output_c_file" c++ || return
     echo "PASSED|$test_name|"
 }
 
@@ -588,7 +642,7 @@ run_esbmc_test() {
 # Export everything workers need
 export TIMEOUT RUNNER GCC CLANGPP INTEGRATION_OUTPUT_DIR LLVM_EVAL_DIR LLVM_EVAL_OUTPUT_DIR
 export ESBMC_EVAL_DIR ESBMC_EVAL_OUTPUT_DIR EXTERNALIZE_STD_FLAG
-export -f pipeline_stage run_c_test run_cpp_test run_llvm_test run_esbmc_test
+export -f pipeline_stage run_selfchecking run_c_test run_cpp_test run_llvm_test run_esbmc_test
 
 # ---------------------------------------------------------------------------
 # Preflight checks
@@ -664,6 +718,15 @@ if [[ $c_total -gt 0 ]]; then
                 sed 's/^/    /' "$INTEGRATION_OUTPUT_DIR/${test_name}_compile_log.txt" 2>/dev/null
                 echo ""
                 ;;
+            NOTRUN)
+                echo -e "${YELLOW}COMPILED, NOT RUN${NC} ($message)"
+                NOTRUN_TESTS=$((NOTRUN_TESTS + 1))
+                ;;
+            MISMATCH)
+                echo -e "${RED}FAILED${NC} ($message)"
+                FAILED_TESTS=$((FAILED_TESTS + 1))
+                MISMATCH_TESTS=$((MISMATCH_TESTS + 1))
+                ;;
         esac
     done < <(parallel --will-cite --keep-order -j "$JOBS" run_c_test ::: "${c_files[@]}")
 fi
@@ -719,6 +782,15 @@ else
                         "$INTEGRATION_OUTPUT_DIR/${test_name}_compile_log.txt" 2>/dev/null \
                         | head -5 | sed 's/^/    /'
                     echo ""
+                    ;;
+                NOTRUN)
+                    echo -e "${YELLOW}COMPILED, NOT RUN${NC} ($message)"
+                    NOTRUN_TESTS=$((NOTRUN_TESTS + 1))
+                    ;;
+                MISMATCH)
+                    echo -e "${RED}FAILED${NC} ($message)"
+                    FAILED_TESTS=$((FAILED_TESTS + 1))
+                    MISMATCH_TESTS=$((MISMATCH_TESTS + 1))
                     ;;
             esac
         done < <(parallel --will-cite --keep-order -j "$JOBS" run_cpp_test ::: "${cpp_files[@]}")
