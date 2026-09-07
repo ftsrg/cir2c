@@ -145,8 +145,7 @@ void Mapper::prepareFunctionNames(mlir::ModuleOp module) {
   // wrapping the actual translation unit) are also scanned.
   std::vector<std::pair<std::string,std::string>> list;
   module.walk([&](cir::FuncOp funcOp) {
-    if (auto sym = funcOp->getAttrOfType<mlir::StringAttr>(
-            mlir::SymbolTable::getSymbolAttrName())) {
+    if (auto sym = symbolNameAttr(funcOp)) {
       std::string mangled = sym.getValue().str();
       std::string dem = demangleSymbol(mangled);
       dem = stripEmptyArgList(dem);
@@ -420,8 +419,7 @@ void Mapper::emitFileHeader(std::ostream &out, mlir::ModuleOp module) {
   module->walk([&](cir::FuncOp f) {
     mlir::Operation *fop = f.getOperation();
     if (fop->getNumRegions() == 0 || fop->getRegion(0).empty()) return;
-    if (auto sym = fop->getAttrOfType<mlir::StringAttr>(
-            mlir::SymbolTable::getSymbolAttrName()))
+    if (auto sym = symbolNameAttr(fop))
       if (funcDefElided(sym.getValue())) return;
     fop->walk([&](mlir::Operation *op) { scanOp(op); });
   });
@@ -541,8 +539,7 @@ void Mapper::computeReachableDefs(mlir::ModuleOp module) {
   std::vector<std::string> work;                                // reachable frontier
 
   auto symOf = [](cir::FuncOp f) -> std::string {
-    auto s = f->getAttrOfType<mlir::StringAttr>(
-        mlir::SymbolTable::getSymbolAttrName());
+    auto s = symbolNameAttr(f);
     return s ? s.getValue().str() : std::string();
   };
   auto markRoot = [&](const std::string &s) {
@@ -630,7 +627,7 @@ void Mapper::computeReachableDefs(mlir::ModuleOp module) {
 }
 
 bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
-  auto sym = fop->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+  auto sym = symbolNameAttr(fop);
   if (!sym) return true;
 
   auto cirFuncOp = mlir::cast<cir::FuncOp>(fop);
@@ -714,7 +711,7 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
       if (!mod) return false;
       for (auto &op2 : mod.getOps()) {
         if (!llvm::isa<cir::FuncOp>(op2)) continue;
-        auto sym2 = op2.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+        auto sym2 = symbolNameAttr(&op2);
         if (!sym2 || sym2.getValue().str() != baseSym) continue;
         if (op2.getNumRegions() == 0 || op2.getRegion(0).empty()) return false;
         // We forward p0..pN-1 to the base variant, so the signatures must agree
@@ -791,7 +788,7 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
 bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
   std::string funcInputText = oneLineOperationText(*fop);
   // Symbol (function name) is required to emit anything useful.
-  auto sym = fop->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+  auto sym = symbolNameAttr(fop);
     if (!sym) {
       out << "// " << ERR_CIRFUNC_NO_SYMBOL << "\n";
       return true;
@@ -927,22 +924,26 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
   // assignment of such a type (e.g. std::basic_string's internal __rep
   // union) silently no-op'd. Detect this and emit the real assignment.
   if (hasBody) {
-    if (auto specialMember = cirFuncOp.getFuncInfo()) {
-      if (auto assignAttr = mlir::dyn_cast<cir::CXXAssignAttr>(*specialMember)) {
-        bool returnsVoid = mlir::isa<mlir::NoneType>(rty) || mlir::isa<cir::VoidType>(rty);
-        if (assignAttr.getIsTrivial() && bodyParamNames.size() == 2 &&
-            mlir::isa<cir::PointerType>(inputs[0]) &&
-            mlir::isa<cir::PointerType>(inputs[1])) {
-          const std::string &dst = bodyParamNames[0];
-          const std::string &src = bodyParamNames[1];
-          std::string body = returnsVoid
-              ? " {\n  *" + dst + " = *" + src + ";\n}\n\n"
-              : " {\n  *" + dst + " = *" + src + ";\n  return " + dst + ";\n}\n\n";
-          out << body;
-          traceability.recordOperationTrace(fop->getName().getStringRef(), funcInputText,
-                                            funcHeaderText + body, true);
-          return true;
-        }
+    // The dedicated special-member accessor was folded into the general
+    // `func_info` attribute upstream, so cir::FuncOp::getFuncInfo() is gone.
+    // isCxxSpecialAssignment() is the CXXAssignAttr test and
+    // isCxxTrivialMemberFunction() is that attribute's `trivial` marker, so
+    // together they are exactly the old condition.
+    if (cirFuncOp.isCxxSpecialAssignment() &&
+        cirFuncOp.isCxxTrivialMemberFunction()) {
+      bool returnsVoid = mlir::isa<mlir::NoneType>(rty) || mlir::isa<cir::VoidType>(rty);
+      if (bodyParamNames.size() == 2 &&
+          mlir::isa<cir::PointerType>(inputs[0]) &&
+          mlir::isa<cir::PointerType>(inputs[1])) {
+        const std::string &dst = bodyParamNames[0];
+        const std::string &src = bodyParamNames[1];
+        std::string body = returnsVoid
+            ? " {\n  *" + dst + " = *" + src + ";\n}\n\n"
+            : " {\n  *" + dst + " = *" + src + ";\n  return " + dst + ";\n}\n\n";
+        out << body;
+        traceability.recordOperationTrace(fop->getName().getStringRef(), funcInputText,
+                                          funcHeaderText + body, true);
+        return true;
       }
     }
   }
@@ -1008,7 +1009,7 @@ void Mapper::emitGlobalDtorsAtMainReturn(std::ostream &out) {
 }
 
 bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
-  auto sym = gop->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+  auto sym = symbolNameAttr(gop);
   if (!sym) {
     out << "// Global variable with missing name\n";
     return true;
@@ -1132,7 +1133,7 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
 
     for (auto &op : module.getOps()) {
       if (!llvm::isa<cir::GlobalOp>(op)) continue;
-      auto s = op.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName());
+      auto s = symbolNameAttr(&op);
       if (!s) continue;
       if (s.getValue().str() != symbol) continue;
       auto targetGlobal = mlir::cast<cir::GlobalOp>(op);
@@ -1338,8 +1339,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     std::vector<Ctor> ctors;
     unsigned order = 0;
     module->walk([&](cir::FuncOp f) {
-      auto sym = f->getAttrOfType<mlir::StringAttr>(
-          mlir::SymbolTable::getSymbolAttrName());
+      auto sym = symbolNameAttr(f);
       if (!sym) return;
       std::string s = sym.getValue().str();
       bool isTrampoline = s.rfind("_GLOBAL__sub_I_", 0) == 0;
@@ -1368,8 +1368,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     std::vector<Ctor> dtors;
     unsigned dorder = 0;
     module->walk([&](cir::FuncOp f) {
-      auto sym = f->getAttrOfType<mlir::StringAttr>(
-          mlir::SymbolTable::getSymbolAttrName());
+      auto sym = symbolNameAttr(f);
       if (!sym) return;
       std::optional<uint32_t> prio = f.getGlobalDtorPriority();
       if (!prio) return;
@@ -1643,7 +1642,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
       if (auto ta = mlir::dyn_cast<mlir::TypedAttr>(*iv))
         collectRecordTypesFromType(ta.getType());
     // Record symbol -> type so GlobalViewAttr access indices can be resolved.
-    if (auto s = globalOp->getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName()))
+    if (auto s = symbolNameAttr(globalOp))
       globalSymbolTypes_[s.getValue().str()] = globalOp.getSymType();
   });
 
@@ -2170,8 +2169,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   for (auto &op : module.getOps()) {
     auto gop = llvm::dyn_cast<cir::GlobalOp>(&op);
     if (!gop) continue;
-    auto sym = gop->getAttrOfType<mlir::StringAttr>(
-        mlir::SymbolTable::getSymbolAttrName());
+    auto sym = symbolNameAttr(gop);
     if (!sym) continue;
     std::string rs = sym.getValue().str();
     if (rs.rfind("_ZTV", 0) != 0 && rs.rfind("_ZTC", 0) != 0) continue;
@@ -2199,8 +2197,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
       continue;
     }
     {
-      auto sym2 = op.getAttrOfType<mlir::StringAttr>(
-          mlir::SymbolTable::getSymbolAttrName());
+      auto sym2 = symbolNameAttr(&op);
       bool isVTT = sym2 && sym2.getValue().str().rfind("_ZTT", 0) == 0;
       if (isVTT) { vtableGlobals.push_back(&op); continue; }
     }
@@ -2208,8 +2205,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     // any `_ZTI*` address taken elsewhere (e.g. dynamic_cast, throw) resolves.
     // The real struct lives in the C++ runtime; we don't reproduce its contents.
     if (initVal && mlir::isa<cir::TypeInfoAttr>(*initVal)) {
-      auto sym = op.getAttrOfType<mlir::StringAttr>(
-          mlir::SymbolTable::getSymbolAttrName());
+      auto sym = symbolNameAttr(&op);
       if (sym) out << "extern unsigned char "
                    << sanitizeIdentifier(sym.getValue().str()) << "[];\n";
       continue;
@@ -2231,8 +2227,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     bool anyDecl = false;
     for (auto &op : module.getOps()) {
       if (llvm::isa<cir::FuncOp>(op)) {
-        if (auto sym = op.getAttrOfType<mlir::StringAttr>(
-                mlir::SymbolTable::getSymbolAttrName()))
+        if (auto sym = symbolNameAttr(&op))
           if (funcDefElided(sym.getValue())) continue; // unreachable inline def
         emitFuncForwardDecl(&op, out);
         anyDecl = true;
@@ -2250,8 +2245,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   if (!vtableGlobals.empty()) {
     // Pass 1: emit vtable arrays (_ZTV*, _ZTC*).
     for (mlir::Operation *gop : vtableGlobals) {
-      auto sym2 = gop->getAttrOfType<mlir::StringAttr>(
-          mlir::SymbolTable::getSymbolAttrName());
+      auto sym2 = symbolNameAttr(gop);
       if (!sym2) continue;
       std::string rs = sym2.getValue().str();
       if (rs.rfind("_ZTV", 0) != 0 && rs.rfind("_ZTC", 0) != 0) continue;
@@ -2259,8 +2253,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     }
     // Pass 2: emit VTTs (_ZTT*) and anything else in the group.
     for (mlir::Operation *gop : vtableGlobals) {
-      auto sym2 = gop->getAttrOfType<mlir::StringAttr>(
-          mlir::SymbolTable::getSymbolAttrName());
+      auto sym2 = symbolNameAttr(gop);
       if (!sym2) continue;
       std::string rs = sym2.getValue().str();
       if (rs.rfind("_ZTV", 0) == 0 || rs.rfind("_ZTC", 0) == 0) continue;
@@ -2283,8 +2276,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     if (llvm::isa<cir::FuncOp>(op)) {
       bool hasBody = (op.getNumRegions() > 0 && !op.getRegion(0).empty());
       if (hasBody) {
-        if (auto sym = op.getAttrOfType<mlir::StringAttr>(
-                mlir::SymbolTable::getSymbolAttrName()))
+        if (auto sym = symbolNameAttr(&op))
           if (funcDefElided(sym.getValue())) continue; // unreachable inline def
         if (!mapFunc(&op, funcsBuf)) return false;
       }

@@ -23,6 +23,7 @@
 #include <mlir/IR/Operation.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/Builders.h>
+#include <mlir/IR/SymbolTable.h>
 
 #include <ostream>
 #include <sstream>
@@ -45,6 +46,19 @@ class Block;
 namespace cir2c {
 
 class Mapper;
+
+/// Symbol name of \p op, or a null attribute when \p op is not a symbol or
+/// carries no name (optional symbols). MLIR made symbol names inherent
+/// attributes and dropped SymbolTable::getSymbolAttrName(); the remaining
+/// SymbolTable::getSymbolName() aborts on a non-symbol, so it cannot replace
+/// the null-returning lookups this tool relies on.
+inline mlir::StringAttr symbolNameAttr(mlir::Operation *op) {
+  auto sym = mlir::dyn_cast_if_present<mlir::SymbolOpInterface>(op);
+  return sym ? sym.getNameAttr() : mlir::StringAttr();
+}
+inline mlir::StringAttr symbolNameAttr(mlir::Operation &op) {
+  return symbolNameAttr(&op);
+}
 
 /// Base class for handling a single MLIR operation and emitting C code.
 class OpHandler {

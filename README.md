@@ -142,7 +142,7 @@ To build cir2c, you must have these items:
 | A C++ compiler | C++17 or later |
 | Ninja or Make | Any |
 | Git | Any |
-| An LLVM with ClangIR | 23.0 or later |
+| An LLVM with ClangIR | 24.0 or later |
 
 **CAUTION: A standard LLVM package is not sufficient.** The LLVM build must
 have the `-DCLANG_ENABLE_CIR=ON` option. Without this option, there is no
@@ -279,7 +279,7 @@ If your user account is not in the `docker` group, set `DOCKER='sudo docker'`.
 |---|---|
 | `Could NOT find MLIR` or `Could NOT find LLVM` | CMake found no toolchain. Give the `-DCIR2C_LLVM_PREFIX=…` option, or use method B. |
 | `This LLVM install has no ClangIR headers` | The LLVM build did not have the `-DCLANG_ENABLE_CIR=ON` option. |
-| `cir2c needs LLVM >= 23.0` | The LLVM is too old. Refer to [6. The LLVM toolchain](#6-the-llvm-toolchain). |
+| `cir2c needs LLVM >= 24.0` | The LLVM is too old. Refer to [6. The LLVM toolchain](#6-the-llvm-toolchain). |
 | `libMLIRCIR not found` | The prefix has the headers but not the library. Without the library, all `cir.*` operations fail to parse. Make sure that the LLVM build completed and installed. |
 | `no ClangIR-enabled clang found` | The scripts do their own search. Set `CIR2C_LLVM_PREFIX`. Set also `CIR2C_BIN` or `CIR2C_BUILD_DIR` if the binary is not at `build/cir2c`. |
 
@@ -417,81 +417,145 @@ option, because the calculation is slow.
 The `llvm-version.txt` file contains one revision:
 
 ```
-llvmorg-23.1.0
+945e3e825b3ee88a8c1fed0da2dc88d6b2114e37
 ```
 
+The revision is immutable. It is a release tag, or a full 40-character commit
+SHA. It is never a branch name. A branch moves, and a moving toolchain changes
+the result of a build of unchanged sources.
+
 All parts of the repository read this file. The `docker/build-llvm.sh` script
-clones this revision. The toolchain image contains this revision and copies the
-file to `/opt/cir/llvm-version.txt`. The static binaries include the file. A
-weekly workflow compares the file with the upstream releases.
+gets this revision. The toolchain image contains this revision and copies the
+file to `/opt/cir/llvm-version.txt`. The static binaries include the file. The
+toolchain image uses the revision as its tag. A weekly workflow compares the
+file with the upstream releases.
 
-To change the revision, change one line.
+To change the revision, change one line. Refer to
+[6.6 Change the pin](#66-change-the-pin).
 
-`CMakeLists.txt` also sets a minimum version of LLVM 23.0. A build against a
+`CMakeLists.txt` also sets a minimum version of LLVM 24.0. A build against a
 different installation stops at the configuration step with a clear message.
 
-### 6.2 Why a release and not the main branch
+### 6.2 Why a pinned revision and not the main branch
 
 Before, the build used a shallow clone of the default branch of `llvm-project`.
 Each upstream commit that changed ClangIR or MLIR could break the build. The
 break came with no warning. A person then had to build the toolchain image
 again.
 
-cir2c does not need the main branch. cir2c parses CIR assembly and reads the
-generated accessors. A released LLVM has all of these.
-
-| Item | The main branch | A pinned release |
+| Item | The main branch | A pinned revision |
 |---|---|---|
 | When a break occurs | At each upstream ClangIR change | Only when you change the pin |
 | The toolchain image | Built again to correct a break | Built again when the pin changes |
-| To repeat an old result | You must know the LLVM commit | The tag is in the repository |
-| New ClangIR functions | Immediately | At the next LLVM release |
+| To repeat an old result | You must know the LLVM commit | The revision is in the repository |
+| New ClangIR functions | Immediately | When you change the pin |
 
 The last row is the cost. A CIR operation that upstream adds after the pinned
-release is not available. In practice, ClangIR adds functions more quickly than
-cir2c translates them.
+revision is not available until a person moves the pin.
 
-### 6.3 Why LLVM 23 is the minimum
+### 6.3 Why the pin is a commit and not a release tag
+
+A release tag is better than a commit SHA. A tag is easier to read, and a
+release gets patch versions. Use a tag when you can.
+
+This pin is a commit because a usable release does not exist yet:
+
+| Candidate | Why it is not used |
+|---|---|
+| `llvmorg-23.1.0` | It has no `cir.fmuladd`, and it has the removed special member accessor. |
+| `llvmorg-24-init` | This tag is the start of the LLVM 24 cycle, not a release. It has the same limits as LLVM 23. |
+| An LLVM 24 release | It does not exist. Upstream has not made one. |
+
+The pinned commit is `llvm-project` main in the LLVM 24 cycle. It is still one
+immutable revision, so it gives all the properties in the table of
+[6.2](#62-why-a-pinned-revision-and-not-the-main-branch). Only the frequency of
+the security patches and the quality of the release notes are different.
+
+The **Check for a newer LLVM release** workflow knows this condition. While the
+pin is a commit, the workflow makes an issue only when a release becomes equal
+to or newer than the pinned LLVM version. Then a person can move the pin back to
+a tag.
+
+### 6.4 Why LLVM 24 is the minimum
 
 Upstream adds ClangIR in steps. cir2c uses 150 different CIR operations. This
-table shows the operations that each release does not have:
+table shows what each release does not have:
 
-| LLVM release | Missing operations that cir2c uses |
+| LLVM release | What cir2c cannot get from it |
 |---|---|
-| 21.1.x | Almost all: arithmetic, exceptions, vtables, complex numbers, math |
-| 22.1.x | 60, and this includes all arithmetic operations |
-| **23.1.0** | **0** |
+| 21.1.x | Almost all operations: arithmetic, exceptions, vtables, complex numbers, math |
+| 22.1.x | 60 operations, and this includes all arithmetic operations |
+| 23.1.0 | `cir.fmuladd`, `cir.fma`, and the current `func_info` attribute |
+| **24 (the pin)** | **Nothing** |
 
 LLVM 22 and earlier releases use one `cir.binop` operation with a kind
 attribute. LLVM 23 makes separate `cir.add`, `cir.sub` and `cir.mul`
 operations. The cir2c handlers use the separate operations. Exception handling,
 `cir.cleanup_scope` and `cir.vtable.get_type_info` are also new in LLVM 23.
 
-All 23 source files of cir2c compile against the ClangIR headers of
-`llvmorg-23.1.0`. Thus the accessor names also agree.
+LLVM 24 makes two changes that cir2c must obey:
 
-**Note: This examination found a break against the current main branch.** The
-special member slot of `cir.func` is now `func_info`. The old accessor
-`getCxxSpecialMember()` does not exist. The pin prevents this type of break.
+- Clang emits one `cir.fmuladd` operation for `a * b + c` when the default
+  `-ffp-contract=on` is active. Before, Clang emitted `cir.fmul` and `cir.fadd`.
+  A mapper with no handler for `cir.fmuladd` stops with an error on usual
+  floating-point code.
+- The special member slot of `cir.func` is now the more general `func_info`
+  attribute, and MLIR made the symbol names inherent attributes. Thus
+  `getCxxSpecialMember()` and `mlir::SymbolTable::getSymbolAttrName()` do not
+  exist. cir2c uses `isCxxSpecialAssignment()` with
+  `isCxxTrivialMemberFunction()`, and a null-safe `symbolNameAttr()` helper.
 
-### 6.4 Change the pin
+All source files of cir2c compile against the ClangIR headers of the pinned
+revision. Thus the accessor names also agree.
 
-Do these steps at each new LLVM release, approximately two times each year:
+### 6.5 How CI waits for the toolchain image
 
-1. Change `llvm-version.txt` to the new tag, for example `llvmorg-24.1.0`.
+The **LLVM toolchain image** workflow publishes the image with the pinned
+revision as its tag, for example `ghcr.io/ftsrg/cir2c-llvm:945e3e82...`. The
+**CI** workflow and the **Release** workflow pull that exact tag. They do not
+pull `latest`.
+
+This is necessary. A build of LLVM takes hours. In that time, `latest` continues
+to point to the previous toolchain. A job that used `latest` after a pin change
+would build the new sources against the old LLVM. Its result would be true for
+neither.
+
+Thus each LLVM-dependent job has a `Toolchain image` step before it:
+
+| Condition | What occurs |
+|---|---|
+| The image for the pin exists | The jobs run against it. |
+| The image does not exist, on a push to `main` | The jobs stop and wait. When the image build is successful, CI and Release start again for the same commit. |
+| The image does not exist, in a pull request | The `Toolchain image` job fails and tells you to build the image. |
+
+The checks that do not use LLVM (the license headers, the shell scripts and the
+commit messages) always run.
+
+Only `main` moves the `latest` tag. Thus you can prepare a pin change on a
+branch, and build its toolchain image, and not change what other persons pull.
+
+### 6.6 Change the pin
+
+Do these steps when you move to a newer LLVM:
+
+1. Change `llvm-version.txt` to the new revision. Use a release tag if a usable
+   release exists. If not, use a full commit SHA. Refer to
+   [6.3](#63-why-the-pin-is-a-commit-and-not-a-release-tag).
 2. Build the toolchain image again. Start the **LLVM toolchain image** workflow
-   from the Actions page. As an alternative, do this command:
+   from the Actions page. Start it on your branch, not on `main`, while you
+   prepare the change. As an alternative, do this command:
    ```bash
    docker build -f docker/llvm.Dockerfile -t ghcr.io/ftsrg/cir2c-llvm:latest .
    ```
 3. Build cir2c against the new image and run the tests.
 4. Correct the errors. Changed accessor names cause compilation errors. Changed
-   assembly syntax causes parse errors in the integration tests.
-5. If the new release removes a function that cir2c uses, increase
+   assembly syntax causes parse errors in the integration tests. A new operation
+   that replaces an operation that cir2c maps needs a new handler.
+5. If the new revision removes a function that cir2c uses, increase
    `CIR2C_LLVM_MIN_VERSION` in `CMakeLists.txt` in the same commit.
 
-The **Check for a newer LLVM release** workflow operates each week. It compares
-the pin with the upstream tags. It makes an issue when a newer release exists.
+The **Check for a newer LLVM release** workflow operates each week. It makes an
+issue when a better pin becomes available.
 
 ---
 

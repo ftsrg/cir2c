@@ -19,9 +19,9 @@
 # prefix. Used by docker/llvm.Dockerfile, and runnable directly on a host
 # machine to produce the same toolchain without Docker — see README.md.
 #
-# The LLVM revision is a released tag pinned in llvm-version.txt, NOT the tip of
-# upstream main. See the "LLVM toolchain" section of README.md for why, and for
-# how to move the pin.
+# The LLVM revision is pinned in llvm-version.txt — one immutable ref, a release
+# tag or a full commit SHA, NOT the tip of upstream main. See the "LLVM
+# toolchain" section of README.md for why, and for how to move the pin.
 #
 # Requires: cmake, ninja, a C/C++ compiler (clang recommended), lld, git,
 # static zlib (libz.a + zlib.h).
@@ -88,17 +88,27 @@ if [[ -d "$SRC" ]]; then
         exit 1
     }
     echo "==> Reusing existing checkout at $SRC"
-    # An incremental rebuild after the pin moved must not silently keep the old
-    # tree, so fetch and check out the requested revision.
-    if [[ "$(git -C "$SRC" rev-parse HEAD)" != "$(git -C "$SRC" rev-parse "$REF^{commit}" 2>/dev/null || echo none)" ]]; then
-        echo "==> Checking out $REF in the existing checkout"
-        git -C "$SRC" fetch --depth=1 origin "$REF"
-        git -C "$SRC" checkout --detach FETCH_HEAD
-    fi
 else
-    echo "==> Cloning llvm-project at $REF (shallow) into $SRC"
-    git clone --depth=1 --branch "$REF" --single-branch \
-        https://github.com/llvm/llvm-project.git "$SRC"
+    echo "==> Preparing a shallow llvm-project checkout in $SRC"
+    git init -q "$SRC"
+    git -C "$SRC" remote add origin https://github.com/llvm/llvm-project.git
+fi
+
+# Fetch and check out the pinned revision, in the fresh checkout and in a reused
+# one alike. `git fetch <ref>` takes a tag, a branch or a full commit SHA, so the
+# pin can be any of those; `git clone --branch` could not take a SHA, which is
+# what a pin outside a release cycle needs.
+# The two sentinels differ on purpose. A checkout that has neither a HEAD nor
+# the pinned commit (a fresh one, and a reused one whose pin moved) must fetch;
+# equal sentinels would read as "already at the right revision" and skip it.
+CURRENT_REV="$(git -C "$SRC" rev-parse HEAD 2>/dev/null || echo no-head)"
+WANTED_REV="$(git -C "$SRC" rev-parse "$REF^{commit}" 2>/dev/null || echo not-fetched)"
+if [[ "$CURRENT_REV" != "$WANTED_REV" ]]; then
+    echo "==> Checking out $REF"
+    git -C "$SRC" fetch --depth=1 origin "$REF"
+    git -C "$SRC" checkout --detach FETCH_HEAD
+else
+    echo "==> Already at $REF ($CURRENT_REV)"
 fi
 
 SRC="$(realpath -m "$SRC")"

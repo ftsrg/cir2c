@@ -309,8 +309,7 @@ uint64_t Mapper::vtableFlatOffset(mlir::Operation *op, const std::string &symbol
   for (auto &g : module.getOps()) {
     auto gop = mlir::dyn_cast<cir::GlobalOp>(g);
     if (!gop) continue;
-    auto s = gop->getAttrOfType<mlir::StringAttr>(
-        mlir::SymbolTable::getSymbolAttrName());
+    auto s = symbolNameAttr(gop);
     if (!s || s.getValue().str() != symbol) continue;
     auto iv = gop.getInitialValue();
     if (!iv) break;

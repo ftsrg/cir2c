@@ -127,7 +127,7 @@ private:
     std::string name = extractName(o);
 
     if (name.empty()) {
-      if (auto sa = o->getAttrOfType<StringAttr>(mlir::SymbolTable::getSymbolAttrName())) {
+      if (auto sa = symbolNameAttr(o)) {
         name = sa.getValue().str();
       }
     }

@@ -19,9 +19,11 @@ project(cir2c LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# The oldest LLVM whose upstream ClangIR carries every CIR operation cir2c
-# maps. See the "LLVM toolchain" section of README.md for the reason.
-set(CIR2C_LLVM_MIN_VERSION 23.0)
+# The oldest LLVM whose upstream ClangIR carries every CIR operation cir2c maps
+# and every accessor it calls. LLVM 24 is the floor: 23 has no cir.fmuladd, and
+# it still exposes the special-member attribute that became `func_info`.
+# See the "LLVM toolchain" section of README.md for the reason.
+set(CIR2C_LLVM_MIN_VERSION 24.0)
 
 # ---------------------------------------------------------------------------
 # Locating the ClangIR-enabled LLVM/MLIR toolchain

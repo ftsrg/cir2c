@@ -12,10 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# cir2c pins a released LLVM tag rather than tracking upstream main, so nothing
-# breaks unannounced — but nothing tells us a new release exists either. This
-# job does: it compares llvm-version.txt against upstream's tags weekly and
-# opens (or updates) a single issue when a newer release is out.
+# cir2c pins one immutable llvm-project revision rather than tracking upstream
+# main, so nothing breaks unannounced — but nothing tells us a better pin exists
+# either. This job does, weekly.
+#
+# What counts as "better" depends on what is pinned:
+#
+#   * a release tag  -> a NEWER release is out.
+#   * a commit SHA   -> a release has caught up with the development revision we
+#                       had to pin, so the pin can go back to a release.
+#
+# A commit SHA is pinned only when no release carries the ClangIR cir2c needs;
+# reporting "main has moved on" every week would be noise, so it is not reported.
 #
 # See the "LLVM toolchain" section of README.md for the update procedure.
 
@@ -56,16 +64,52 @@ jobs:
                    | awk '{print $2}' | sed 's|refs/tags/||' \
                    | grep -E '^llvmorg-[0-9]+\.[0-9]+\.[0-9]+$' \
                    | sort -V | tail -n1)
+          LATEST_MAJOR=${LATEST#llvmorg-}; LATEST_MAJOR=${LATEST_MAJOR%%.*}
 
-          echo "pin=$PIN"       >> "$GITHUB_OUTPUT"
-          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
-          echo "Pinned: $PIN    Latest upstream: $LATEST"
+          {
+            echo "pin=$PIN"
+            echo "latest=$LATEST"
+          } >> "$GITHUB_OUTPUT"
 
-          if [ "$PIN" = "$LATEST" ]; then
+          if [ -z "$LATEST" ]; then
+            echo "::warning::could not read upstream release tags; nothing to compare"
             echo "outdated=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "outdated=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          case "$PIN" in
+            llvmorg-*)
+              # A release is pinned: any newer release is worth reporting.
+              echo "Pinned release: $PIN    Latest release: $LATEST"
+              echo "kind=release" >> "$GITHUB_OUTPUT"
+              if [ "$PIN" = "$LATEST" ]; then
+                echo "outdated=false" >> "$GITHUB_OUTPUT"
+              else
+                echo "outdated=true" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+            *)
+              # A development revision is pinned. Report only once a release has
+              # caught up with it, which is when the pin can go back to a tag.
+              # The revision's own version is what upstream stamped into it.
+              VER_URL=https://raw.githubusercontent.com/llvm/llvm-project/$PIN
+              PIN_MAJOR=$(curl -fsSL "$VER_URL/cmake/Modules/LLVMVersion.cmake" 2>/dev/null \
+                          | sed -n 's/.*set(LLVM_VERSION_MAJOR *\([0-9]\+\)).*/\1/p' | head -n1)
+              if [ -z "$PIN_MAJOR" ]; then
+                echo "::warning::could not read LLVM_VERSION_MAJOR at $PIN; skipping the comparison"
+                echo "outdated=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "Pinned revision: $PIN (LLVM $PIN_MAJOR)    Latest release: $LATEST"
+              echo "kind=revision"        >> "$GITHUB_OUTPUT"
+              echo "pin_major=$PIN_MAJOR" >> "$GITHUB_OUTPUT"
+              if [ "$LATEST_MAJOR" -ge "$PIN_MAJOR" ]; then
+                echo "outdated=true"  >> "$GITHUB_OUTPUT"
+              else
+                echo "outdated=false" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+          esac
 
       - name: Open or update the tracking issue
         if: steps.check.outputs.outdated == 'true'
@@ -73,10 +117,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PIN: ${{ steps.check.outputs.pin }}
           LATEST: ${{ steps.check.outputs.latest }}
+          KIND: ${{ steps.check.outputs.kind }}
+          PIN_MAJOR: ${{ steps.check.outputs.pin_major }}
         run: |
           TITLE="Update the pinned LLVM release"
+          if [ "$KIND" = revision ]; then
+            LEAD="LLVM ${LATEST} is released. The pin is a development revision of LLVM ${PIN_MAJOR}, taken because no release carried the ClangIR cir2c needs — a release has now caught up, so the pin can go back to a tag."
+          else
+            LEAD="A newer LLVM release is available."
+          fi
           BODY=$(cat <<EOF
-          A newer LLVM release is available.
+          ${LEAD}
 
           | | |
           |---|---|
@@ -84,13 +135,16 @@ jobs:
           | Newest upstream release | \`${LATEST}\` |
 
           Updating is deliberate work, not automatic — see
-          [README.md](../blob/main/README.md#64-change-the-pin):
+          [README.md](../blob/main/README.md#66-change-the-pin):
 
           1. Set \`llvm-version.txt\` to \`${LATEST}\`.
           2. Run the **LLVM toolchain image** workflow to rebuild the toolchain.
           3. Build cir2c against it and run the corpus suites.
           4. Fix renamed accessors and changed assembly syntax in the same PR.
           5. Raise \`CIR2C_LLVM_MIN_VERSION\` if the new release drops something.
+
+          Keep the current pin if the release turns out to be missing a CIR
+          operation cir2c maps; the suites in step 3 are what shows that.
 
           _Opened automatically by the weekly LLVM release check._
           EOF

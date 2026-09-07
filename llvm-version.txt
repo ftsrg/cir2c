@@ -14,14 +14,26 @@
 # limitations under the License.
 #
 # The llvm-project revision cir2c builds against. This is the single source of
-# truth: docker/build-llvm.sh clones it, the toolchain image bakes it in, and
-# the weekly release check compares it against upstream.
+# truth: docker/build-llvm.sh clones it, the toolchain image bakes it in and
+# publishes itself under this revision as its tag, CI and Release pull that
+# exact tag, and the weekly check compares it against upstream.
 #
-# It is a RELEASED tag on purpose — cir2c does not track llvm-project main.
-# Read the "LLVM toolchain" section of README.md before changing it; moving the
-# pin means
-# rebuilding the toolchain image and re-running the corpus test suites.
+# The value is one immutable revision — a release tag, or a full 40-character
+# commit SHA. cir2c NEVER tracks a moving branch: a floating `main` would change
+# the toolchain under an unchanged commit of this repository, so a green build
+# would say nothing.
+#
+# A RELEASE TAG IS PREFERRED, but is not always possible. ClangIR is young and
+# moves inside the LLVM development cycle, so the CIR a release emits can lack
+# operations cir2c needs. This pin is such a case: it is llvm-project main
+# during the LLVM 24 cycle, because no LLVM 24 release exists yet (upstream has
+# only llvmorg-24-init, the branch point) and LLVM 23.1.0 has neither
+# cir.fmuladd nor the current func_info attribute. The weekly check watches for
+# the first release that can replace it.
+#
+# Read the "LLVM toolchain" section of README.md before changing this. Moving
+# the pin means rebuilding the toolchain image and re-running the corpus suites.
 #
 # Comments and blank lines are ignored; the first remaining line is the ref.
 
-llvmorg-23.1.0
+945e3e825b3ee88a8c1fed0da2dc88d6b2114e37
