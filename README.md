@@ -832,7 +832,32 @@ read the memory after the structure.
 so no other member moves. `sizeof` increases. A calculation that uses `sizeof`
 to find a size gives a larger result, never a smaller one.
 
-### 8.5 Structured output and flat output
+### 8.5 Contracted floating-point operations
+
+With the default `-ffp-contract=on`, Clang gives one `cir.fmuladd` operation for
+`a * b + c`. The operation permits two results: the target can use one fused
+multiply-add instruction, or a separate multiply and add.
+
+cir2c writes the unfused form:
+
+```c
+double t = a * b + c;
+```
+
+This is one of the two results that the operation permits, and it keeps the
+output as usual arithmetic that a verification tool can examine. An opaque
+builtin call would hide the calculation.
+
+**Note: A verification tool examines the unfused form only.** If the target
+machine fuses the operation, the two forms can be different by one rounding
+step. If your analysis must have the fused form, translate with
+`-ffp-contract=off`. Then Clang gives separate `cir.fmul` and `cir.fadd`
+operations.
+
+`cir.fma`, which comes from `__builtin_fma`, is different. It makes sure of one
+rounding, thus cir2c keeps the call: `fma(a, b, c)`.
+
+### 8.6 Structured output and flat output
 
 The default structured output keeps the `for`, `while` and `if` statements and
 the scopes. Most verification tools examine this form more efficiently.
@@ -841,7 +866,7 @@ The two modes do not accept the same programs. A construction that fails in one
 mode can operate in the other mode. This is a limit. But it is also a useful
 test. Try the two modes when a translation fails.
 
-### 8.6 Types
+### 8.7 Types
 
 - The `long double` type becomes the nearest C type on the host. The
   `x86_fp80`, `bf16` and `fp16` types are in the output. But the bits are not
@@ -853,7 +878,7 @@ test. Try the two modes when a translation fails.
   tool with a different data model, for example a 32-bit model or a different
   byte sequence.
 
-### 8.7 Other information
+### 8.8 Other information
 
 - The output is not for a person to read in place of the source. The output is
   not for production use. The tests compile the output only to make sure that it
@@ -863,7 +888,7 @@ test. Try the two modes when a translation fails.
 - The `cir2c --version` command prints the commit of the build. The releases
   include the `llvm-version.txt` file. Record the two values with each result.
 
-### 8.8 Report a limit
+### 8.9 Report a limit
 
 If you find an approximation that is not in this list, make an issue. Give the
 input program, the `--mlir` output and the C output. Soundness problems have a

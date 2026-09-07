@@ -66,6 +66,8 @@ public:
     m.registerTypedHandler<cir::FMinNumOp>(handleFMinNum);
     m.registerTypedHandler<cir::FMinimumOp>(handleFMinimum);
     m.registerTypedHandler<cir::FModOp>(handleFMod);
+    m.registerTypedHandler<cir::FMulAddOp>(handleFMulAdd);
+    m.registerTypedHandler<cir::FMAOp>(handleFMA);
     m.registerTypedHandler<cir::PowOp>(handlePow);
     m.registerTypedHandler<cir::ATan2Op>(handleATan2);
   }
@@ -123,6 +125,21 @@ private:
     return true;
   }
 
+  // Ternary FP->FP op emitted as a libm-style builtin call (cir.fma).
+  static bool handleTernaryFPOp(const char *base, Operation *o, Mapper &m, std::ostream &out) {
+    if (o->getNumOperands() < 3 || o->getNumResults() < 1) return false;
+    std::string ctype = m.mapTypeToC(o->getResult(0).getType());
+    std::string fname = fpMathFuncName(base, ctype);
+    std::string a     = m.getOrCreateName(o->getOperand(0));
+    std::string b     = m.getOrCreateName(o->getOperand(1));
+    std::string c     = m.getOrCreateName(o->getOperand(2));
+    std::string tmp   = m.freshName(base);
+    out << "  " << ctype << " " << tmp << " = " << fname << "(" << a << ", " << b
+        << ", " << c << ");\n";
+    m.setName(o->getResult(0), tmp);
+    return true;
+  }
+
   // ---- Unary FP->FP handlers ----
   static bool handleSqrt(cir::SqrtOp op, Mapper &m, std::ostream &out)           { return handleUnaryFPOp("sqrt",      op.getOperation(), m, out); }
   static bool handleACos(cir::ACosOp op, Mapper &m, std::ostream &out)           { return handleUnaryFPOp("acos",      op.getOperation(), m, out); }
@@ -160,6 +177,33 @@ private:
   static bool handleFMod(cir::FModOp op, Mapper &m, std::ostream &out)           { return handleBinaryFPOp("fmod",     op.getOperation(), m, out); }
   static bool handlePow(cir::PowOp op, Mapper &m, std::ostream &out)             { return handleBinaryFPOp("pow",      op.getOperation(), m, out); }
   static bool handleATan2(cir::ATan2Op op, Mapper &m, std::ostream &out)         { return handleBinaryFPOp("atan2",    op.getOperation(), m, out); }
+
+  // ---- Ternary FP->FP handlers ----
+  // cir.fmuladd computes (a * b) + c and explicitly lets the target choose a
+  // fused OR an unfused sequence (it is clang's -ffp-contract=on relaxation for
+  // `a * b + c`, not a guarantee). We emit the unfused form, which is one of the
+  // results the operation permits and keeps the output as plain arithmetic that
+  // a verifier can reason about, instead of an opaque builtin call.
+  // LIMITATION: a verifier therefore checks the unfused reading only. Where the
+  // real target fuses, the two can differ by one rounding step.
+  static bool handleFMulAdd(cir::FMulAddOp op, Mapper &m, std::ostream &out) {
+    Operation *o = op.getOperation();
+    if (o->getNumOperands() < 3 || o->getNumResults() < 1) return false;
+    std::string ctype = m.mapTypeToC(o->getResult(0).getType());
+    std::string a     = m.getOrCreateName(o->getOperand(0));
+    std::string b     = m.getOrCreateName(o->getOperand(1));
+    std::string c     = m.getOrCreateName(o->getOperand(2));
+    std::string tmp   = m.freshName("fmuladd");
+    out << "  " << ctype << " " << tmp << " = " << a << " * " << b << " + " << c << ";\n";
+    m.setName(o->getResult(0), tmp);
+    return true;
+  }
+
+  // cir.fma (from __builtin_fma) guarantees a single rounding, so unlike
+  // cir.fmuladd it must keep the call form rather than expand to a * b + c.
+  static bool handleFMA(cir::FMAOp op, Mapper &m, std::ostream &out) {
+    return handleTernaryFPOp("fma", op.getOperation(), m, out);
+  }
 };
 
 REGISTER_HANDLER_MODULE(FloatMathHandlers)
