@@ -147,6 +147,23 @@ private:
   static bool handleGoto(cir::GotoOp op, Mapper &m, std::ostream &out) {
     // Flush any pending cleanup scopes before jumping: a goto that exits a
     // cir.cleanup.scope boundary must destroy the scoped objects first.
+    //
+    // KNOWN LIMITATION. Unlike handleBreak/handleContinue, which pass the
+    // current loop depth and so flush exactly the scopes they cross, this
+    // flushes the WHOLE cleanup stack (fromDepth 0): it does not know which
+    // scopes lie between the goto and its target label. `consume` compensates
+    // by stopping those over-flushed cleanups being emitted a second time on
+    // the path that really does leave the scopes.
+    //
+    // The cost is that a CONDITIONAL goto marks the region consumed, so the
+    // normal fall-through path out of the same scope loses its cleanup:
+    //     for (...) { Tracer t; if (c) goto done; }   // dtor lost when !c
+    // Fixing this needs the goto's target scope, so the flush can be narrowed
+    // to the scopes actually crossed. Do NOT just pass consume=false: that
+    // double-destroys whenever a goto targets a label INSIDE an enclosing
+    // cleanup scope (test2 in Regression/C++/fixups.cpp of the LLVM suite,
+    // where `goto l1` leaves only the inner scope but the flush also emits the
+    // outer object's destructor).
     m.emitPendingCleanups(out, 0);
     out << "  goto " << op.getLabel().str() << ";\n";
     return true;
@@ -426,7 +443,15 @@ private:
     // loop/switch (i.e. pushed after the current loop was entered).  We emit
     // cleanups whose loopDepth >= current loop depth so we only cross the
     // cleanups between this break and its target loop, not outer cleanups.
-    m.emitPendingCleanups(out, m.getLoopDepth());
+    //
+    // Do NOT consume: a break is usually conditional (`if (c) break;`), so the
+    // other paths out of the same cleanup scope — the normal fall-through and
+    // any later break/continue — must still emit the cleanup. Consuming here
+    // marked the region done for the whole scope and dropped the destructor on
+    // every remaining path. When the break IS the body's terminator the
+    // fall-through emission is already suppressed by the terminator-kind check
+    // in handleCleanupScope, so nothing is emitted twice.
+    m.emitPendingCleanups(out, m.getLoopDepth(), /*consume=*/false);
     out << "  break;\n";
     return true;
   }
@@ -434,8 +459,8 @@ private:
   // cir.continue terminates a loop body iteration.
   static bool handleContinue(cir::ContinueOp op, Mapper &m, std::ostream &out) {
     // Emit cleanups for scopes crossed by this continue (same depth logic as
-    // handleBreak).
-    m.emitPendingCleanups(out, m.getLoopDepth());
+    // handleBreak, including the non-consuming rationale).
+    m.emitPendingCleanups(out, m.getLoopDepth(), /*consume=*/false);
     // If we are inside a cir.for loop, jump to the step label so the increment
     // runs before the next iteration (plain C `continue` would skip the step
     // because the step is emitted at the end of the while(1) body).
