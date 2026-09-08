@@ -206,12 +206,24 @@ std::string ConstantEmitter::formatConstInit(const Mapper &ctx,
   }
   if (auto cr = mlir::dyn_cast<cir::ConstRecordAttr>(attr)) {
     llvm::ArrayRef<mlir::Type> members;
-    if (auto rt = mlir::dyn_cast_if_present<cir::RecordType>(type))
+    llvm::ArrayRef<cir::RecordMemberKind> memberKinds;
+    if (auto rt = mlir::dyn_cast_if_present<cir::RecordType>(type)) {
       members = rt.getMembers();
+      memberKinds = rt.getMemberKinds();
+    }
     std::string s = "{";
     bool first = true;
     unsigned i = 0;
     for (auto mem : cr.getMembers()) {
+      // A brace initializer is positional, so it must list exactly the members
+      // the C struct declares. The struct emitter drops zero-width bit-fields
+      // (they occupy no storage), so their initializer element has to go too —
+      // otherwise every value after one lands in the wrong field.
+      if (i < members.size() && i < memberKinds.size() &&
+          cir::isZeroWidthBitField(members[i], memberKinds[i])) {
+        ++i;
+        continue;
+      }
       if (!first) s += ", ";
       first = false;
       s += formatConstInit(ctx, mem, i < members.size() ? members[i] : mlir::Type());
