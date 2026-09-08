@@ -252,13 +252,19 @@ private:
     if (m.isDirectAccess(val) && ptr.getType()) {
       // val is a direct-access lvalue. We need & when the destination slot holds
       // a pointer AND the value itself is a scalar lvalue (not a pointer type).
-      // Exception: when val is a ptr-to-array alloca (e.g. char[6]), the C name
-      // is declared as `T name[N]` and decays to `T*` — adding & would give
+      // Exception: when val points to an array (e.g. char[6]), the C name is
+      // declared as `T name[N]` and decays to `T*` — adding & would give
       // `T(*)[N]` (pointer-to-array), the wrong type for a `T**` destination.
       // Only skip & for this specific case; all other pointer types still need it.
+      //
+      // This reads the value's own type rather than its defining op. The test
+      // used to be "is it an alloca of array type", which saw a local array but
+      // not a global one: `struct __va_list_tag ap[1]` at file scope reached
+      // here through cir.get_global and got the & anyway, so `va_list *foo()`
+      // returned `&ap` — a `T(*)[1]` where the return type is `T*`.
       bool valIsArrayPtr = false;
-      if (auto al = val.getDefiningOp<cir::AllocaOp>())
-        valIsArrayPtr = mlir::isa<cir::ArrayType>(al.getAllocaType());
+      if (auto valPtrTy = mlir::dyn_cast<cir::PointerType>(val.getType()))
+        valIsArrayPtr = mlir::isa<cir::ArrayType>(valPtrTy.getPointee());
       if (!valIsArrayPtr) {
         Type ptrType = ptr.getType();
         if (auto ptrTy = llvm::dyn_cast<cir::PointerType>(ptrType)) {
