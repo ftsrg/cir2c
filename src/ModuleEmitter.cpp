@@ -1590,13 +1590,16 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
         info.baseType = mapped.empty() ? "int" : mapped;
       }
 
-      // Field name from attribute (fallback to synthetic)
+      // Field name from attribute (fallback to synthetic).
+      // The synthetic form must be the one every other emitter uses for an
+      // unnamed member — `__field<N>`, as written by the layout collector
+      // below, by handleExtractMember and by the constant access paths.
       std::string fname;
       if (auto sa = gm.getOperation()->getAttrOfType<StringAttr>("name")) fname = sa.getValue().str();
       if (fname.empty()) {
         size_t idx = static_cast<size_t>(std::max(0, info.index));
         if (info.index < 0) idx = structFields[structName].size();
-        fname = "field" + std::to_string(idx);
+        fname = "__field" + std::to_string(idx);
       }
       info.name = fname;
 

@@ -143,13 +143,19 @@ private:
     }
 
     // Anonymous members (empty name attr) are emitted into the struct definition
-    // as `field<N>` by the struct collector in Mapper.cpp (the "_M_local_buf"-
-    // bearing anonymous union inside libstdc++ basic_string is the canonical
-    // example). Mirror that scheme here using the op's `index_attr` so the
-    // access expression resolves to a real field.
+    // as `__field<N>` by the struct collectors in ModuleEmitter.cpp (the
+    // "_M_local_buf"-bearing anonymous union inside libstdc++ basic_string is
+    // the canonical example, and the ABI coercion records clang synthesizes to
+    // return a small struct are the common one). Mirror that scheme here using
+    // the op's `index_attr` so the access expression resolves to a real field.
+    //
+    // The prefix must match the definition exactly. It read `field<N>` while
+    // the layout collector wrote `__field<N>`: harmless for as long as every
+    // such record also had a named member somewhere to resolve through, and a
+    // "no member named 'field0'" compile error the moment one did not.
     if (memberName.empty()) {
       if (auto ia = o->getAttrOfType<mlir::IntegerAttr>("index_attr"))
-        memberName = "field" + std::to_string(ia.getInt());
+        memberName = "__field" + std::to_string(ia.getInt());
     }
 
     if (memberName.empty()) {
