@@ -62,6 +62,7 @@ BLOCKLIST_OPS=(
     "cir.eh.setjmp"                    # MSVC-SEH / __builtin_setjmp — not modellable
     "cir.eh.longjmp"                   # MSVC-SEH / __builtin_longjmp — not modellable
     "cir.indirect_br"                  # computed goto (GNU &&label / goto *p) — no ISO C equivalent
+    "cir.indirect_goto"                # computed goto, the form LLVM 24 emits — same reason
 )
 # Bash arrays cannot be exported to the parallel worker subshells, so flatten
 # the editable array above into a newline-delimited scalar that workers can see.
