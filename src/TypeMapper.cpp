@@ -122,7 +122,19 @@ std::string TypeMapper::mapTypeToC(mlir::Type t) const {
     } else if (width == 64) {
       return isSigned ? "long" : "unsigned long";
     }
-    return "int"; // fallback
+
+    // Non-standard widths. Upstream coerces a by-value record into an integer
+    // of exactly the record's width, so a 6-byte packed struct arrives as
+    // !cir.int<u, 48>. C has no 48-bit type, so the value has to travel in the
+    // next standard type up — never a narrower one.
+    //
+    // The fallback below used to be a flat "int", which is 32 bits: every
+    // width above 32 was silently truncated, and a struct passed by value lost
+    // its top bytes. Widths at or below 32 keep the historical "int" so this
+    // stays a fix for the truncating cases only.
+    if (width > 32 && width <= 64)
+      return isSigned ? "long" : "unsigned long";
+    return "int"; // fallback (widths <= 32; wider than needed but lossless)
   }
 
   // Handle CIR floating-point types
