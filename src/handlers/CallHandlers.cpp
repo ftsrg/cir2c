@@ -25,6 +25,7 @@
 #include <llvm/Support/Casting.h>
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 
+#include <limits>
 #include <sstream>
 #include <string>
 
@@ -208,9 +209,45 @@ private:
     // Build argument list with address-of adjustment for direct access allocas
     std::string args;
     unsigned startIdx = isIndirectCall ? 1 : 0; // Skip first operand if it's the function pointer
+    // A record too large for registers is passed in memory. The ABI models that
+    // as a POINTER argument marked `llvm.byval`, meaning "the callee receives a
+    // copy of what this points at", not "the callee receives a pointer".
+    //
+    // This only matters for an argument in the VARIADIC tail. A declared
+    // parameter keeps the pointer, because mapFunc declares that parameter from
+    // the same CIR pointer type — dereferencing at the call site alone would
+    // pass a record to a `struct S *` parameter. A variadic argument has no
+    // declared parameter to agree with, and the callee reads it as a record via
+    // va_arg(ap, struct S), which decodes a pointer as the record's first bytes
+    // and yields nonsense.
+    mlir::ArrayAttr argAttrs = o->getAttrOfType<mlir::ArrayAttr>("arg_attrs");
+    // Index of the first variadic argument; nothing is variadic unless the
+    // callee is known and declared variadic.
+    unsigned firstVariadicArg = std::numeric_limits<unsigned>::max();
+    if (!isIndirectCall && !callee.empty()) {
+      if (auto fn = mlir::SymbolTable::lookupNearestSymbolFrom<cir::FuncOp>(
+              o, mlir::StringAttr::get(o->getContext(), callee))) {
+        cir::FuncType ft = fn.getFunctionType();
+        if (ft.isVarArg()) firstVariadicArg = ft.getNumInputs();
+      }
+    }
     for (unsigned i = startIdx; i < o->getNumOperands(); ++i) {
       if (i > startIdx) args += ", ";
       Value argV = o->getOperand(i);
+
+      unsigned argIdx = i - startIdx;
+      bool isByVal = false;
+      if (argAttrs && argIdx >= firstVariadicArg) {
+        if (argIdx < argAttrs.size())
+          if (auto dict = mlir::dyn_cast<mlir::DictionaryAttr>(argAttrs[argIdx]))
+            isByVal = dict.contains("llvm.byval");
+      }
+      if (isByVal) {
+        std::string n = m.getOrCreateName(argV);
+        args += m.isDirectAccess(argV) ? n : ("*(" + n + ")");
+        continue;
+      }
+
       // pointerOperandExpr takes the address of a direct-access scalar lvalue but
       // leaves an array/VLA name to decay (a VLA alloca is CIR ptr<scalar>, so a
       // naive pointee-array check would wrongly emit `&v` = pointer-to-VLA).
