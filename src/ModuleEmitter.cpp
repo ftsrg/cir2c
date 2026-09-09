@@ -1326,6 +1326,16 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   // externalization) can be elided. Computed once for the whole module tree.
   computeReachableDefs(module);
 
+  // Visit \p root and every module nested inside it. A module-level attribute is
+  // not always on the module handed to mapModule; see the constructor list below.
+  auto forEachModuleWithNesting =
+      [](ModuleOp root, llvm::function_ref<void(mlir::ModuleOp)> fn) {
+        fn(root);
+        root->walk([&](mlir::ModuleOp nested) {
+          if (nested != root) fn(nested);
+        });
+      };
+
   // Collect global constructors (C++ static-init trampolines `_GLOBAL__sub_I_*`
   // and explicit `__attribute__((constructor))` functions) so they can be
   // called explicitly at the top of main(). We deliberately do NOT emit
@@ -1338,7 +1348,38 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     globalCtorSymbols_.clear();
     struct Ctor { uint32_t priority; unsigned order; std::string sym; };
     std::vector<Ctor> ctors;
+    std::set<std::string> seenCtors;
     unsigned order = 0;
+
+    // The module carries the constructor list as an attribute: an array of
+    // #cir.global_ctor<"name", priority>. That is the authoritative source, and
+    // for C++ static init with __attribute__((init_priority)) it is the ONLY
+    // one — clang splits the initialization into one `_GLOBAL__I_00<prio>`
+    // function per priority and records them here, leaving the functions
+    // themselves without a per-function priority attribute.
+    //
+    // Reading only the per-function attribute (below) therefore matched just
+    // the unprioritized `_GLOBAL__sub_I_*` trampoline and silently dropped
+    // every prioritized initializer, so those globals were never constructed.
+    // The list can sit on a NESTED module: parsing a CIR file whose top level is
+    // a single named `module @"…"` wraps it in an implicit outer module, and the
+    // attribute stays on the inner one. Reading only the module handed to
+    // mapModule found nothing at all, so walk like every other lookup here does.
+    forEachModuleWithNesting(module, [&](mlir::ModuleOp m) {
+      auto ctorList = m->getAttrOfType<mlir::ArrayAttr>(
+          cir::CIRDialect::getGlobalCtorsAttrName());
+      if (!ctorList) return;
+      for (mlir::Attribute a : ctorList) {
+        auto gc = mlir::dyn_cast<cir::GlobalCtorAttr>(a);
+        if (!gc) continue;
+        std::string cs = gc.getName().getValue().str();
+        if (!seenCtors.insert(cs).second) continue;
+        ctors.push_back({static_cast<uint32_t>(gc.getPriority()), order++, cs});
+      }
+    });
+
+    // Also take anything the module list did not mention: a function carrying
+    // the per-function priority attribute, or a `_GLOBAL__sub_I_*` trampoline.
     module->walk([&](cir::FuncOp f) {
       auto sym = symbolNameAttr(f);
       if (!sym) return;
@@ -1346,6 +1387,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
       bool isTrampoline = s.rfind("_GLOBAL__sub_I_", 0) == 0;
       std::optional<uint32_t> prio = f.getGlobalCtorPriority();
       if (!isTrampoline && !prio) return;
+      if (!seenCtors.insert(s).second) return;
       // GCC runs lower priority numbers first; unprioritized constructors
       // (including the `_GLOBAL__sub_I_*` trampoline) run after, in module
       // order. 65535 is GCC's "unspecified" default priority.
@@ -1367,13 +1409,29 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     // loader running .fini_array entries back-to-front.
     globalDtorSymbols_.clear();
     std::vector<Ctor> dtors;
+    std::set<std::string> seenDtors;
     unsigned dorder = 0;
+    // Same two sources as the constructors above.
+    forEachModuleWithNesting(module, [&](mlir::ModuleOp m) {
+      auto dtorList = m->getAttrOfType<mlir::ArrayAttr>(
+          cir::CIRDialect::getGlobalDtorsAttrName());
+      if (!dtorList) return;
+      for (mlir::Attribute a : dtorList) {
+        auto gd = mlir::dyn_cast<cir::GlobalDtorAttr>(a);
+        if (!gd) continue;
+        std::string ds = gd.getName().getValue().str();
+        if (!seenDtors.insert(ds).second) continue;
+        dtors.push_back({static_cast<uint32_t>(gd.getPriority()), dorder++, ds});
+      }
+    });
     module->walk([&](cir::FuncOp f) {
       auto sym = symbolNameAttr(f);
       if (!sym) return;
       std::optional<uint32_t> prio = f.getGlobalDtorPriority();
       if (!prio) return;
-      dtors.push_back({prio.value_or(65535), dorder++, sym.getValue().str()});
+      std::string s = sym.getValue().str();
+      if (!seenDtors.insert(s).second) return;
+      dtors.push_back({prio.value_or(65535), dorder++, std::move(s)});
     });
     std::stable_sort(dtors.begin(), dtors.end(),
                      [](const Ctor &a, const Ctor &b) {
