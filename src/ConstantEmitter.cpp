@@ -22,6 +22,7 @@
 #include <mlir/IR/Types.h>
 #include <mlir/IR/BuiltinAttributes.h>
 
+#include "RecordLayout.h"
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 
 #include <llvm/ADT/APFloat.h>
@@ -216,11 +217,11 @@ std::string ConstantEmitter::formatConstInit(const Mapper &ctx,
     unsigned i = 0;
     for (auto mem : cr.getMembers()) {
       // A brace initializer is positional, so it must list exactly the members
-      // the C struct declares. The struct emitter drops zero-width bit-fields
-      // (they occupy no storage), so their initializer element has to go too —
-      // otherwise every value after one lands in the wrong field.
+      // the C struct declares. The struct emitter drops members that occupy no
+      // storage, so their initializer elements have to go too — otherwise every
+      // value after one lands in the wrong field.
       if (i < members.size() && i < memberKinds.size() &&
-          cir::isZeroWidthBitField(members[i], memberKinds[i])) {
+          memberOccupiesNoStorage(members[i], memberKinds[i])) {
         ++i;
         continue;
       }

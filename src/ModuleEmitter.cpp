@@ -18,6 +18,7 @@
 // that file small): top-level module/function/global emission, prototype
 // emission, and the pre-scans + preamble.
 
+#include "RecordLayout.h"
 #include "Mapper.h"
 #include "ConstantEmitter.h"
 
@@ -1669,16 +1670,11 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
       for (size_t index = 0; index < members.size(); ++index) {
         mlir::Type memberType = members[index];
 
-        // A zero-width bit-field marks the end of a storage unit; it occupies
-        // no storage and, per upstream, "contributes neither size nor alignment
-        // to the record's layout". CIR spells it as a zero-length array of the
-        // declared type, so emitting it as a C member is not neutral: `int
-        // x[0]` carries int's 4-byte alignment and rounds the whole record up
-        // to a multiple of 4. That made sizeof(struct five) 8 where the ABI
-        // says 3. Leave it out; the members after it keep their own indices, so
-        // every `__field<N>` access still names the member it did before.
+        // Members that occupy no storage are left out of the C record; see
+        // memberOccupiesNoStorage. The members after one keep their own
+        // indices, so every `__field<N>` access still names the member it did.
         if (index < memberKinds.size() &&
-            cir::isZeroWidthBitField(memberType, memberKinds[index]))
+            memberOccupiesNoStorage(memberType, memberKinds[index]))
           continue;
 
         FieldInfo info;
