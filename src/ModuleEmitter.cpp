@@ -1945,6 +1945,29 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
               }
         }
       }
+      // A cast of a loaded virtual function pointer calls through a signature
+      // that is not the vtable slot's — upstream inserts one when the callee
+      // returns a record through an sret parameter, so the slot says
+      // `(this, args) -> rec` while the call says `(sret, this, args) -> void`.
+      // The call site derives the wrapper from the type it actually calls
+      // through, so that signature needs its declaration too; registering only
+      // the slot's left the call undeclared.
+      if (auto cast = llvm::dyn_cast<cir::CastOp>(&op)) {
+        if (op.getNumResults() > 0 && op.getNumOperands() > 0) {
+          auto isLoadedVirtualFnPtr = [](mlir::Value v) {
+            auto load = v.getDefiningOp<cir::LoadOp>();
+            if (!load || load->getNumOperands() == 0) return false;
+            return load->getOperand(0).getDefiningOp<cir::VTableGetVirtualFnAddrOp>()
+                   != nullptr;
+          };
+          if (isLoadedVirtualFnPtr(op.getOperand(0)))
+            if (auto pt = mlir::dyn_cast<cir::PointerType>(op.getResult(0).getType()))
+              if (auto funcTy = mlir::dyn_cast<cir::FuncType>(pt.getPointee())) {
+                std::string ret; std::vector<std::string> args;
+                registerVirtualCallSig(funcTy, ret, args);
+              }
+        }
+      }
       for (auto &region : op.getRegions())
         for (auto &block : region.getBlocks())
           for (auto &nestedOp : block.getOperations())

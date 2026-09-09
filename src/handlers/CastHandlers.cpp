@@ -42,6 +42,30 @@ private:
     Operation *o = op.getOperation();
     if (o->getNumOperands() < 1) return false;
     Value operand = o->getOperand(0);
+
+    // A vtable dispatch chain emits no C of its own: everything from
+    // cir.vtable.get_vptr through the function-pointer load is suppressed, and
+    // the call site turns the whole chain into __VERIFIER_virtual_call_<sig>.
+    //
+    // A cast of the function pointer belongs to that chain. Upstream inserts one
+    // whenever the callee signature differs from the vtable slot's — returning a
+    // record through an sret parameter, for instance. Left untracked, the cast
+    // emitted `(void*)vN` naming a value the chain never declared, and the call
+    // site no longer recognised its callee as virtual, so it emitted a plain
+    // indirect call through that undeclared name.
+    //
+    // Carry the chain across: the result's type is the signature the call
+    // actually uses, so the call site derives the wrapper from it.
+    if (o->getNumResults() > 0 && m.isVirtualFnPtr(operand)) {
+      Value res = o->getResult(0);
+      m.markVirtualFnPtr(res);
+      m.setVirtualFnSlot(res, m.getVirtualFnSlot(operand));
+      if (m.isVtableDispatchValue(operand))
+        m.trackVtableDispatch(res, m.getVtableDispatchObject(operand));
+      m.setName(res, m.getOrCreateName(operand));
+      return true;
+    }
+
     std::string opnd = m.getOrCreateName(operand);
 
     // When the CIR operand is a pointer but our C representation is a
