@@ -28,7 +28,7 @@ CIR is the ClangIR dialect of MLIR. Clang makes the CIR from the source code.
 
 ## Cite this work
 
-**Note: The entry that follows is a placeholder. Replace it when the
+**Note: The entry that follows is a placeholder. We'll soon replace it when the
 publication is available.**
 
 ```bibtex
