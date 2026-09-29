@@ -32,6 +32,8 @@ public:
   /// mapTypeToC (e.g., struct-collection logic in mapModule/mapGlobal) can
   /// call it directly as TypeMapper::recordCName(...).
   static std::string recordCName(mlir::StringAttr nameAttr);
+  /// The same for a record name as text.
+  static std::string recordCName(llvm::StringRef raw);
 
   /// Map a single CIR/MLIR type to a C type string.
   std::string mapTypeToC(mlir::Type t) const;

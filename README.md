@@ -705,6 +705,10 @@ A C++ function can have the name of a C library function, for example
 would replace the library function, so cir2c adds the suffix to its name:
 `memcpy_2`.
 
+Clang names an unnamed class, for example a lambda, by its source location.
+cir2c keeps only the file name of that location, not the directory. Thus the
+output contains no path of the local machine: `lambda_at_list_1276_48`.
+
 `operator new` and `operator delete` have no body in CIR. cir2c writes small
 functions that call `malloc` and `free`.
 

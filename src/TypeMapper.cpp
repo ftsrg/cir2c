@@ -37,12 +37,39 @@ namespace cir2c {
 // C++ class name so there is no ambiguity, and (b) the base subobject layout
 // is layout-compatible with the complete type for verification purposes.
 /*static*/
+// Clang names an unnamed class by its source location, for example
+// "(lambda at /home/user/llvm/include/c++/v1/list:1276:48)". The directory is
+// that of the machine that ran clang, so the name keeps only the file name.
+static std::string dropLocationDirectories(llvm::StringRef raw) {
+  std::string out;
+  size_t pos = 0;
+  while (true) {
+    size_t at = raw.find(" at ", pos);
+    if (at == llvm::StringRef::npos) break;
+    size_t close = raw.find(')', at);
+    if (close == llvm::StringRef::npos) break;
+    llvm::StringRef location = raw.slice(at + 4, close);
+    size_t slash = location.rfind('/');
+    out += raw.slice(pos, at + 4).str();
+    out += (slash == llvm::StringRef::npos ? location
+                                           : location.drop_front(slash + 1)).str();
+    pos = close;
+  }
+  out += raw.drop_front(pos).str();
+  return out;
+}
+
 std::string TypeMapper::recordCName(mlir::StringAttr nameAttr) {
   if (!nameAttr || nameAttr.getValue().empty()) return "anon_struct";
-  llvm::StringRef raw = nameAttr.getValue();
+  return recordCName(nameAttr.getValue());
+}
+
+std::string TypeMapper::recordCName(llvm::StringRef raw) {
   if (raw.ends_with(".base"))
     raw = raw.drop_back(5);
-  return Mapper::sanitizeIdentifier(raw.str());
+  // Two lambdas of one translation unit get one name only when they are at
+  // the same line and column of two files with the same name.
+  return Mapper::sanitizeIdentifier(dropLocationDirectories(raw));
 }
 
 std::string TypeMapper::anonRecordCName(mlir::Type recordType) const {
