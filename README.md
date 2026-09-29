@@ -700,6 +700,11 @@ sequence. cir2c writes the destructor calls before each `return` in `main`.
 name, cir2c adds a suffix that a person can read. Plain C names do not change.
 cir2c uses the demangler only for symbols with the `_Z` prefix.
 
+A C++ function can have the name of a C library function, for example
+`memcpy(void*, const void*, int)`. In C++, it is a different overload. In C, it
+would replace the library function, so cir2c adds the suffix to its name:
+`memcpy_2`.
+
 `operator new` and `operator delete` have no body in CIR. cir2c writes small
 functions that call `malloc` and `free`.
 

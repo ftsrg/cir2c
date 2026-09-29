@@ -139,6 +139,65 @@ static std::string oneLineOperationText(mlir::Operation &op) {
   return compact.substr(start, end - start + 1);
 }
 
+// The external names of the C standard library (C11 7.1.3 reserves them), and
+// the functions that SV-COMP and glibc give a meaning to. A C++ function with
+// one of these names is a separate overload in C++, but in C it would redefine
+// the library function, and the calls that the output makes to the library
+// function would reach it.
+static bool isCLibraryName(const std::string &name) {
+  static const std::set<std::string> names = {
+      // <assert.h> (glibc), SV-COMP
+      "__assert_fail", "reach_error", "abort",
+      // <ctype.h>, <wctype.h>
+      "isalnum", "isalpha", "isblank", "iscntrl", "isdigit", "isgraph",
+      "islower", "isprint", "ispunct", "isspace", "isupper", "isxdigit",
+      "tolower", "toupper", "iswalnum", "iswalpha", "iswblank", "iswcntrl",
+      "iswdigit", "iswgraph", "iswlower", "iswprint", "iswpunct", "iswspace",
+      "iswupper", "iswxdigit", "iswctype", "wctype", "towlower", "towupper",
+      "towctrans", "wctrans",
+      // <locale.h>, <setjmp.h>, <signal.h>
+      "setlocale", "localeconv", "setjmp", "longjmp", "signal", "raise",
+      // <math.h>; the f and l variants are checked below
+      "acos", "asin", "atan", "atan2", "cos", "sin", "tan", "acosh", "asinh",
+      "atanh", "cosh", "sinh", "tanh", "exp", "exp2", "expm1", "frexp",
+      "ilogb", "ldexp", "log", "log10", "log1p", "log2", "logb", "modf",
+      "scalbn", "scalbln", "cbrt", "fabs", "hypot", "pow", "sqrt", "erf",
+      "erfc", "lgamma", "tgamma", "ceil", "floor", "nearbyint", "rint",
+      "lrint", "llrint", "round", "lround", "llround", "trunc", "fmod",
+      "remainder", "remquo", "copysign", "nan", "nextafter", "nexttoward",
+      "fdim", "fmax", "fmin", "fma",
+      // <stdio.h>
+      "remove", "rename", "tmpfile", "tmpnam", "fclose", "fflush", "fopen",
+      "freopen", "setbuf", "setvbuf", "fprintf", "fscanf", "printf", "scanf",
+      "snprintf", "sprintf", "sscanf", "vfprintf", "vfscanf", "vprintf",
+      "vscanf", "vsnprintf", "vsprintf", "vsscanf", "fgetc", "fgets", "fputc",
+      "fputs", "getc", "getchar", "gets", "putc", "putchar", "puts", "ungetc",
+      "fread", "fwrite", "fgetpos", "fseek", "fsetpos", "ftell", "rewind",
+      "clearerr", "feof", "ferror", "perror",
+      // <stdlib.h>
+      "atof", "atoi", "atol", "atoll", "strtod", "strtof", "strtold", "strtol",
+      "strtoll", "strtoul", "strtoull", "rand", "srand", "aligned_alloc",
+      "calloc", "free", "malloc", "realloc", "atexit", "at_quick_exit", "exit",
+      "_Exit", "getenv", "quick_exit", "system", "bsearch", "qsort", "abs",
+      "labs", "llabs", "div", "ldiv", "lldiv", "mblen", "mbtowc", "wctomb",
+      "mbstowcs", "wcstombs",
+      // <string.h>, <wchar.h>
+      "memcpy", "memmove", "strcpy", "strncpy", "strcat", "strncat", "memcmp",
+      "strcmp", "strcoll", "strncmp", "strxfrm", "memchr", "strchr", "strcspn",
+      "strpbrk", "strrchr", "strspn", "strstr", "strtok", "memset", "strerror",
+      "strlen", "wmemcpy", "wmemmove", "wmemcmp", "wmemchr", "wmemset",
+      "wcscpy", "wcsncpy", "wcscat", "wcsncat", "wcscmp", "wcsncmp", "wcslen",
+      "wcschr", "wcsrchr", "wcsstr", "wcstok", "btowc", "wctob", "mbrtowc",
+      "wcrtomb", "mbsinit", "mbrlen", "mbsrtowcs", "wcsrtombs",
+      // <time.h>
+      "clock", "difftime", "mktime", "time", "asctime", "ctime", "gmtime",
+      "localtime", "strftime"};
+  if (names.count(name) || name.rfind("__VERIFIER_", 0) == 0) return true;
+  if (name.size() > 1 && (name.back() == 'f' || name.back() == 'l'))
+    return names.count(name.substr(0, name.size() - 1)) > 0;
+  return false;
+}
+
 void Mapper::prepareFunctionNames(mlir::ModuleOp module) {
   functionOutputNames.clear();
   // Collect candidate pairs (mangled -> demangled-sanitized).
@@ -168,7 +227,10 @@ void Mapper::prepareFunctionNames(mlir::ModuleOp module) {
     const std::string &mangled = p.first;
     std::string base = p.second.empty() ? mangleLabel(mangled) : p.second;
     std::string chosen = base;
-    for (unsigned n = 2; used.count(chosen); ++n)
+    // A C++ function (a mangled symbol) never takes the name of a C library
+    // function (issue #8); a C function with that name is the library one.
+    bool reserved = mangled.rfind("_Z", 0) == 0 && isCLibraryName(base);
+    for (unsigned n = 2; used.count(chosen) || (reserved && chosen == base); ++n)
       chosen = base + "_" + std::to_string(n);
     used.insert(chosen);
     functionOutputNames[mangled] = chosen;
