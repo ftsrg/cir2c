@@ -24,6 +24,7 @@
 #include <llvm/Support/raw_ostream.h>
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 
+#include <optional>
 #include <string>
 #include <sstream>
 #include <cctype>
@@ -31,6 +32,25 @@
 using namespace mlir;
 
 namespace cir2c {
+
+// The value of an integer constant, also through integral casts.
+static std::optional<int64_t> constantInt(Value v) {
+  while (auto cast = v.getDefiningOp<cir::CastOp>()) {
+    if (cast.getKind() != cir::CastKind::integral) break;
+    v = cast.getSrc();
+  }
+  if (auto c = v.getDefiningOp<cir::ConstantOp>())
+    if (auto ia = mlir::dyn_cast<cir::IntAttr>(c.getValue()))
+      return ia.getValue().getSExtValue();
+  return std::nullopt;
+}
+
+// True when the pointer \p v cannot be null: the address of a variable, of a
+// member or of an element, which the C name spells as an lvalue.
+static bool isKnownNonNull(Value v, Mapper &m) {
+  if (m.isDirectAccess(v)) return true;
+  return v.getDefiningOp<cir::AllocaOp>() || v.getDefiningOp<cir::GetGlobalOp>();
+}
 
 /// Handlers for record member access, array element access, pointer arithmetic,
 /// pointer difference, base-class address adjustment, and bitfield operations.
@@ -313,11 +333,21 @@ private:
       canUseIndexedForm = !unsupportedIndexedPointee;
     }
 
-    if (kPreferIndexedPtrStride && canUseIndexedForm) {
-      out << "  " << ctype << " " << tmp << " = &(" << baseName << ")[" << strideExpr << "];\n";
-    } else {
-      out << "  " << ctype << " " << tmp << " = " << baseName << " + " << strideExpr << ";\n";
-    }
+    std::string stepped = (kPreferIndexedPtrStride && canUseIndexedForm)
+                              ? "&(" + baseName + ")[" + strideExpr + "]"
+                              : baseName + " + " + strideExpr;
+    // C++ defines a null pointer plus 0 as the null pointer ([expr.add]/4); C
+    // does not (C11 6.5.6p8), and libc++ does it, for example with data() +
+    // size() of an empty vector. So a stride of 0 gives the base unchanged. A
+    // base that cannot be null, and a constant stride other than 0, need no
+    // guard: null plus such a stride is undefined in C++ too.
+    std::optional<int64_t> constStride = constantInt(stride);
+    if (constStride && *constStride == 0)
+      stepped = "(" + ctype + ")(" + baseName + ")";
+    else if (!constStride && !isKnownNonNull(base, m))
+      stepped = "(" + strideName + " == 0) ? (" + ctype + ")(" + baseName +
+                ") : " + stepped;
+    out << "  " << ctype << " " << tmp << " = " << stepped << ";\n";
     if (o->getNumResults() > 0) m.setName(o->getResult(0), tmp);
     return true;
   }
@@ -334,7 +364,14 @@ private:
     std::string ctype = "long";
     if (o->getNumResults() > 0) ctype = m.mapTypeToC(o->getResult(0).getType());
 
-    out << "  " << ctype << " " << tmp << " = " << l << " - " << r << ";\n";
+    // C++ defines null minus null as 0 ([expr.add]/5); C does not (C11
+    // 6.5.6p9), and libc++ does it, for example with end() - begin() of an
+    // empty vector. Equal pointers give 0 without the subtraction.
+    if (isKnownNonNull(lhs, m) || isKnownNonNull(rhs, m))
+      out << "  " << ctype << " " << tmp << " = " << l << " - " << r << ";\n";
+    else
+      out << "  " << ctype << " " << tmp << " = (" << l << " == " << r << ") ? 0 : "
+          << l << " - " << r << ";\n";
     if (o->getNumResults() > 0) m.setName(o->getResult(0), tmp);
     return true;
   }

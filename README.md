@@ -657,6 +657,11 @@ definition in each output file. A tool that models indirect calls exactly gets
 exact dispatch. A different tool sees a call through a pointer from a real
 array.
 
+**Pointer arithmetic.** C++ defines a null pointer plus 0, and a null pointer
+minus a null pointer. C does not, and libc++ does both with an empty container.
+Where the offset is not a constant and the pointer can be null, cir2c writes
+`(n == 0) ? p : &p[n]` and `(p == q) ? 0 : p - q`.
+
 **Exceptions.** There is no `setjmp`, no `longjmp` and no unwinder. Four global
 variables hold the exception state:
 
