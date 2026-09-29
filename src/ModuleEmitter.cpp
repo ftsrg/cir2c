@@ -627,25 +627,22 @@ void Mapper::computeReachableDefs(mlir::ModuleOp module) {
   }
 }
 
-bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
-  auto sym = symbolNameAttr(fop);
-  if (!sym) return true;
-
+void Mapper::buildCPrototype(mlir::Operation *fop, std::string &retType,
+                             std::string &outName, std::string &params) const {
   auto cirFuncOp = mlir::cast<cir::FuncOp>(fop);
   cir::FuncType fty = cirFuncOp.getFunctionType();
   mlir::Type rty = fty.getReturnType();
 
-  std::string retType;
   if (mlir::isa<mlir::NoneType>(rty) || mlir::isa<cir::VoidType>(rty))
     retType = "void";
   else
     retType = mapTypeToC(rty);
 
-  std::string outName = getFunctionOutputName(sym.getValue().str());
+  outName = getFunctionOutputName(symbolNameAttr(fop).getValue().str());
 
-  // Emit parameter types only (no names) to avoid interfering with value-name
-  // assignments that happen during the real mapFunc pass later.
-  std::string params;
+  // The parameters are named p0, p1, … here, not with the names that mapFunc
+  // assigns, so that this does not interfere with those assignments.
+  params.clear();
   bool first = true;
   unsigned paramIndex = 0;
   for (mlir::Type paramType : fty.getInputs()) {
@@ -660,6 +657,17 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
     // declaration that accepts any arguments — instead of "(...)".
     if (!params.empty()) params += ", ...";
   }
+}
+
+bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
+  auto sym = symbolNameAttr(fop);
+  if (!sym) return true;
+
+  auto cirFuncOp = mlir::cast<cir::FuncOp>(fop);
+  cir::FuncType fty = cirFuncOp.getFunctionType();
+
+  std::string retType, outName, params;
+  buildCPrototype(fop, retType, outName, params);
 
   // Declaration-only operator new/delete: emit inline stubs that wrap
   // malloc/free so the linker finds a definition. We match both the demangled
@@ -1009,6 +1017,78 @@ void Mapper::emitGlobalDtorsAtMainReturn(std::ostream &out) {
     out << "  " << getFunctionOutputName(*it) << "();\n";
 }
 
+// Virtual dispatch calls a vtable slot through `ret (*)(void *, args)`, and
+// cir.end_catch calls the destructor of the exception through
+// `void (*)(void *)`. A method takes `struct T *` as its receiver, so a call
+// through such a pointer has an incompatible type: undefined behavior in C
+// (C11 6.3.2.3p8), although common ABIs pass both alike. Each function that is
+// called in this way gets a wrapper with a `void *` receiver, which converts
+// the receiver and calls the function. A pointer result is `void *` in the
+// wrapper, so that a covariant override agrees with the slot of its base; the
+// virtual-call helpers read it back as `void *`.
+void Mapper::planReceiverWrappers(mlir::ModuleOp module) {
+  receiverWrappers_.clear();
+  std::set<std::string> candidates;
+  module->walk([&](mlir::Operation *op) {
+    if (auto g = mlir::dyn_cast<cir::GlobalOp>(op)) {
+      auto iv = g.getInitialValue();
+      auto vt = iv ? mlir::dyn_cast<cir::VTableAttr>(*iv) : cir::VTableAttr();
+      if (!vt) return;
+      for (mlir::Attribute comp : vt.getData())
+        if (auto ca = mlir::dyn_cast<cir::ConstArrayAttr>(comp))
+          if (auto elts = mlir::dyn_cast<mlir::ArrayAttr>(ca.getElts()))
+            for (mlir::Attribute e : elts)
+              if (auto gv = mlir::dyn_cast<cir::GlobalViewAttr>(e))
+                candidates.insert(gv.getSymbol().getValue().str());
+    } else if (auto t = mlir::dyn_cast<cir::ThrowOp>(op)) {
+      if (auto dtor = t.getDtorAttr()) candidates.insert(dtor.getValue().str());
+    }
+  });
+  for (const std::string &sym : candidates) {
+    auto f = mlir::dyn_cast_or_null<cir::FuncOp>(
+        mlir::SymbolTable::lookupSymbolIn(module, sym));
+    // A function without a prototype in the output needs no wrapper. A variadic
+    // function cannot forward its arguments, so it keeps the old call.
+    if (!f || funcDefElided(sym) || f.getFunctionType().isVarArg()) continue;
+    auto inputs = f.getFunctionType().getInputs();
+    if (!inputs.empty() && !mlir::isa<cir::PointerType>(inputs[0])) continue;
+    receiverWrappers_[sym] = f.getOperation();
+  }
+}
+
+std::string Mapper::receiverTarget(const std::string &sym) const {
+  std::string name = getFunctionOutputName(sym);
+  return receiverWrappers_.count(sym) ? "__cir2c_vt_" + name : name;
+}
+
+void Mapper::emitReceiverWrappers(std::ostream &out) {
+  if (receiverWrappers_.empty()) return;
+  out << "// Wrappers with a void* receiver, for the calls through vtables and\n"
+         "// the exception destructors.\n";
+  for (auto &[sym, op] : receiverWrappers_) {
+    cir::FuncType fty = mlir::cast<cir::FuncOp>(op).getFunctionType();
+    std::string retType, outName, params;
+    buildCPrototype(op, retType, outName, params);
+    bool pointerResult = !retType.empty() && retType.back() == '*';
+    auto inputs = fty.getInputs();
+    std::string wrapperParams = "void *p0", args;
+    for (unsigned i = 0; i < inputs.size(); ++i) {
+      if (i) {
+        wrapperParams += ", " + mapTypeToC(inputs[i]) + " p" + std::to_string(i);
+        args += ", ";
+      }
+      args += i ? "p" + std::to_string(i)
+                : "(" + mapTypeToC(inputs[0]) + ")p0";
+    }
+    out << "static " << (pointerResult ? "void*" : retType) << " "
+        << receiverTarget(sym) << "(" << wrapperParams << ") { ";
+    if (inputs.empty()) out << "(void)p0; ";
+    if (retType != "void") out << "return " << (pointerResult ? "(void*)" : "");
+    out << outName << "(" << args << "); }\n";
+  }
+  out << "\n";
+}
+
 bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
   auto sym = symbolNameAttr(gop);
   if (!sym) {
@@ -1063,7 +1143,7 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
         // address point skips the offset-to-top + RTTI header slots anyway.
         if (module && mlir::isa_and_nonnull<cir::FuncOp>(
                           mlir::SymbolTable::lookupSymbolIn(module, sym)))
-          return "(void*)&" + getFunctionOutputName(sym);
+          return "(void*)&" + receiverTarget(sym);
         return "(void*)0";
       }
       return "(void*)0"; // null pointer / offset-to-top int
@@ -1325,6 +1405,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   // weak definitions (e.g. the std I/O machinery left dead after I/O
   // externalization) can be elided. Computed once for the whole module tree.
   computeReachableDefs(module);
+  planReceiverWrappers(module);
 
   // Visit \p root and every module nested inside it. A module-level attribute is
   // not always on the module handed to mapModule; see the constructor list below.
@@ -2220,11 +2301,17 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
           fwd += ", __a" + std::to_string(i);
           fnArgTypes += ", " + args[i];
         }
+        // The slot holds a wrapper with a void* receiver, which gives a
+        // pointer result as void* (see Mapper::planReceiverWrappers). Thus the
+        // function type of the call is exactly that of the wrapper.
+        bool pointerResult = !ret.empty() && ret.back() == '*';
         out << ret << " __VERIFIER_virtual_call_"
             << suffix << "(void* __obj, int __slot" << params << ") {\n";
         out << "  void* __fn = ((void**)*(void**)__obj)[__slot];\n";
         out << "  " << (ret == "void" ? "" : "return ")
-            << "((" << ret << "(*)(" << fnArgTypes << "))__fn)(__obj" << fwd << ");\n";
+            << (pointerResult ? "(" + ret + ")" : "")
+            << "((" << (pointerResult ? "void*" : ret) << "(*)(" << fnArgTypes
+            << "))__fn)(__obj" << fwd << ");\n";
         out << "}\n";
       }
       out << "\n";
@@ -2329,6 +2416,10 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     }
     if (anyDecl) out << "\n";
   }
+
+  // After the prototypes of the functions that they call, before the vtables
+  // that take their addresses.
+  emitReceiverWrappers(out);
 
   // Globals that take the address of functions / other globals: emitted after
   // the function-declaration pass so all references resolve.

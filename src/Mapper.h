@@ -101,6 +101,17 @@ public:
   /// Uses parameter types only; does not assign value names.
   bool emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out);
 
+  /// The C prototype parts of the cir.func \p fop: the return type, the output
+  /// name, and the parameter list with the parameters named p0, p1, …
+  void buildCPrototype(mlir::Operation *fop, std::string &retType,
+                       std::string &outName, std::string &params) const;
+
+  /// The C function to use where the function \p sym is called through a
+  /// pointer with a `void*` receiver: in a vtable slot, and as the destructor
+  /// of a thrown object. This is the `void*`-receiver wrapper of \p sym when it
+  /// has one, else the function itself. See emitReceiverWrappers.
+  std::string receiverTarget(const std::string &sym) const;
+
   /// Emit `extern void *malloc(unsigned long);` and `extern void free(void*);`
   /// at most once. Called before emitting an operator new/delete stub whose
   /// synthesised body calls malloc/free, in case the CIR module itself never
@@ -343,6 +354,10 @@ private:
   std::set<std::string> forwardDeclaredFuncNames_;
   // STD externalization (issue #7). On by default.
   bool externalizeStd_ = true;
+  // Function symbol -> its `void*`-receiver wrapper (issue #5).
+  std::map<std::string, mlir::Operation *> receiverWrappers_;
+  void planReceiverWrappers(mlir::ModuleOp module);
+  void emitReceiverWrappers(std::ostream &out);
   bool lastCallExternalized_ = false;
   // Std__ structs that will be emitted with full definitions (not just forward
   // declarations). Populated by emitModule's pre-scan; used by handlers to

@@ -542,7 +542,9 @@ private:
       // the dtor; __cxa_end_catch invokes it). A throw with no dtor (trivial type)
       // clears it.
       if (auto dtor = op.getDtorAttr()) {
-        std::string dtorName = m.getFunctionOutputName(dtor.getValue().str());
+        // cir.end_catch calls it through void (*)(void *): use the wrapper
+        // with that type (see Mapper::planReceiverWrappers).
+        std::string dtorName = m.receiverTarget(dtor.getValue().str());
         out << "  __cir_exc_dtor = (void*)&" << dtorName << ";\n";
       } else {
         out << "  __cir_exc_dtor = (void*)0;\n";

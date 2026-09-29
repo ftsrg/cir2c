@@ -657,6 +657,19 @@ definition in each output file. A tool that models indirect calls exactly gets
 exact dispatch. A different tool sees a call through a pointer from a real
 array.
 
+A method has a `struct T*` receiver, but the wrapper calls through a pointer
+with a `void*` receiver. In C, a call through a pointer of an incompatible type
+is undefined behavior. Thus a vtable slot does not hold the method itself. It
+holds a small function with a `void*` receiver that calls the method:
+
+```c
+static int __cir2c_vt_Derived__f(void *p0) { return Derived__f((struct Derived*)p0); }
+```
+
+A pointer result of this function is `void*`, and the wrapper converts it to
+the type of the call. Thus a covariant override agrees with the slot of its
+base. The destructor of a thrown object uses the same type of function.
+
 **Pointer arithmetic.** C++ defines a null pointer plus 0, and a null pointer
 minus a null pointer. C does not, and libc++ does both with an empty container.
 Where the offset is not a constant and the pointer can be null, cir2c writes
