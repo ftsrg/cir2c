@@ -74,15 +74,16 @@ static unsigned locationDepth(llvm::StringRef raw) {
   return depth;
 }
 
-// Strip CIR's ".base" suffix before sanitizing a record type name.
-// CIR emits "X.base" as the internal name for the base subobject layout of
-// class X when it is embedded in a derived class. Stripping it ensures the
-// generated C reuses the same struct tag as the complete class, which is
-// correct because: (a) the '.' character is impossible in any user-defined
-// C++ class name so there is no ambiguity, and (b) the base subobject layout
-// is layout-compatible with the complete type for verification purposes.
+// CIR names the layout of class X as a base subobject "X.base" when it differs
+// from the layout of a complete X: a base subobject has no tail padding,
+// because a derived class can place its own members there (Itanium C++ ABI).
+// For example, the value of a std::set<int> node lies in the tail padding of
+// __tree_node_base. The C output needs both layouts, so "X.base" gets its own
+// struct tag, "<tag of X>__base" (issue #4). A '.' cannot occur in a C++ class
+// name, so the suffix identifies the base layout.
+static bool isBaseLayout(llvm::StringRef raw) { return raw.ends_with(".base"); }
 static llvm::StringRef withoutBase(llvm::StringRef raw) {
-  return raw.ends_with(".base") ? raw.drop_back(5) : raw;
+  return isBaseLayout(raw) ? raw.drop_back(5) : raw;
 }
 
 /*static*/
@@ -96,11 +97,13 @@ std::string TypeMapper::recordCName(mlir::StringAttr nameAttr) const {
 }
 
 std::string TypeMapper::recordCName(llvm::StringRef raw) const {
-  std::string key = withoutBase(raw).str();
+  std::string key = raw.str();
   auto it = recordCNames_.find(key);
   if (it != recordCNames_.end()) return it->second;
   // A record that planRecordNames did not see gets a free tag now.
-  std::string base = plainCName(key), name = base;
+  std::string base = isBaseLayout(raw) ? recordCName(withoutBase(raw)) + "__base"
+                                       : plainCName(raw);
+  std::string name = base;
   for (unsigned n = 2; usedRecordCNames_.count(name); ++n)
     name = base + "_" + std::to_string(n);
   usedRecordCNames_.insert(name);
@@ -115,13 +118,16 @@ void TypeMapper::planRecordNames(mlir::ModuleOp module) {
   // Every record name of the module: in the types of the values and of the
   // attributes (function types, the types of globals, initializers), and in
   // the members of the records found.
-  std::set<std::string> names;
+  std::set<std::string> names, baseNames;
   llvm::DenseSet<mlir::Type> seen;
   std::function<void(mlir::Type)> visit = [&](mlir::Type t) {
     if (!t || !seen.insert(t).second) return;
     if (auto rec = mlir::dyn_cast<cir::RecordType>(t)) {
-      if (rec.getName() && !rec.getName().getValue().empty())
-        names.insert(withoutBase(rec.getName().getValue()).str());
+      if (rec.getName() && !rec.getName().getValue().empty()) {
+        llvm::StringRef name = rec.getName().getValue();
+        names.insert(withoutBase(name).str());
+        if (isBaseLayout(name)) baseNames.insert(name.str());
+      }
       if (rec.isComplete())
         for (mlir::Type member : rec.getMembers()) visit(member);
     } else if (auto ptr = mlir::dyn_cast<cir::PointerType>(t)) {
@@ -187,6 +193,17 @@ void TypeMapper::planRecordNames(mlir::ModuleOp module) {
       recordCNames_[group[i]] = chosen[i];
       usedRecordCNames_.insert(chosen[i]);
     }
+  }
+
+  // The base-subobject layouts last, so that each complete record keeps the
+  // tag that it has without them.
+  for (const std::string &name : baseNames) {
+    std::string tag = recordCNames_.at(withoutBase(name).str()) + "__base";
+    std::string chosen = tag;
+    for (unsigned n = 2; usedRecordCNames_.count(chosen); ++n)
+      chosen = tag + "_" + std::to_string(n);
+    recordCNames_[name] = chosen;
+    usedRecordCNames_.insert(chosen);
   }
 }
 

@@ -1035,6 +1035,12 @@ test. Try the two modes when a translation fails.
 - cir2c writes bit fields with explicit get and set operations and not with C
   bit-field syntax. Thus the layout is the layout of CIR and not the layout of
   the C compiler.
+- A derived class can place its members in the tail padding of a base class
+  that is not POD (Itanium C++ ABI), for example the value of a `std::set<int>`
+  node. CIR then has two records for the base: `X` for a complete object and
+  `X.base` for a base subobject, without the tail padding. cir2c writes
+  `X.base` as its own struct, `<tag of X>__base`. A record that CIR marks as
+  packed gets `__attribute__((packed))`, and a verification tool must honor it.
 - The output uses the target of the pinned toolchain. Do not give the output to a
   tool with a different data model, for example a 32-bit model or a different
   byte sequence.

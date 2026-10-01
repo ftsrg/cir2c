@@ -61,7 +61,7 @@ public:
 
 private:
   mutable llvm::DenseMap<mlir::Type, std::string> anonRecordNames_;
-  // Record name (without ".base") -> its C tag, and all tags given out.
+  // Record name -> its C tag, and all tags given out. "X.base" has its own tag.
   mutable std::map<std::string, std::string> recordCNames_;
   mutable std::set<std::string> usedRecordCNames_;
 };

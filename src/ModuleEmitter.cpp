@@ -1705,10 +1705,9 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   // and one of them would get the wrong layout. TypeMapper::planRecordNames
   // gives them different tags; this is the check that it did (issue #8).
   std::string recordTagClash;
+  // "X.base" is a record of its own, with its own tag (issue #4).
   auto recordIdentity = [](cir::RecordType rt) -> std::string {
-    if (!rt.getName()) return "";
-    llvm::StringRef name = rt.getName().getValue();
-    return (name.ends_with(".base") ? name.drop_back(5) : name).str();
+    return rt.getName() ? rt.getName().getValue().str() : "";
   };
 
   // Ensure every referenced record type is tracked, even when there are no
