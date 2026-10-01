@@ -729,6 +729,16 @@ operator with `func_info<#cir.cxx_assign<…, trivial true>>`. The body is almos
 empty. The mark holds the "copy the object" behavior. cir2c finds the mark and
 writes `*dst = *src`. Without this rule, each such assignment does nothing.
 
+C++ copies only the data of the class, not its padding. Thus, when the record
+has a `pad` member or an empty member, cir2c copies the data members one by
+one. Two cases need this rule:
+
+- An empty class, for example `std::less<int>`, has no data. libc++ stores it
+  with `[[no_unique_address]]`, so it shares its address with another member,
+  for example the size of a `std::set`. A copy of the whole C struct changes a
+  byte of that member.
+- The tail padding of a base can hold a member of a derived class (see 8.7).
+
 ### 7.6 Add a CIR operation
 
 1. Make the failure again:

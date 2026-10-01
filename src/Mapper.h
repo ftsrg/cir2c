@@ -366,6 +366,9 @@ private:
   // definition, outside the C standard library (README 8.2). mapModule stops
   // with an error when the list is not empty.
   std::vector<std::string> undefinedSymbols_;
+  // The body of a trivial assignment operator: a copy of the data members.
+  std::string trivialAssignmentCopy(mlir::Type dstPointer, const std::string &dst,
+                                    const std::string &src);
   void requireDefinition(const std::string &symbol, bool isObject);
   bool usedByOutput(mlir::Operation *symbolOp) const;
   // Function symbol -> its `void*`-receiver wrapper (issue #5).

@@ -902,6 +902,50 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
   return true;
 }
 
+// The copy of a trivial assignment operator. C++ copies only the data of a
+// class, not its padding: an empty class such as std::less has no data, and
+// it can share its address with another member ([[no_unique_address]]). The
+// tail padding of a base can hold a member of a derived class (issue #4). So
+// when the record has padding or empty members, the copy names its data
+// members one by one (issue #9, part 6).
+std::string Mapper::trivialAssignmentCopy(mlir::Type dstPointer, const std::string &dst,
+                                          const std::string &src) {
+  std::string whole = "  *" + dst + " = *" + src + ";\n";
+  auto pointer = mlir::dyn_cast<cir::PointerType>(dstPointer);
+  auto record = pointer ? mlir::dyn_cast<cir::RecordType>(pointer.getPointee())
+                        : cir::RecordType();
+  if (!record || !record.isComplete() || record.isUnion()) return whole;
+  llvm::ArrayRef<mlir::Type> members = record.getMembers();
+  llvm::ArrayRef<cir::RecordMemberKind> kinds = record.getMemberKinds();
+  auto isData = [&](size_t i) {
+    return i < kinds.size() &&
+           (kinds[i] == cir::RecordMemberKind::Data ||
+            kinds[i] == cir::RecordMemberKind::BitField) &&
+           !memberOccupiesNoStorage(members[i], kinds[i]);
+  };
+  bool onlyData = kinds.size() == members.size();
+  for (size_t i = 0; i < members.size() && onlyData; ++i) onlyData = isData(i);
+  if (onlyData) return whole;
+
+  std::string tag = (record.getName() && !record.getName().getValue().empty())
+                        ? recordCName(record.getName())
+                        : anonRecordCName(record);
+  std::string copy;
+  for (size_t i = 0; i < members.size(); ++i) {
+    if (!isData(i)) continue;
+    std::string field = lookupFieldName(tag, static_cast<int>(i));
+    if (field.empty()) field = "__field" + std::to_string(i);
+    if (mlir::isa<cir::ArrayType>(members[i])) {
+      ensureMemcpyDeclared();
+      copy += "  memcpy(" + dst + "->" + field + ", " + src + "->" + field + ", sizeof(" +
+              dst + "->" + field + "));\n";
+    } else {
+      copy += "  " + dst + "->" + field + " = " + src + "->" + field + ";\n";
+    }
+  }
+  return copy;
+}
+
 bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
   std::string funcInputText = oneLineOperationText(*fop);
   // Symbol (function name) is required to emit anything useful.
@@ -1054,9 +1098,8 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
           mlir::isa<cir::PointerType>(inputs[1])) {
         const std::string &dst = bodyParamNames[0];
         const std::string &src = bodyParamNames[1];
-        std::string body = returnsVoid
-            ? " {\n  *" + dst + " = *" + src + ";\n}\n\n"
-            : " {\n  *" + dst + " = *" + src + ";\n  return " + dst + ";\n}\n\n";
+        std::string body = " {\n" + trivialAssignmentCopy(inputs[0], dst, src) +
+                           (returnsVoid ? "" : "  return " + dst + ";\n") + "}\n\n";
         out << body;
         traceability.recordOperationTrace(fop->getName().getStringRef(), funcInputText,
                                           funcHeaderText + body, true);
