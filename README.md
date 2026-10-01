@@ -955,6 +955,10 @@ The global-variable model has these other effects:
   throw. If a `throw` statement leaves a construction that cir2c does not model,
   the exception does not continue.
 - The `std::terminate` function and the trap code become `abort()`.
+- An exception that leaves `main()` or a static initializer calls `abort()`,
+  as `std::terminate` does. The destructors between the `throw` and `main()`
+  operate before the `abort()`. C++ permits this: whether the stack unwinds
+  before `std::terminate` is implementation-defined.
 - cir2c writes the global destructor calls before each `return` in `main`. They
   do not operate on the `exit()`, `abort()` or `_exit` paths. These paths have no
   one text position.

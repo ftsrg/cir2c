@@ -1078,6 +1078,9 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
     out << "  // global constructors (C++ static init), normally run before main\n";
     for (const std::string &ctorSym : globalCtorSymbols_)
       out << "  " << getFunctionOutputName(ctorSym) << "();\n";
+    // An exception that leaves a static initializer calls std::terminate.
+    if (hasExceptions_)
+      out << "  if (__cir_exc_active) abort(); /* std::terminate */\n";
   }
   // While emitting main()'s body, handleReturn injects the global destructor
   // calls before each return (mirror of the constructor calls above).

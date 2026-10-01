@@ -53,6 +53,12 @@ std::string pointerOperandExpr(mlir::Value v, Mapper &m);
 
 std::string indentText(const std::string &text, llvm::StringRef indent = "  ");
 
+// True when `op` is in main(). An exception that leaves main() has no handler,
+// so C++ calls std::terminate, which the output models as abort(). Whether the
+// stack unwinds first is implementation-defined ([except.handle]), so the
+// cleanups that the output runs before it are permitted.
+bool isInMain(mlir::Operation *op);
+
 // Describes which terminator op ended a region walk, for callers that need
 // to make a decision based on the kind of terminator (e.g. switch/case).
 enum class CaseTerminatorKind {

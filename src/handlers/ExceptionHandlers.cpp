@@ -103,6 +103,10 @@ private:
       out << "  goto " << pad << ";\n";
       return;
     }
+    if (isInMain(op)) {
+      out << "  abort(); /* uncaught exception: std::terminate */\n";
+      return;
+    }
     auto func = op->getParentOfType<cir::FuncOp>();
     if (!func) {
       out << "  return;\n";

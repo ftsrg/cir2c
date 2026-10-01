@@ -340,6 +340,8 @@ private:
       const std::string &pad = m.currentTryLandingPad();
       if (!pad.empty()) {
         out << "    goto " << pad << ";\n";
+      } else if (isInMain(o)) {
+        out << "    abort(); /* uncaught exception: std::terminate */\n";
       } else {
         auto func = o->getParentOfType<cir::FuncOp>();
         mlir::Type rty = func ? func.getFunctionType().getReturnType()
