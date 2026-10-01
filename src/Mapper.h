@@ -106,6 +106,14 @@ public:
   void buildCPrototype(mlir::Operation *fop, std::string &retType,
                        std::string &outName, std::string &params) const;
 
+  /// The C struct/union tag of a named record; see TypeMapper::planRecordNames.
+  std::string recordCName(mlir::StringAttr nameAttr) const {
+    return typeMapper_.recordCName(nameAttr);
+  }
+  std::string recordCName(llvm::StringRef raw) const {
+    return typeMapper_.recordCName(raw);
+  }
+
   /// The C function to use where the function \p sym is called through a
   /// pointer with a `void*` receiver: in a vtable slot, and as the destructor
   /// of a thrown object. This is the `void*`-receiver wrapper of \p sym when it

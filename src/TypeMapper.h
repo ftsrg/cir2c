@@ -18,7 +18,10 @@
 
 #include <mlir/IR/Types.h>
 #include <mlir/IR/BuiltinAttributes.h>
+#include <mlir/IR/BuiltinOps.h>
 #include <llvm/ADT/DenseMap.h>
+#include <map>
+#include <set>
 #include <string>
 
 namespace cir2c {
@@ -26,14 +29,24 @@ namespace cir2c {
 /// Service class responsible for mapping CIR/MLIR types to C type strings.
 class TypeMapper {
 public:
-  /// Strip CIR's ".base" suffix and sanitize a record type name attribute
-  /// into a valid C identifier used as a struct/union tag. This is a public
-  /// static helper so that code in Mapper.cpp that does not go through
-  /// mapTypeToC (e.g., struct-collection logic in mapModule/mapGlobal) can
-  /// call it directly as TypeMapper::recordCName(...).
-  static std::string recordCName(mlir::StringAttr nameAttr);
+  /// The C struct/union tag of the record named \p nameAttr: the name decided
+  /// by planRecordNames, so that different records get different tags.
+  std::string recordCName(mlir::StringAttr nameAttr) const;
   /// The same for a record name as text.
-  static std::string recordCName(llvm::StringRef raw);
+  std::string recordCName(llvm::StringRef raw) const;
+
+  /// Decide the C tags of all named records of \p module, before anything
+  /// asks for one (issue #8). Sanitizing a C++ name into a C identifier can
+  /// give two records one tag, for example `ns::X` and `ns__X`, or two lambdas
+  /// at the same location of two files with the same name. A tag decided here
+  /// depends only on the set of records, not on the order in which the
+  /// emitter meets them.
+  void planRecordNames(mlir::ModuleOp module);
+
+  /// A C++ name as a C identifier, without the uniqueness of record tags:
+  /// the ".base" suffix and the directories of source locations removed.
+  /// Also used for the names of globals, which C keeps apart from tags.
+  static std::string plainCName(llvm::StringRef raw);
 
   /// Map a single CIR/MLIR type to a C type string.
   std::string mapTypeToC(mlir::Type t) const;
@@ -48,6 +61,9 @@ public:
 
 private:
   mutable llvm::DenseMap<mlir::Type, std::string> anonRecordNames_;
+  // Record name (without ".base") -> its C tag, and all tags given out.
+  mutable std::map<std::string, std::string> recordCNames_;
+  mutable std::set<std::string> usedRecordCNames_;
 };
 
 } // namespace cir2c

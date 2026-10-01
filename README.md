@@ -711,6 +711,16 @@ Clang names an unnamed class, for example a lambda, by its source location.
 cir2c keeps only the file name of that location, not the directory. Thus the
 output contains no path of the local machine: `lambda_at_list_1276_48`.
 
+Two different records always get two different C names. A C++ name can give
+the C name of a different record, for example `ns::X` and `ns__X`, or two
+lambdas at the same position of two files with the same name. Before the
+translation, cir2c finds such records and gives them different names. For
+source locations, it adds directories from the end of the path until the names
+differ: `lambda_at_a_util_h_100_36` and `lambda_at_b_util_h_100_36`. For other
+names, it adds a numeric suffix: `ns__X_2`. The names depend only on the set of
+records in the module. A name without such a conflict does not change. If two
+records still get one name, cir2c stops with an error.
+
 `operator new` and `operator delete` have no body in CIR. cir2c writes small
 functions that call `malloc` and `free`.
 

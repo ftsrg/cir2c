@@ -171,7 +171,7 @@ std::string ConstantEmitter::formatConstInit(const Mapper &ctx,
           curType = at.getElementType();
         } else if (auto rt = mlir::dyn_cast_if_present<cir::RecordType>(curType)) {
           std::string recN = rt.getName() && !rt.getName().getValue().empty()
-                                 ? TypeMapper::recordCName(rt.getName()) : ctx.anonRecordCName(rt);
+                                 ? ctx.recordCName(rt.getName()) : ctx.anonRecordCName(rt);
           std::string fn = ctx.lookupFieldName(recN, (int)idx);
           access += "." + (fn.empty() ? ("__field" + std::to_string(idx)) : fn);
           curType = (idx >= 0 && (size_t)idx < rt.getMembers().size())

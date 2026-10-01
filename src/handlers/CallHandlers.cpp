@@ -184,7 +184,7 @@ private:
             if (auto rt = mlir::dyn_cast<cir::RecordType>(pointee)) {
               if (!rt.isComplete()) continue;
               if (rt.getName()) {
-                std::string cn = TypeMapper::recordCName(rt.getName());
+                std::string cn = m.recordCName(rt.getName());
                 if (!m.isStdStructFullyDefined(cn)) continue;
               }
             }

@@ -1208,7 +1208,7 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
   }
 
   // Sanitize the name to be a valid C identifier (replace dots, etc. with underscores)
-  std::string name = TypeMapper::recordCName(sym);
+  std::string name = TypeMapper::plainCName(sym.getValue());
   std::string rawSym = sym.getValue().str();
 
   // Reserve the global's C name so a function-local freshName temp can't reuse
@@ -1404,7 +1404,7 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
               curType = at.getElementType();
             } else if (auto rt = mlir::dyn_cast_if_present<cir::RecordType>(curType)) {
               std::string recN = rt.getName() && !rt.getName().getValue().empty()
-                                     ? TypeMapper::recordCName(rt.getName()) : anonRecordCName(rt);
+                                     ? recordCName(rt.getName()) : anonRecordCName(rt);
               std::string fn = lookupFieldName(recN, (int)idx);
               access += "." + (fn.empty() ? ("__field" + std::to_string(idx)) : fn);
               curType = (idx >= 0 && (size_t)idx < rt.getMembers().size())
@@ -1514,6 +1514,8 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   const bool isTopLevelModule = !module->getParentOp();
   std::ostringstream topLevelBuf;
   std::ostream &out = isTopLevelModule ? topLevelBuf : realOut;
+  // The C tags of all records of the module tree, before any code asks for one.
+  if (isTopLevelModule) typeMapper_.planRecordNames(module);
   // Prepare function names (demangle where possible and unique) before
   // emitting any function declarations/definitions so we can avoid name
   // collisions when demangling.
@@ -1699,6 +1701,15 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   // Stores the most complete RecordType seen for each record name; used for
   // the typed member-layout fallback when no cir.get_member ops were found.
   std::map<std::string, cir::RecordType> knownRecordTypes;
+  // Two different records with one C tag would share one struct definition,
+  // and one of them would get the wrong layout. TypeMapper::planRecordNames
+  // gives them different tags; this is the check that it did (issue #8).
+  std::string recordTagClash;
+  auto recordIdentity = [](cir::RecordType rt) -> std::string {
+    if (!rt.getName()) return "";
+    llvm::StringRef name = rt.getName().getValue();
+    return (name.ends_with(".base") ? name.drop_back(5) : name).str();
+  };
 
   // Ensure every referenced record type is tracked, even when there are no
   // explicit cir.get_member operations (e.g. empty/simple classes).
@@ -1713,13 +1724,17 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
       // collapse together. They are then collected like any named record so
       // their members are emitted.
       std::string recordName = (nameAttr && !nameAttr.getValue().empty())
-                                   ? TypeMapper::recordCName(nameAttr)
+                                   ? recordCName(nameAttr)
                                    : anonRecordCName(recordType);
 
       // Cycle guard: if we already have a complete type recorded for this name,
       // the field types have already been recursed; skip to avoid infinite loops.
       auto it = knownRecordTypes.find(recordName);
       bool alreadyComplete = (it != knownRecordTypes.end() && it->second.isComplete());
+      if (it != knownRecordTypes.end() && recordTagClash.empty() &&
+          recordIdentity(it->second) != recordIdentity(recordType))
+        recordTagClash = "'" + recordIdentity(it->second) + "' and '" +
+                         recordIdentity(recordType) + "' have one C tag, " + recordName;
 
       // Keep an entry even if there are no discovered fields yet.
       (void)structFields[recordName];
@@ -1787,7 +1802,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
       if (!recordType) return; // Not pointing to a record, skip
 
       // Get struct name using API
-      std::string structName = TypeMapper::recordCName(recordType.getName());
+      std::string structName = recordCName(recordType.getName());
 
       // Track unions
       if (recordType.isUnion()) {
@@ -1804,7 +1819,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
         mlir::Type resPointee = resPtrType.getPointee();
 
         if (auto resRecordType = mlir::dyn_cast<cir::RecordType>(resPointee)) {
-          std::string fieldStructName = TypeMapper::recordCName(resRecordType.getName());
+          std::string fieldStructName = recordCName(resRecordType.getName());
 
           if (resRecordType.isUnion()) {
             info.baseType = "union " + fieldStructName;
@@ -1826,7 +1841,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
 
           // Get the final element type
           if (auto elemRecordType = mlir::dyn_cast<cir::RecordType>(currentType)) {
-            std::string arrayStructName = TypeMapper::recordCName(elemRecordType.getName());
+            std::string arrayStructName = recordCName(elemRecordType.getName());
 
             if (elemRecordType.isUnion()) {
               info.baseType = "union " + arrayStructName;
@@ -1907,6 +1922,11 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
       globalSymbolTypes_[s.getValue().str()] = globalOp.getSymType();
   });
 
+  if (!recordTagClash.empty()) {
+    llvm::errs() << "cir2c: error: the records " << recordTagClash << ".\n";
+    return false;
+  }
+
   // Typed fallback: for records with no directly discovered members (e.g.
   // derived records only accessed through cir.base_class_addr casts), extract
   // member types directly from the complete RecordType definition.
@@ -1949,7 +1969,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
             // Anonymous nested records have no name; give them their stable
             // synthetic name so the field isn't dropped (empty baseType below).
             std::string fn = (recTy.getName() && !recTy.getName().getValue().empty())
-                                 ? TypeMapper::recordCName(recTy.getName())
+                                 ? recordCName(recTy.getName())
                                  : anonRecordCName(recTy);
             info.baseType = (recTy.isUnion() ? "union " : "struct ") + fn;
             info.isStruct = true;
@@ -1958,7 +1978,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
           }
         } else if (auto recTy = mlir::dyn_cast<cir::RecordType>(memberType)) {
           std::string fn = (recTy.getName() && !recTy.getName().getValue().empty())
-                               ? TypeMapper::recordCName(recTy.getName())
+                               ? recordCName(recTy.getName())
                                : anonRecordCName(recTy);
           info.baseType = (recTy.isUnion() ? "union " : "struct ") + fn;
           info.isStruct = true;
@@ -2017,7 +2037,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     if (!initArr || initArr.getSize() <= declaredArr.getSize()) return;
 
     std::string sname = (recTy.getName() && !recTy.getName().getValue().empty())
-                            ? TypeMapper::recordCName(recTy.getName())
+                            ? recordCName(recTy.getName())
                             : anonRecordCName(recTy);
     auto sit = structFields.find(sname);
     if (sit == structFields.end()) return;
@@ -2045,7 +2065,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
       }
       if (auto rt = mlir::dyn_cast<cir::RecordType>(t)) {
         if (!rt.getName()) return;
-        std::string cn = TypeMapper::recordCName(rt.getName());
+        std::string cn = recordCName(rt.getName());
         if (cn.rfind("std__", 0) != 0) return;
         if (isValue) stdStructValueUsed.insert(cn);
         stdStructAnyRef.insert(cn);

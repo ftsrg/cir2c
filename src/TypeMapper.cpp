@@ -23,24 +23,22 @@
 
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 
+#include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/StringRef.h>
+
+#include <algorithm>
+#include <functional>
+#include <vector>
 
 using namespace mlir;
 
 namespace cir2c {
 
-// Strip CIR's ".base" suffix before sanitizing a record type name.
-// CIR emits "X.base" as the internal name for the base subobject layout of
-// class X when it is embedded in a derived class. Stripping it ensures the
-// generated C reuses the same struct tag as the complete class, which is
-// correct because: (a) the '.' character is impossible in any user-defined
-// C++ class name so there is no ambiguity, and (b) the base subobject layout
-// is layout-compatible with the complete type for verification purposes.
-/*static*/
 // Clang names an unnamed class by its source location, for example
 // "(lambda at /home/user/llvm/include/c++/v1/list:1276:48)". The directory is
-// that of the machine that ran clang, so the name keeps only the file name.
-static std::string dropLocationDirectories(llvm::StringRef raw) {
+// that of the machine that ran clang, so a name keeps only the last `depth`
+// components of the path: with depth 1, only the file name.
+static std::string keepLocationTail(llvm::StringRef raw, unsigned depth) {
   std::string out;
   size_t pos = 0;
   while (true) {
@@ -49,27 +47,147 @@ static std::string dropLocationDirectories(llvm::StringRef raw) {
     size_t close = raw.find(')', at);
     if (close == llvm::StringRef::npos) break;
     llvm::StringRef location = raw.slice(at + 4, close);
-    size_t slash = location.rfind('/');
+    size_t cut = llvm::StringRef::npos;
+    unsigned slashes = 0;
+    for (size_t i = location.size(); i-- > 0;)
+      if (location[i] == '/' && ++slashes == depth) {
+        cut = i;
+        break;
+      }
     out += raw.slice(pos, at + 4).str();
-    out += (slash == llvm::StringRef::npos ? location
-                                           : location.drop_front(slash + 1)).str();
+    out += (cut == llvm::StringRef::npos ? location : location.drop_front(cut + 1)).str();
     pos = close;
   }
   out += raw.drop_front(pos).str();
   return out;
 }
 
-std::string TypeMapper::recordCName(mlir::StringAttr nameAttr) {
+// The number of path components of the longest source location in `raw`.
+static unsigned locationDepth(llvm::StringRef raw) {
+  unsigned depth = 0;
+  for (size_t at = raw.find(" at "); at != llvm::StringRef::npos;
+       at = raw.find(" at ", at + 4)) {
+    size_t close = raw.find(')', at);
+    if (close == llvm::StringRef::npos) break;
+    depth = std::max<unsigned>(depth, raw.slice(at + 4, close).count('/') + 1);
+  }
+  return depth;
+}
+
+// Strip CIR's ".base" suffix before sanitizing a record type name.
+// CIR emits "X.base" as the internal name for the base subobject layout of
+// class X when it is embedded in a derived class. Stripping it ensures the
+// generated C reuses the same struct tag as the complete class, which is
+// correct because: (a) the '.' character is impossible in any user-defined
+// C++ class name so there is no ambiguity, and (b) the base subobject layout
+// is layout-compatible with the complete type for verification purposes.
+static llvm::StringRef withoutBase(llvm::StringRef raw) {
+  return raw.ends_with(".base") ? raw.drop_back(5) : raw;
+}
+
+/*static*/
+std::string TypeMapper::plainCName(llvm::StringRef raw) {
+  return Mapper::sanitizeIdentifier(keepLocationTail(withoutBase(raw), 1));
+}
+
+std::string TypeMapper::recordCName(mlir::StringAttr nameAttr) const {
   if (!nameAttr || nameAttr.getValue().empty()) return "anon_struct";
   return recordCName(nameAttr.getValue());
 }
 
-std::string TypeMapper::recordCName(llvm::StringRef raw) {
-  if (raw.ends_with(".base"))
-    raw = raw.drop_back(5);
-  // Two lambdas of one translation unit get one name only when they are at
-  // the same line and column of two files with the same name.
-  return Mapper::sanitizeIdentifier(dropLocationDirectories(raw));
+std::string TypeMapper::recordCName(llvm::StringRef raw) const {
+  std::string key = withoutBase(raw).str();
+  auto it = recordCNames_.find(key);
+  if (it != recordCNames_.end()) return it->second;
+  // A record that planRecordNames did not see gets a free tag now.
+  std::string base = plainCName(key), name = base;
+  for (unsigned n = 2; usedRecordCNames_.count(name); ++n)
+    name = base + "_" + std::to_string(n);
+  usedRecordCNames_.insert(name);
+  recordCNames_[key] = name;
+  return name;
+}
+
+void TypeMapper::planRecordNames(mlir::ModuleOp module) {
+  recordCNames_.clear();
+  usedRecordCNames_.clear();
+
+  // Every record name of the module: in the types of the values and of the
+  // attributes (function types, the types of globals, initializers), and in
+  // the members of the records found.
+  std::set<std::string> names;
+  llvm::DenseSet<mlir::Type> seen;
+  std::function<void(mlir::Type)> visit = [&](mlir::Type t) {
+    if (!t || !seen.insert(t).second) return;
+    if (auto rec = mlir::dyn_cast<cir::RecordType>(t)) {
+      if (rec.getName() && !rec.getName().getValue().empty())
+        names.insert(withoutBase(rec.getName().getValue()).str());
+      if (rec.isComplete())
+        for (mlir::Type member : rec.getMembers()) visit(member);
+    } else if (auto ptr = mlir::dyn_cast<cir::PointerType>(t)) {
+      visit(ptr.getPointee());
+    } else if (auto arr = mlir::dyn_cast<cir::ArrayType>(t)) {
+      visit(arr.getElementType());
+    } else if (auto fn = mlir::dyn_cast<cir::FuncType>(t)) {
+      for (mlir::Type input : fn.getInputs()) visit(input);
+      visit(fn.getReturnType());
+    } else if (auto cx = mlir::dyn_cast<cir::ComplexType>(t)) {
+      visit(cx.getElementType());
+    }
+  };
+  module->walk([&](mlir::Operation *op) {
+    for (mlir::Type t : op->getResultTypes()) visit(t);
+    for (mlir::Type t : op->getOperandTypes()) visit(t);
+    for (mlir::Region &region : op->getRegions())
+      for (mlir::Block &block : region)
+        for (mlir::BlockArgument arg : block.getArguments()) visit(arg.getType());
+    op->getAttrDictionary().walk([&](mlir::Type t) { visit(t); });
+  });
+
+  // Group the names by their plain tag. A name alone in its group keeps it.
+  std::map<std::string, std::vector<std::string>> groups;
+  for (const std::string &name : names) groups[plainCName(name)].push_back(name);
+  for (auto &[tag, group] : groups)
+    if (group.size() == 1) {
+      recordCNames_[group.front()] = tag;
+      usedRecordCNames_.insert(tag);
+    }
+  for (auto &[tag, group] : groups) {
+    if (group.size() == 1) continue;
+    // Names that differ only in the directories of their source locations
+    // keep more components of the path, until they differ. The tail of a
+    // path does not depend on the machine.
+    std::vector<std::string> chosen;
+    unsigned maxDepth = 0;
+    for (const std::string &name : group)
+      maxDepth = std::max(maxDepth, locationDepth(name));
+    for (unsigned depth = 2; depth <= maxDepth && chosen.empty(); ++depth) {
+      std::vector<std::string> candidate;
+      std::set<std::string> distinct;
+      for (const std::string &name : group) {
+        candidate.push_back(Mapper::sanitizeIdentifier(keepLocationTail(name, depth)));
+        distinct.insert(candidate.back());
+      }
+      bool free = distinct.size() == group.size();
+      for (const std::string &c : candidate) free = free && !usedRecordCNames_.count(c);
+      if (free) chosen = candidate;
+    }
+    // Other names, for example `ns::X` and `ns__X`: a numeric suffix in the
+    // order of the names, as for functions with one name.
+    if (chosen.empty())
+      for (size_t i = 0; i < group.size(); ++i) {
+        std::string name = tag;
+        for (unsigned n = 2; usedRecordCNames_.count(name) ||
+                             std::count(chosen.begin(), chosen.end(), name);
+             ++n)
+          name = tag + "_" + std::to_string(n);
+        chosen.push_back(name);
+      }
+    for (size_t i = 0; i < group.size(); ++i) {
+      recordCNames_[group[i]] = chosen[i];
+      usedRecordCNames_.insert(chosen[i]);
+    }
+  }
 }
 
 std::string TypeMapper::anonRecordCName(mlir::Type recordType) const {
