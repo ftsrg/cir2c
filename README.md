@@ -739,6 +739,43 @@ one. Two cases need this rule:
   byte of that member.
 - The tail padding of a base can hold a member of a derived class (see 8.7).
 
+**Calling convention.** Clang applies the calling convention of the target
+already in the CIR. A trivially copyable record of 16 bytes or less travels in
+registers. The CIR then passes it as one or two integer, pointer or
+floating-point values, or as an anonymous struct of these values. To convert
+between the record and these values, the CIR stores one type into a local
+variable and reads the other type from the same address. In C, that read is
+undefined behavior (C11 6.5p7).
+
+Thus cir2c declares such a variable as a union of all the types that the CIR
+reads it as. Each read as another type becomes a read of the member of that
+type. For a `struct P { char c; int i; }` that a function returns:
+
+```c
+union { struct P v0; unsigned long v1; } coerce74;
+memset(&coerce74, 0, sizeof coerce74);
+coerce74.v0.c = t80.c;
+coerce74.v0.i = t80.i;
+unsigned long t81 = coerce74.v1;
+return t81;
+```
+
+C11 6.5.2.3 (note 95) defines the read of another member: the bytes get the
+new type. The union is zero at its declaration, and a record goes into and out
+of the union member by member. Two causes make this necessary:
+
+- A copy of the whole record also copies its padding, which nothing wrote. The
+  integer then contains uninitialized bytes.
+- After a copy of the whole record, the TypeSanitizer of clang gives the copy
+  the type of the source member, and it reports each later read of the copy. C
+  permits these reads, but the reports would hide real ones.
+
+cir2c does not make a union where C permits the access: through a character
+type, through the other signedness of an integer type, to the first member of a
+record, or through a record that is not larger and has the variable as its
+first member. A variable of an array type or a vector type does not become a
+union. The code of the union slots is in `src/Reinterpretation.cpp`.
+
 ### 7.6 Add a CIR operation
 
 1. Make the failure again:
@@ -1055,9 +1092,9 @@ test. Try the two modes when a translation fails.
   tool with a different data model, for example a 32-bit model or a different
   byte sequence.
 - The output can access an object through a pointer cast to another type, which
-  C forbids (C11 6.5p7). An example is a read of a record that the calling
-  convention converts to an integer, or a copy of a complete object into a base
-  subobject, which is an `X.base` record. After the
+  C forbids (C11 6.5p7). cir2c removes these accesses for the calling
+  convention (see 7.5), but not all others. An example is a copy of a complete
+  object into a base subobject, which is an `X.base` record. After the
   translation, cir2c counts the accesses that remain. If there is one or more,
   cir2c writes a warning with the number and the first example:
   `cir2c: warning: the output accesses an object through a pointer cast to

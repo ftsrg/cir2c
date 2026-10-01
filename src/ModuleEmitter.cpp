@@ -1729,6 +1729,8 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     for (auto &op : module.getOps())
       scanForQualifiers(op);
   }
+  // After the qualifier scan: a qualified variable does not become a union.
+  if (isTopLevelModule) planUnionSlots(module);
 
   // Auto-parse struct definitions by scanning member accesses.
   struct FieldInfo {

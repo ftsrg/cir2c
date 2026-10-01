@@ -110,6 +110,10 @@ private:
       return true;
     }
 
+    // A variable that the CIR also reads as another type (issue #11).
+    if (o->getNumResults() > 0 && m.emitUnionSlot(o->getResult(0), uniqueVarName, out))
+      return true;
+
     // Handle struct types first: use typed API instead of textual type string inspection.
     // This needs to come before array check since some struct names might contain "array"
     if (mlir::isa<cir::RecordType>(allocaTy)) {
@@ -193,6 +197,11 @@ private:
     std::string tmp = m.freshName("t");
     std::string ctype = "int";
     if (o->getNumResults() > 0) ctype = m.mapTypeToC(o->getResult(0).getType());
+    if (o->getNumResults() > 0 &&
+        m.copyThroughUnionSlot(Value(), ptr, o->getResult(0).getType(), tmp, src, true, out)) {
+      m.setName(o->getResult(0), tmp);
+      return true;
+    }
     // Check if source is marked as direct access (alloca, array, struct)
     // Never dereference direct access values
     bool shouldDereference = !m.isDirectAccess(ptr);
@@ -280,6 +289,8 @@ private:
     if (needAddressOf) {
       vname = "&" + vname;
     }
+    if (m.copyThroughUnionSlot(ptr, Value(), val.getType(), pname, vname, false, out))
+      return true;
     // Check if destination is marked as direct access (alloca, array, struct)
     // Never dereference direct access destinations
     bool shouldDereference = !m.isDirectAccess(ptr);
@@ -326,6 +337,9 @@ private:
     // needs `*`. Adjust each side accordingly so the assignment types match.
     std::string dstExpr = m.isDirectAccess(dst) ? dstName : ("*" + dstName);
     std::string srcExpr = m.isDirectAccess(src) ? srcName : ("*" + srcName);
+    if (dstPtrTy &&
+        m.copyThroughUnionSlot(dst, src, dstPtrTy.getPointee(), dstExpr, srcExpr, false, out))
+      return true;
     out << "  " << dstExpr << " = " << srcExpr << "; // copy\n";
     return true;
   }

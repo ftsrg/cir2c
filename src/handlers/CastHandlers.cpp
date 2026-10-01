@@ -43,6 +43,9 @@ private:
     if (o->getNumOperands() < 1) return false;
     Value operand = o->getOperand(0);
 
+    // A read of a local variable as another type (issue #11).
+    if (m.mapUnionSlotView(o)) return true;
+
     // A vtable dispatch chain emits no C of its own: everything from
     // cir.vtable.get_vptr through the function-pointer load is suppressed, and
     // the call site turns the whole chain into __VERIFIER_virtual_call_<sig>.

@@ -403,6 +403,19 @@ private:
   std::unique_ptr<mlir::DataLayout> dataLayout_;
   void reportReinterpretations(mlir::ModuleOp module);
   bool reinterpretsObject(mlir::Type object, mlir::Type view);
+  // Union slots: the calling convention in the CIR reads a local variable
+  // through a pointer to another type, so such a variable becomes a union of
+  // its types. Alloca result -> [its own type, the other types], member i is
+  // `v<i>`.
+  llvm::DenseMap<mlir::Value, std::vector<mlir::Type>> unionSlotTypes_;
+  llvm::DenseMap<mlir::Value, std::string> unionSlotNames_;
+  // The bitcasts that read a union slot as one of its members.
+  llvm::DenseSet<mlir::Operation *> unionSlotCasts_;
+  // The values whose C name is a member of a union slot.
+  llvm::DenseSet<mlir::Value> unionSlotViews_;
+  void planUnionSlots(mlir::ModuleOp module);
+  std::string memberwiseCopy(mlir::Type type, const std::string &dst,
+                             const std::string &src);
 
   // The C name of the last non-variadic parameter of the function currently
   // being mapped.  Set by mapFunc when the function is variadic (isVarArg).
@@ -492,6 +505,18 @@ public:
   /// Query whether an alloca result Value is accessed with volatile semantics.
   bool isVolatileAlloca(mlir::Value v) const { return volatileAllocaValues_.count(v) > 0; }
 
+  /// Union slots (issue #11). Declare the alloca \p result as a union named
+  /// \p name when the pre-scan planned one. Returns false otherwise.
+  bool emitUnionSlot(mlir::Value result, const std::string &name, std::ostream &out);
+  /// Name the result of \p castOp as a member of a union slot. Returns false
+  /// when the cast does not read a union slot.
+  bool mapUnionSlotView(mlir::Operation *castOp);
+  /// Write `dst = src` member by member when \p type is a struct and one of
+  /// the two addresses is a member of a union slot. Declare \p dstExpr first
+  /// when \p declareDst. Returns false and writes nothing otherwise.
+  bool copyThroughUnionSlot(mlir::Value dstAddr, mlir::Value srcAddr, mlir::Type type,
+                            const std::string &dstExpr, const std::string &srcExpr,
+                            bool declareDst, std::ostream &out);
   
   /// Returns the C name of the last named (non-variadic) parameter of the
   /// function body currently being mapped. Empty if the current function is
