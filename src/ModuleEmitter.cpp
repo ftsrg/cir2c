@@ -2705,6 +2705,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     if (usesMemberFnPtr_)
       llvm::errs() << "xcfa-mapper: warning: output uses __attribute__((aligned(2))) "
                       "for pointer-to-member dispatch; functions must stay 2-byte aligned.\n";
+    reportReinterpretations(module);
   }
   return true;
 }

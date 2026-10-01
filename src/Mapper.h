@@ -24,6 +24,7 @@
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/SymbolTable.h>
+#include <mlir/Interfaces/DataLayoutInterfaces.h>
 
 #include <ostream>
 #include <sstream>
@@ -397,6 +398,12 @@ private:
   llvm::DenseSet<mlir::Value> atomicAllocaValues_;
   llvm::DenseSet<mlir::Value> volatileAllocaValues_;
 
+  // Accesses through a pointer cast to another type, which C forbids (C11
+  // 6.5p7). Issue #11, src/Reinterpretation.cpp.
+  std::unique_ptr<mlir::DataLayout> dataLayout_;
+  void reportReinterpretations(mlir::ModuleOp module);
+  bool reinterpretsObject(mlir::Type object, mlir::Type view);
+
   // The C name of the last non-variadic parameter of the function currently
   // being mapped.  Set by mapFunc when the function is variadic (isVarArg).
   // Used by handleVAStart to emit the correct second argument to va_start.
@@ -484,6 +491,7 @@ public:
   bool isAtomicAlloca(mlir::Value v) const { return atomicAllocaValues_.count(v) > 0; }
   /// Query whether an alloca result Value is accessed with volatile semantics.
   bool isVolatileAlloca(mlir::Value v) const { return volatileAllocaValues_.count(v) > 0; }
+
   
   /// Returns the C name of the last named (non-variadic) parameter of the
   /// function body currently being mapped. Empty if the current function is

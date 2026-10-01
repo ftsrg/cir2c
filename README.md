@@ -1054,6 +1054,15 @@ test. Try the two modes when a translation fails.
 - The output uses the target of the pinned toolchain. Do not give the output to a
   tool with a different data model, for example a 32-bit model or a different
   byte sequence.
+- The output can access an object through a pointer cast to another type, which
+  C forbids (C11 6.5p7). An example is a read of a record that the calling
+  convention converts to an integer, or a copy of a complete object into a base
+  subobject, which is an `X.base` record. After the
+  translation, cir2c counts the accesses that remain. If there is one or more,
+  cir2c writes a warning with the number and the first example:
+  `cir2c: warning: the output accesses an object through a pointer cast to
+  another type at 1 places, ...`. Such an output is not free of undefined
+  behavior.
 
 ### 8.8 Other information
 
@@ -1159,6 +1168,10 @@ the translation fails and its log contains each of these texts. The
 [8.2](#82-the-standard-library) in this way. These rejections occur only with
 the `--no-externalize-std` option. With the `--externalize-std` option, the
 runner skips such a test.
+
+A test can also forbid a text in the log of the translation, for example a
+warning of cir2c. Write the text in a line that starts with
+`// cir2c-test-log-lacks: `. The test fails when the log contains the text.
 
 The tests examine arithmetic, casts, comparisons, control flow, arrays, records,
 globals, floating-point numbers, pointers, integer promotion and bit operations.
