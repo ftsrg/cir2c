@@ -1,0 +1,66 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// cir2c model "ostream-sink": <ios>, the stream state (README 8.2).
+//
+// The library's <iosfwd> declares ios_base and basic_ios. A qualified
+// definition (C++11 [class]/11) completes such a declaration in the namespace
+// where the library put it, so this file names no library-internal namespace.
+
+#ifndef CIR2C_MODEL_OSTREAM_SINK_IOS
+#define CIR2C_MODEL_OSTREAM_SINK_IOS
+
+#include <iosfwd>
+
+class std::ios_base {
+public:
+  typedef unsigned int iostate;
+  // The values of libc++. The standard leaves them to the implementation.
+  static constexpr iostate goodbit = 0;
+  static constexpr iostate badbit = 1;
+  static constexpr iostate eofbit = 2;
+  static constexpr iostate failbit = 4;
+
+protected:
+  constexpr ios_base() = default;
+};
+
+template <class CharT, class Traits>
+class std::basic_ios : public std::ios_base {
+public:
+  typedef CharT char_type;
+  typedef Traits traits_type;
+
+  explicit operator bool() const { return !fail(); }
+  bool operator!() const { return fail(); }
+  iostate rdstate() const { return state_; }
+  // libc++ throws ios_base::failure only for a state that exceptions()
+  // selects. That mask is empty by default, and the model has no mask.
+  void clear(iostate state = goodbit) { state_ = state; }
+  void setstate(iostate state) { state_ |= state; }
+  bool good() const { return state_ == goodbit; }
+  bool eof() const { return (state_ & eofbit) != 0; }
+  bool fail() const { return (state_ & (failbit | badbit)) != 0; }
+  bool bad() const { return (state_ & badbit) != 0; }
+
+protected:
+  constexpr basic_ios() = default;
+
+private:
+  iostate state_ = goodbit;
+};
+
+#endif

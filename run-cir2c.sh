@@ -22,7 +22,12 @@
 # body for, while libc++ keeps list/map/set/deque fully header-templated. Built
 # by docker/build-llvm.sh alongside clang; there is no flag to opt out.
 #
-# Exit codes: 0 success, 2 clang failed, 3 cir-opt failed, 4 cir2c failed
+# With --no-externalize-std, C++ input is also compiled with the models in
+# models/ (README 8.2): C++ headers that define the parts of libc++ that libc++
+# keeps in its compiled library, so that the CIR contains their bodies.
+#
+# Exit codes: 0 success, 1 wrong arguments or no toolchain, 2 clang failed,
+# 3 cir-opt failed, 4 cir2c failed
 #
 # Usage: run-cir2c.sh [OPTIONS] <input-file> <output.c>
 # Options:
@@ -108,6 +113,35 @@ if [[ "$LANG" == "c++" ]]; then
     STDLIB_FLAGS=(-stdlib=libc++ -nostdinc++ -isystem "$LIBCXX_INCLUDE")
 fi
 
+# The models for --no-externalize-std (README 8.2). A model is a directory in
+# models/ with an include/ directory, a prelude.h file, or both. clang searches
+# the -I directory of include/ before the -isystem directory of libc++, so a
+# header there replaces the libc++ header of the same name. clang reads
+# prelude.h before the first line of the program. To use other models, change
+# this list.
+MODELS=(libcxx-out-of-line ostream-sink)
+MODEL_FLAGS=()
+if [[ "$LANG" == "c++" && "$EXTERNALIZE_STD" == false ]]; then
+    declare -A MODEL_HEADERS=()
+    for model in "${MODELS[@]}"; do
+        dir="$SCRIPT_DIR/models/$model"
+        [[ -d "$dir" ]] || { echo "Error: model not found: $dir" >&2; exit 1; }
+        if [[ -d "$dir/include" ]]; then
+            # Two models with one header would depend on the order of the list.
+            for header in "$dir"/include/*; do
+                name=$(basename "$header")
+                if [[ -n "${MODEL_HEADERS[$name]:-}" ]]; then
+                    echo "Error: models ${MODEL_HEADERS[$name]} and $model both have <$name>" >&2
+                    exit 1
+                fi
+                MODEL_HEADERS[$name]=$model
+            done
+            MODEL_FLAGS+=(-I "$dir/include")
+        fi
+        [[ -f "$dir/prelude.h" ]] && MODEL_FLAGS+=(-include "$dir/prelude.h")
+    done
+fi
+
 # Validate tools
 REQUIRE_FLAGS=()
 [[ "$FLATTEN" == true ]] && REQUIRE_FLAGS+=(--cir-opt)
@@ -131,6 +165,7 @@ mkdir -p "$(dirname "$OUTPUT_C")"
 # knows the test-suite layout for shared utility headers).
 CIR_FILE=$(_tmpmlir "$MLIR_OUT")
 "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$INPUT_FILE" -o "$CIR_FILE" \
+    ${MODEL_FLAGS[@]+"${MODEL_FLAGS[@]}"} \
     ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
     ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} || exit 2
 

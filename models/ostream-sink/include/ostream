@@ -1,0 +1,124 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// cir2c model "ostream-sink": <ostream>, a sink for output (README 8.2).
+//
+// Each output operation returns the stream and does nothing else. Thus the
+// output is lost, a write never fails, and only clear() and setstate() change
+// the stream state. An operation does not read the data that it gets: for
+// example, `cout << p` does not read the string at p.
+
+#ifndef CIR2C_MODEL_OSTREAM_SINK_OSTREAM
+#define CIR2C_MODEL_OSTREAM_SINK_OSTREAM
+
+#include <ios>
+// <string> and <string_view> declare the inserters that the end of this file
+// defines.
+#include <string>
+#include <string_view>
+
+// Unlike libc++, the class has no virtual base and no virtual function. A
+// program cannot derive from it, so it cannot replace a virtual function that
+// the model does not have.
+template <class CharT, class Traits>
+class std::basic_ostream final : public std::basic_ios<CharT, Traits> {
+public:
+  // Only the model makes streams (cout, cerr, clog). A sink needs no stream
+  // buffer, so this replaces basic_ostream(basic_streambuf *).
+  constexpr basic_ostream() = default;
+  basic_ostream(const basic_ostream &) = delete;
+  basic_ostream &operator=(const basic_ostream &) = delete;
+
+  basic_ostream &operator<<(bool) { return *this; }
+  basic_ostream &operator<<(short) { return *this; }
+  basic_ostream &operator<<(unsigned short) { return *this; }
+  basic_ostream &operator<<(int) { return *this; }
+  basic_ostream &operator<<(unsigned int) { return *this; }
+  basic_ostream &operator<<(long) { return *this; }
+  basic_ostream &operator<<(unsigned long) { return *this; }
+  basic_ostream &operator<<(long long) { return *this; }
+  basic_ostream &operator<<(unsigned long long) { return *this; }
+  basic_ostream &operator<<(float) { return *this; }
+  basic_ostream &operator<<(double) { return *this; }
+  basic_ostream &operator<<(long double) { return *this; }
+  basic_ostream &operator<<(const void *) { return *this; }
+  basic_ostream &operator<<(decltype(nullptr)) { return *this; }
+  basic_ostream &operator<<(basic_ostream &(*manipulator)(basic_ostream &)) {
+    return manipulator(*this);
+  }
+
+  basic_ostream &put(CharT) { return *this; }
+  basic_ostream &flush() { return *this; }
+};
+
+namespace std {
+
+template <class CharT, class Traits>
+basic_ostream<CharT, Traits> &operator<<(basic_ostream<CharT, Traits> &os, CharT) {
+  return os;
+}
+template <class CharT, class Traits>
+basic_ostream<CharT, Traits> &operator<<(basic_ostream<CharT, Traits> &os, const CharT *) {
+  return os;
+}
+template <class Traits>
+basic_ostream<char, Traits> &operator<<(basic_ostream<char, Traits> &os, signed char) {
+  return os;
+}
+template <class Traits>
+basic_ostream<char, Traits> &operator<<(basic_ostream<char, Traits> &os, unsigned char) {
+  return os;
+}
+template <class Traits>
+basic_ostream<char, Traits> &operator<<(basic_ostream<char, Traits> &os, const signed char *) {
+  return os;
+}
+template <class Traits>
+basic_ostream<char, Traits> &operator<<(basic_ostream<char, Traits> &os, const unsigned char *) {
+  return os;
+}
+
+template <class CharT, class Traits>
+basic_ostream<CharT, Traits> &endl(basic_ostream<CharT, Traits> &os) {
+  return os;
+}
+template <class CharT, class Traits>
+basic_ostream<CharT, Traits> &ends(basic_ostream<CharT, Traits> &os) {
+  return os;
+}
+template <class CharT, class Traits>
+basic_ostream<CharT, Traits> &flush(basic_ostream<CharT, Traits> &os) {
+  return os;
+}
+
+} // namespace std
+
+// The library declares these two inserters in <string> and <string_view>
+// ([string.syn], [string.view.synop]). Qualified definitions complete those
+// declarations, as in <ios>.
+template <class CharT, class Traits, class Allocator>
+std::basic_ostream<CharT, Traits> &
+std::operator<<(std::basic_ostream<CharT, Traits> &os,
+                const std::basic_string<CharT, Traits, Allocator> &) {
+  return os;
+}
+template <class CharT, class Traits>
+std::basic_ostream<CharT, Traits> &
+std::operator<<(std::basic_ostream<CharT, Traits> &os, std::basic_string_view<CharT, Traits>) {
+  return os;
+}
+
+#endif

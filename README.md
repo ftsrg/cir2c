@@ -317,11 +317,12 @@ run-cir2c.sh [OPTIONS] <input-file> <output.c>
 | `--flat-mlir FILE` | Write the flat CIR to `FILE`. This option includes `--flatten`. |
 | `--include DIR` | Add the `-I DIR` option to the CIR step. You can give this option more than one time. |
 | `--externalize-std` | Replace the `std::` calls and the library calls with unknown values. This is the default. |
-| `--no-externalize-std` | Keep the bodies of the `std::` functions. **CAUTION: Read [8.2 The standard library](#82-the-standard-library) first.** |
+| `--no-externalize-std` | Keep the bodies of the `std::` functions. For C++ input, the script also compiles the models of [8.2](#82-the-standard-library) with the program. **CAUTION: Read [8.2 The standard library](#82-the-standard-library) first.** |
 
 | Exit code | Meaning |
 |---|---|
 | 0 | The operation is successful. |
+| 1 | The arguments are not correct, or the script cannot find the toolchain or a model. |
 | 2 | `clang` failed. The source has an error, or ClangIR cannot process a construction. |
 | 3 | `cir-opt` failed during the `--flatten` step. |
 | 4 | `cir2c` failed. Usually the CIR contains an unsupported operation. |
@@ -596,6 +597,7 @@ an examination of `mlir::Operation` objects.
 | `ConstantEmitter` | CIR constant attributes to C initializers, and this includes arrays and records |
 | `Traceability` | The map from operations to C lines for the `--monitor-json` option |
 | `handlers/` | One file for each group of CIR operations |
+| `models/` | C++ headers for the parts of libc++ that libc++ keeps in its compiled library. They are not part of the cir2c binary. See [8.2](#82-the-standard-library). |
 
 ### 7.3 The handlers
 
@@ -818,6 +820,92 @@ bodies. The `run-cir2c.sh` script always gives the `-stdlib=libc++` option.
 There is no option to prevent this. The toolchain build installs libc++ with
 clang for this cause.
 
+**The models.** libc++ also keeps some parts in its compiled library and not in
+its headers. Examples are `std::cout`, the output functions of
+`basic_ostream<char>` and the constructor of `std::logic_error`. ClangIR sees
+only a declaration of these parts. With the `--no-externalize-std` option, the
+`run-cir2c.sh` script compiles C++ input together with the models in the
+`models/` directory. A model is C++ source code. Thus clang calculates the
+names, the layouts and the vtables, and cir2c translates the model like the
+program. The cir2c binary contains no model.
+
+A model directory has one or two of these parts:
+
+- `include/`: the script gives clang the `-I models/<name>/include` option.
+  clang searches this directory before the libc++ headers. Thus a header in it
+  replaces the libc++ header with the same name.
+- `prelude.h`: the script gives clang the `-include models/<name>/prelude.h`
+  option. clang reads this file before the first line of the program.
+
+The `MODELS` list in `run-cir2c.sh` selects the models. To use a different
+model, change the list. If two models have a header with the same name, the
+script stops.
+
+| Model | Function | Relation to libc++ |
+|---|---|---|
+| `ostream-sink` | `std::cout`, `std::cerr` and `std::clog` discard all output. | An abstraction. The model uses only names from the C++ standard. |
+| `libcxx-out-of-line` | The members of six exception classes, and `std::nothrow`, that libc++ keeps in its compiled library. The libc++ headers use them, for example in `vector::at` and `std::stable_sort`. | The same behavior and the same `what()` texts as libc++. The model uses two private libc++ names. |
+
+**The ostream-sink model.** The model replaces the `<ios>`, `<ostream>` and
+`<iostream>` headers. The library's `<iosfwd>` declares `ios_base`,
+`basic_ios` and `basic_ostream`. The model completes these declarations with
+qualified definitions, for example `class std::ios_base { ... };`. Thus the
+model does not name the internal namespace of libc++.
+
+| Part | libc++ | The model |
+|---|---|---|
+| `std::cout`, `std::cerr`, `std::clog` | They write to `stdout` and `stderr`. `std::cerr` is tied to `std::cout` and flushes after each output. | They have no stream buffer and no tie. They are constant-initialized, so a program can use them at any time. |
+| `<<` for the arithmetic types, `char`, `const char*`, `const void*`, `nullptr`, `std::string` and `std::string_view` | Formats the value and writes it. Reads the characters of a `char*` up to `'\0'`. | Returns the stream and does nothing else. |
+| `std::endl`, `std::ends`, `std::flush`, `put()`, `flush()` | Write a character or flush the stream buffer. | Do nothing. |
+| `good()`, `eof()`, `fail()`, `bad()`, `rdstate()`, `operator bool`, `operator!`, `clear()`, `setstate()` | Read or change the state. `clear()` and `setstate()` throw `ios_base::failure` for a state that `exceptions()` selects. That mask is empty by default. | The same, without the exception mask. The values of the state bits are those of libc++. |
+| The class structure | `basic_ostream` has the virtual base `basic_ios` and a virtual destructor. | No virtual base and no virtual function. The class is `final`. |
+
+The ostream-sink model has these limits:
+
+- The output is lost. A verification tool cannot examine the text that the
+  program writes.
+- A write never fails. In libc++, a write to a closed `stdout` sets `badbit`.
+  In the model, only `clear()` and `setstate()` change the state.
+- The model does not read the data that it gets. libc++ reads the characters of
+  a `char*`. If the pointer is not valid, that read is undefined behavior. A
+  verification tool cannot find this undefined behavior in the model. The
+  program evaluates the operands as usual: `std::cout << f()` calls `f()`.
+- The model does not include input, string streams, file streams, stream
+  buffers, locales or format manipulators. For each of `<istream>`,
+  `<sstream>`, `<fstream>`, `<streambuf>`, `<strstream>`, `<syncstream>`,
+  `<iomanip>`, `<locale>` and `<print>`, the model has a header that stops the
+  compilation with an `#error` message. `std::cin` is not declared.
+- Some libc++ headers use the libc++ stream code internally. `<chrono>`,
+  `<complex>`, `<filesystem>`, `<format>` and `<thread>` do not compile with the
+  model.
+
+**The libcxx-out-of-line model.** The `prelude.h` file defines these members
+and objects as libc++ does. clang emits only the members and objects that the
+program uses.
+
+| Member or object | Behavior in libc++ and in the model |
+|---|---|
+| `std::nothrow` | An empty object. `new (std::nothrow) T` gives it to `operator new`. |
+| `~exception()`, `exception::what()` | Empty. `what()` returns `"std::exception"`. |
+| The constructor, the destructor and `what()` of `bad_alloc` | Empty. `what()` returns `"std::bad_alloc"`. |
+| The constructor, the destructor and `what()` of `bad_array_new_length` | Empty. `what()` returns `"bad_array_new_length"`. |
+| `logic_error(const char*)`, `~logic_error()`, `logic_error::what()` | The constructor copies the message, `what()` returns the copy, and the destructor releases it. |
+| `~length_error()`, `~out_of_range()` | Empty. |
+
+The libcxx-out-of-line model has these limits:
+
+- libc++ keeps the message in the private member `__imp_`, of the private type
+  `__libcpp_refstring`. No standard name gives access to the message, so the
+  model uses these two names. A different library needs a different model.
+- In libc++, the copies of an exception share the message through a reference
+  count. The model defines no copy constructor and no assignment for
+  `logic_error`. Thus each message has one owner.
+- When `malloc` fails during the copy of a message, the model throws
+  `std::bad_alloc`, as the `operator new` of libc++ does.
+- Other members are not in the model, for example the constructors of
+  `std::runtime_error` and `logic_error(const std::string&)`. A program that
+  uses one of them has an undefined function.
+
 ### 8.3 Exceptions
 
 **The catch selection does not use inheritance.** cir2c compares the RTTI tag by
@@ -910,8 +998,11 @@ test. Try the two modes when a translation fails.
 - The output is not for a person to read in place of the source. The output is
   not for production use. The tests compile the output only to make sure that it
   is correct C code.
-- The tests do not link the output. The C++ library symbols stay unresolved. This
-  is correct.
+- With the `--externalize-std` option, a declaration of a C++ library symbol can
+  stay in the output without a definition. cir2c replaces the calls, so this is
+  correct. With the `--no-externalize-std` option, the models of
+  [8.2](#82-the-standard-library) define the library parts that the program
+  uses.
 - The `cir2c --version` command prints the commit of the build. The releases
   include the `llvm-version.txt` file. Record the two values with each result.
 
@@ -982,6 +1073,14 @@ The reference is the native run of the original program, not the exit code 0.
 Some tests in this suite stop with an error on purpose, and some give a computed
 value. Only the original program can say what is correct.
 
+The native run uses the default C++ library of the toolchain image, and that is
+libstdc++. Thus a test must not depend on a text that only libc++ gives, for
+example the `what()` text of an exception that the library throws. With the
+`--no-externalize-std` option (the default of the runner), the `ostream-sink`
+model of [8.2](#82-the-standard-library) discards the output of `std::cout`,
+`std::cerr` and `std::clog`. For a C++ test that names one of them, the runner
+compares only the exit code.
+
 The second level is what finds a wrong result. A lost destructor or an incorrect
 arithmetic operation makes correct C code, and thus a syntax examination cannot
 see it.
@@ -990,6 +1089,14 @@ Add your tests to this suite. Put a small test program in `integration/input/`
 with the name `test_<subject>.<c|cpp>`. The runner finds it automatically. No
 registration is necessary. Give the program a `main()` that examines its own
 result, if you can.
+
+A C++ test can also require a rejection. Write the expected text of the error
+in a line that starts with `// cir2c-test-expect-error: `. The test passes when
+the translation fails and its log contains each of these texts. The
+`test_reject_*.cpp` tests examine the rejections of
+[8.2](#82-the-standard-library) in this way. These rejections occur only with
+the `--no-externalize-std` option. With the `--externalize-std` option, the
+runner skips such a test.
 
 The tests examine arithmetic, casts, comparisons, control flow, arrays, records,
 globals, floating-point numbers, pointers, integer promotion and bit operations.
@@ -1003,7 +1110,9 @@ ignores this directory.
 
 This suite uses the `sources/llvm-test-suite/` corpus. For each source with a
 `.reference_output` file, the runner translates it, compiles it, links it, runs
-it and compares the output and the exit code.
+it and compares the output and the exit code. With the `--no-externalize-std`
+option, the runner compares only the exit code of a C++ program that names
+`std::cout`, `std::cerr` or `std::clog`, as in [9.3](#93-suite-1-the-integration-tests).
 
 If a difference also occurs with the `clang -fclangir` command, the cause is in
 ClangIR. The runner ignores such a test. cir2c cannot be more correct than its

@@ -1,0 +1,35 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// cir2c model "ostream-sink": <iostream>, the output streams only (README 8.2).
+
+#ifndef CIR2C_MODEL_OSTREAM_SINK_IOSTREAM
+#define CIR2C_MODEL_OSTREAM_SINK_IOSTREAM
+
+#include <ios>
+#include <ostream>
+
+namespace std {
+
+// The constructor is constexpr, so no code runs to make these objects. A
+// program can use them at any time, also from the constructor of a global.
+inline ostream cout;
+inline ostream cerr;
+inline ostream clog;
+
+} // namespace std
+
+#endif

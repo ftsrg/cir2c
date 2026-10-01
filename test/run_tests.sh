@@ -392,6 +392,14 @@ run_selfchecking() {
     if [[ $actual_exit -ne $ref_exit ]]; then
         echo "MISMATCH|$test_name|ran, exit code: expected $ref_exit, got $actual_exit"; return 1
     fi
+    # With --no-externalize-std, the ostream-sink model (README 8.2) discards
+    # the output of std::cout, std::cerr and std::clog, so the stdout of such a
+    # translation cannot agree with the native run. Only the exit code is
+    # compared; a test of this kind checks its results in its exit code.
+    if [[ "$lang" == "c++" && "$EXTERNALIZE_STD_FLAG" == "--no-externalize-std" ]] &&
+       grep -qE '\b(cout|cerr|clog)\b' "$src_file"; then
+        return 0
+    fi
     if ! diff -q "$ref_out" "$actual_out" > /dev/null 2>&1; then
         echo "MISMATCH|$test_name|ran, output differs from the native reference"; return 1
     fi
@@ -455,6 +463,25 @@ run_cpp_test() {
         --mlir "$mlir_file" \
         ${inc[@]+"${inc[@]}"} \
         "$cpp_file" "$output_c_file" >"$pipeline_log" 2>&1 || pipeline_rc=$?
+
+    # A test with "cir2c-test-expect-error:" lines must fail, and the log must
+    # contain each of the texts: a rejection by cir2c or by a model (README 8.2).
+    local expected text
+    expected=$(sed -n 's|^// cir2c-test-expect-error: ||p' "$cpp_file")
+    if [[ -n "$expected" && "$EXTERNALIZE_STD_FLAG" != "--no-externalize-std" ]]; then
+        echo "SKIPPED|$test_name|the expected error is for --no-externalize-std"; return
+    fi
+    if [[ -n "$expected" ]]; then
+        if [[ $pipeline_rc -eq 0 ]]; then
+            echo "MISMATCH|$test_name|translated, but the test expects an error"; return
+        fi
+        while IFS= read -r text; do
+            if ! grep -qF -- "$text" "$pipeline_log"; then
+                echo "MISMATCH|$test_name|the error does not contain: $text"; return
+            fi
+        done <<< "$expected"
+        echo "PASSED|$test_name|"; return
+    fi
 
     if [[ $pipeline_rc -eq 124 ]]; then
         echo "TIMEDOUT|$test_name|"; return
@@ -566,10 +593,19 @@ run_llvm_test() {
     "$binary_file" > "$actual_out_file" 2>/dev/null
     local actual_exit=$?
 
+    # As in run_selfchecking: with --no-externalize-std, the ostream-sink model
+    # discards the output of std::cout, std::cerr and std::clog, so only the
+    # exit code of a C++ program that names one of them is compared.
+    local compare_output=true
+    if [[ "$ext" == "cpp" && "$EXTERNALIZE_STD_FLAG" == "--no-externalize-std" ]] &&
+       grep -qE '\b(cout|cerr|clog)\b' "$src_file"; then
+        compare_output=false
+    fi
     local mismatch_reason=""
     if [[ $actual_exit -ne $expected_exit ]]; then
         mismatch_reason="ran, exit code: expected $expected_exit, got $actual_exit"
-    elif ! diff -q "$expected_out_file" "$actual_out_file" > /dev/null 2>&1; then
+    elif [[ $compare_output == true ]] &&
+         ! diff -q "$expected_out_file" "$actual_out_file" > /dev/null 2>&1; then
         mismatch_reason="ran, output mismatch"
     fi
     if [[ -n "$mismatch_reason" ]]; then
