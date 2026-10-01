@@ -903,8 +903,40 @@ The libcxx-out-of-line model has these limits:
 - When `malloc` fails during the copy of a message, the model throws
   `std::bad_alloc`, as the `operator new` of libc++ does.
 - Other members are not in the model, for example the constructors of
-  `std::runtime_error` and `logic_error(const std::string&)`. A program that
-  uses one of them has an undefined function.
+  `std::runtime_error` and `logic_error(const std::string&)`. cir2c rejects a
+  program that uses one of them (see the next paragraph).
+
+**Undefined symbols.** With the `--no-externalize-std` option, cir2c stops with
+an error when the output of a C++ program uses a function or an object that has
+no definition. These symbols are permitted, because a verification tool knows
+them:
+
+- The functions of the C standard library, and `stdin`, `stdout` and `stderr`.
+- The `__VERIFIER_*` functions, `reach_error()` and `__assert_fail()`.
+
+For any other undefined symbol, a verification tool chooses a behavior, and the
+result does not belong to the program. A destructor without a body is also
+undefined. Before this rule, cir2c gave it an empty body. cir2c lists the
+symbols and writes no output:
+
+```
+cir2c: error: with --no-externalize-std, the output must define each function and object that it uses, outside the C standard library (README 8.2). These have no definition:
+  helper(int)  [_Z6helperi]
+  nondet_int
+```
+
+These conditions apply:
+
+- The rule is for a C++ program, that is a module from C++ source with a
+  `main()` function. A module without `main()` is a part of a program, and the
+  other parts can define its symbols. A C program has no models, and it can
+  use POSIX functions, which the link of its output supplies.
+- A use counts only if it is in the output. A call in a function that the
+  output does not contain does not count. A function attribute, for example
+  the personality function of the exception handling, does not count.
+
+To correct the error, add a model of the missing part, or use the
+`--externalize-std` option.
 
 ### 8.3 Exceptions
 
@@ -1002,7 +1034,7 @@ test. Try the two modes when a translation fails.
   stay in the output without a definition. cir2c replaces the calls, so this is
   correct. With the `--no-externalize-std` option, the models of
   [8.2](#82-the-standard-library) define the library parts that the program
-  uses.
+  uses, and cir2c rejects a program that uses an undefined symbol.
 - The `cir2c --version` command prints the commit of the build. The releases
   include the `llvm-version.txt` file. Record the two values with each result.
 

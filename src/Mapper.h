@@ -354,6 +354,12 @@ private:
   std::set<std::string> forwardDeclaredFuncNames_;
   // STD externalization (issue #7). On by default.
   bool externalizeStd_ = true;
+  // With --no-externalize-std: the symbols that the output uses without a
+  // definition, outside the C standard library (README 8.2). mapModule stops
+  // with an error when the list is not empty.
+  std::vector<std::string> undefinedSymbols_;
+  void requireDefinition(const std::string &symbol, bool isObject);
+  bool usedByOutput(mlir::Operation *symbolOp) const;
   // Function symbol -> its `void*`-receiver wrapper (issue #5).
   std::map<std::string, mlir::Operation *> receiverWrappers_;
   void planReceiverWrappers(mlir::ModuleOp module);

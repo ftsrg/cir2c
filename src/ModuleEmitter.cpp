@@ -198,6 +198,48 @@ static bool isCLibraryName(const std::string &name) {
   return false;
 }
 
+// With --no-externalize-std, a C++ program must define each function and
+// object that its output uses (README 8.2). Only the C standard library and SV-COMP
+// may stay undefined: a verification tool knows them. For any other undefined
+// symbol, a tool would choose a behavior, and the result would not belong to
+// the program. With --externalize-std, cir2c replaces the library calls
+// instead.
+void Mapper::requireDefinition(const std::string &symbol, bool isObject) {
+  if (externalizeStd_) return;
+  static const std::set<std::string> cObjects = {"stdin", "stdout", "stderr"};
+  if (isObject ? cObjects.count(symbol) > 0 : isCLibraryName(symbol)) return;
+  if (std::find(undefinedSymbols_.begin(), undefinedSymbols_.end(), symbol) ==
+      undefinedSymbols_.end())
+    undefinedSymbols_.push_back(symbol);
+}
+
+// Whether the output refers to the symbol of symbolOp: a use in a function body
+// that the output contains, or in the initializer of a global. Two uses do not
+// count, because they do not reach the output: an attribute of a function, for
+// example personality(@__gxx_personality_v0), and the initializer of an RTTI
+// object, which the output does not contain (see mapModule).
+bool Mapper::usedByOutput(mlir::Operation *symbolOp) const {
+  auto sym = symbolNameAttr(symbolOp);
+  auto module = symbolOp->getParentOfType<mlir::ModuleOp>();
+  if (!sym || !module) return true;
+  auto uses = mlir::SymbolTable::getSymbolUses(sym, module);
+  if (!uses) return true;
+  for (const mlir::SymbolTable::SymbolUse &use : *uses) {
+    mlir::Operation *user = use.getUser();
+    if (llvm::isa<cir::FuncOp>(user)) continue;
+    auto func = user->getParentOfType<cir::FuncOp>();
+    if (!func) {
+      auto global = llvm::dyn_cast<cir::GlobalOp>(user);
+      auto init = global ? global.getInitialValue() : std::nullopt;
+      if (init && mlir::isa<cir::TypeInfoAttr>(*init)) continue;
+      return true;
+    }
+    auto funcSym = symbolNameAttr(func);
+    if (funcSym && !funcDefElided(funcSym.getValue())) return true;
+  }
+  return false;
+}
+
 void Mapper::prepareFunctionNames(mlir::ModuleOp module) {
   functionOutputNames.clear();
   // Collect candidate pairs (mangled -> demangled-sanitized).
@@ -810,8 +852,10 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
     // D1/D2 destructor variants that are declaration-only in this module mean
     // the destructor body lives in an external library (e.g. libstdc++) that
     // we cannot link (we compile as plain C with -lm only).  Emit a noop stub.
+    // The real destructor can do more, so --no-externalize-std rejects it.
     if (mangled.find("D1E") != std::string::npos ||
         mangled.find("D2E") != std::string::npos) {
+      if (usedByOutput(fop)) requireDefinition(mangled, false);
       out << retType << " " << outName << "(" << params << ") {}\n";
       return true;
     }
@@ -846,8 +890,10 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
   // programs under --no-externalize-std is therefore out of scope here.  Under
   // the default --externalize-std these calls are over-approximated (havoc /
   // nondet) and the result stays sound.
-  if (!hasBody)
+  if (!hasBody) {
+    if (usedByOutput(fop)) requireDefinition(mangledSym, false);
     out << "extern ";
+  }
 
   out << retType << " " << outName << "(" << params << ");\n";
   // Record that a prototype for this C name now exists, so the injected libc
@@ -1176,6 +1222,7 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
     // and the call argument is &__dso_handle (type int8_t*), matching the
     // int8_t* parameter of __cxa_atexit.  Declare it as int8_t so the C
     // compiler sees a complete type and &__dso_handle has the right type.
+    if (usedByOutput(gop)) requireDefinition(rawSym, true);
     out << "extern signed char __dso_handle;\n";
     return true;
   }
@@ -1192,6 +1239,7 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
     auto iv = globalOp.getInitialValue();
     auto vt = iv ? mlir::dyn_cast<cir::VTableAttr>(*iv) : cir::VTableAttr();
     if (!vt) { // external/undefined vtable — declare so references link
+      if (usedByOutput(gop)) requireDefinition(rawSym, true);
       out << "extern void *" << name << "[];\n";
       return true;
     }
@@ -1393,7 +1441,12 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
   // creates a *separate*, zero-initialised object, so `stdout` would read back
   // NULL and any use of it crashes. (_ZTI* RTTI declarations are handled by the
   // stub special-case below and return before this prefix is used.)
-  if (globalOp.isDeclaration()) qualPrefix = "extern " + qualPrefix;
+  if (globalOp.isDeclaration()) {
+    // A declared _ZTI* object gets a stub definition below.
+    if (rawSym.rfind("_ZTI", 0) != 0 && usedByOutput(gop))
+      requireDefinition(rawSym, true);
+    qualPrefix = "extern " + qualPrefix;
+  }
 
   // Over-alignment: a source `__attribute__((aligned(N)))` (or any ABI alignment
   // exceeding the natural one) is recorded on the CIR global. Some tests check
@@ -2536,6 +2589,40 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   verifierDeclsBuf_.clear();
   if (!decls.empty()) out << decls;
   out << funcsBuf.str();
+
+  // Each function and global is processed now, so the list of undefined
+  // symbols is complete. Stop before any output (see requireDefinition). The
+  // rule is for a C++ program, which the models of README 8.2 complete. A
+  // module without main() is a part of a program, and the other parts can
+  // define its external symbols. A C program has no models, and it can use
+  // POSIX functions, which the link of its output supplies.
+  // main.cpp parses the input into a new module, so the module of the input,
+  // which has the language attribute, is a nested one.
+  bool isCxx = false;
+  module->walk([&](mlir::ModuleOp m) {
+    if (auto language = m->getAttrOfType<cir::SourceLanguageAttr>(
+            cir::CIRDialect::getSourceLanguageAttrName()))
+      isCxx = isCxx || language.isCXX();
+  });
+  bool definesMain = false;
+  module.walk([&](cir::FuncOp f) {
+    auto sym = symbolNameAttr(f);
+    if (sym && sym.getValue() == "main" && !f.getRegion().empty())
+      definesMain = true;
+  });
+  if (isTopLevelModule && isCxx && definesMain && !undefinedSymbols_.empty()) {
+    llvm::errs() << "cir2c: error: with --no-externalize-std, the output must "
+                    "define each function and object that it uses, outside the "
+                    "C standard library (README 8.2). These have no "
+                    "definition:\n";
+    for (const std::string &symbol : undefinedSymbols_) {
+      std::string demangled = demangleSymbol(symbol);
+      llvm::errs() << "  " << demangled;
+      if (demangled != symbol) llvm::errs() << "  [" << symbol << "]";
+      llvm::errs() << "\n";
+    }
+    return false;
+  }
 
   // Top-level module: the body is now fully buffered (so every emission-time
   // flag is set). Emit the header/manifest, then flush the body after it.
