@@ -795,6 +795,47 @@ void Mapper::computeReachableDefs(mlir::ModuleOp module) {
   }
 }
 
+void Mapper::computeMayThrow(mlir::ModuleOp module) {
+  if (mayThrowComputed_) return;
+  mayThrowComputed_ = true;
+
+  std::unordered_map<std::string, std::set<std::string>> callers; // callee -> callers
+  std::vector<std::string> work;
+  auto mark = [&](const std::string &s) {
+    if (mayThrowFuncs_.insert(s).second) work.push_back(s);
+  };
+
+  module->walk([&](cir::FuncOp f) {
+    auto symAttr = symbolNameAttr(f);
+    mlir::Operation *fop = f.getOperation();
+    if (!symAttr || fop->getNumRegions() == 0 || fop->getRegion(0).empty())
+      return;
+    std::string sym = symAttr.getValue().str();
+    fop->walk([&](mlir::Operation *op) {
+      if (mlir::isa<cir::ThrowOp>(op)) {
+        mark(sym);
+        return;
+      }
+      // A call with the nothrow attribute cannot pass an exception on: the
+      // exception calls std::terminate at the call (see handleCall).
+      if (auto call = mlir::dyn_cast<cir::CallOp>(op))
+        if (call.getNothrow()) return;
+      if (!mlir::isa<cir::CallOp>(op) && !mlir::isa<cir::TryCallOp>(op)) return;
+      auto callee = op->getAttrOfType<mlir::FlatSymbolRefAttr>("callee");
+      if (!callee) mark(sym);  // an indirect call, for example a virtual call
+      else callers[callee.getValue().str()].insert(sym);
+    });
+  });
+
+  while (!work.empty()) {
+    std::string cur = work.back();
+    work.pop_back();
+    auto it = callers.find(cur);
+    if (it == callers.end()) continue;
+    for (const std::string &caller : it->second) mark(caller);
+  }
+}
+
 void Mapper::buildCPrototype(mlir::Operation *fop, std::string &retType,
                              std::string &outName, std::string &params) const {
   auto cirFuncOp = mlir::cast<cir::FuncOp>(fop);
@@ -1641,6 +1682,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   // weak definitions (e.g. the std I/O machinery left dead after I/O
   // externalization) can be elided. Computed once for the whole module tree.
   computeReachableDefs(module);
+  computeMayThrow(module);
   planReceiverWrappers(module);
 
   // Visit \p root and every module nested inside it. A module-level attribute is

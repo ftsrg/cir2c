@@ -304,7 +304,25 @@ private:
 
   static bool handleCall(cir::CallOp op, Mapper &m, std::ostream &out) {
     Operation *o = op.getOperation();
+
+    // A call with the nothrow attribute calls a noexcept function. An
+    // exception that leaves such a function calls std::terminate
+    // ([except.spec]p5), but in the output the callee returns with the
+    // exception in flight, and the caller continues. A destructor call during
+    // the unwinding of another exception starts with __cir_exc_active set, so
+    // only a new exception terminates.
+    std::string excBefore;
+    if (op.getNothrow() && m.hasExceptions()) {
+      auto callee = o->getAttrOfType<mlir::FlatSymbolRefAttr>("callee");
+      if (!callee || m.mayThrow(callee.getValue())) {
+        excBefore = m.freshName("exc_before");
+        out << "  int " << excBefore << " = __cir_exc_active;\n";
+      }
+    }
     if (!handleCallLikeOp(o, m, out)) return false;
+    if (!excBefore.empty())
+      out << "  if (__cir_exc_active && !" << excBefore
+          << ") abort(); /* std::terminate: an exception leaves a noexcept function */\n";
 
     // A regular cir.call without the `nothrow` attribute may have left an
     // exception in flight in the callee.  C has no implicit unwind, so we

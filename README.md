@@ -1039,6 +1039,14 @@ The global-variable model has these other effects:
   as `std::terminate` does. The destructors between the `throw` and `main()`
   operate before the `abort()`. C++ permits this: whether the stack unwinds
   before `std::terminate` is implementation-defined.
+- An exception that leaves a `noexcept` function, for example a destructor, also
+  calls `abort()`. The test is after the call: the destructors in the
+  `noexcept` function operate before the `abort()`. cir2c writes the test only
+  after a call to a function that can throw, or after an indirect call. A
+  destructor that operates during the unwinding of an exception starts with
+  `__cir_exc_active` set. Thus only a new exception from the call calls
+  `abort()`, and a new exception during the unwinding continues as the first
+  exception.
 - cir2c writes the global destructor calls before each `return` in `main`. They
   do not operate on the `exit()`, `abort()` or `_exit` paths. These paths have no
   one text position.

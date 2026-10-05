@@ -170,6 +170,13 @@ public:
   /// global refers to it, so the output does not contain it.
   bool globalElided(llvm::StringRef sym) const;
 
+  /// Compute which functions can leave an exception in flight: a function with
+  /// a cir.throw, an indirect call that can throw, or a call that can throw to
+  /// such a function. Computed once.
+  void computeMayThrow(mlir::ModuleOp module);
+  /// True when the function with this symbol can leave an exception in flight.
+  bool mayThrow(llvm::StringRef sym) const { return mayThrowFuncs_.count(sym.str()) > 0; }
+
   /// Record `extern <ctype> __VERIFIER_nondet_<suffix>(void);` once per suffix
   /// into an internal buffer; mapModule flushes it before function bodies.
   void ensureVerifierNondetDeclared(const std::string &ctype,
@@ -398,6 +405,8 @@ private:
   std::set<std::string> droppableDefs_;   // inline/weak defs eligible to drop
   std::set<std::string> declOnlyFuncs_;   // body-less declarations
   std::set<std::string> droppableGlobals_; // linkonce/weak globals eligible to drop
+  bool mayThrowComputed_ = false;
+  std::set<std::string> mayThrowFuncs_;   // functions that can leave an exception
   // Alloca result Values that are accessed atomically / volatilely.
   llvm::DenseSet<mlir::Value> atomicAllocaValues_;
   llvm::DenseSet<mlir::Value> volatileAllocaValues_;
