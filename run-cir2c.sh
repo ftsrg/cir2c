@@ -142,6 +142,16 @@ if [[ "$LANG" == "c++" && "$EXTERNALIZE_STD" == false ]]; then
     done
 fi
 
+# __FILE__ expands to the path of the file as clang finds it, and the output
+# keeps it, for example in the message of an assertion. Without the directory,
+# the output does not contain a local path, and it does not change with the
+# directory of the translation.
+PREFIX_MAP_FLAGS=()
+for dir in "$(dirname -- "$INPUT_FILE")" "$(cd -- "$(dirname -- "$INPUT_FILE")" && pwd -P)" \
+           "$SCRIPT_DIR/models" ${LIBCXX_INCLUDE:+"$LIBCXX_INCLUDE"}; do
+    PREFIX_MAP_FLAGS+=("-fmacro-prefix-map=${dir%/}/=")
+done
+
 # Validate tools
 REQUIRE_FLAGS=()
 [[ "$FLATTEN" == true ]] && REQUIRE_FLAGS+=(--cir-opt)
@@ -165,6 +175,7 @@ mkdir -p "$(dirname "$OUTPUT_C")"
 # knows the test-suite layout for shared utility headers).
 CIR_FILE=$(_tmpmlir "$MLIR_OUT")
 "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$INPUT_FILE" -o "$CIR_FILE" \
+    "${PREFIX_MAP_FLAGS[@]}" \
     ${MODEL_FLAGS[@]+"${MODEL_FLAGS[@]}"} \
     ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
     ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} || exit 2

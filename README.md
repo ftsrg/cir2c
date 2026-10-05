@@ -304,6 +304,11 @@ steps: `clang -emit-cir`, then preprocessing, then optional flattening, then
 
 The script makes the output directory if it is not there.
 
+The script removes the directory of the input from `__FILE__`, for example in
+the message of an assertion. It also removes the directories of the models and
+of libc++ from `__FILE__` in their headers. Thus the output does not contain a
+local path, and the output is the same in each directory.
+
 ```
 run-cir2c.sh [OPTIONS] <input-file> <output.c>
 ```
