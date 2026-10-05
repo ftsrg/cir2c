@@ -1142,6 +1142,11 @@ test. Try the two modes when a translation fails.
   correct. With the `--no-externalize-std` option, the models of
   [8.2](#82-the-standard-library) define the library parts that the program
   uses, and cir2c rejects a program that uses an undefined symbol.
+- C does not permit a null pointer argument to `memcpy`, `memmove`, `memset`,
+  `memcmp`, `memchr` and their `wmem` forms, also when the size is zero. libc++
+  calls them so for an empty range. Thus cir2c writes such a call as
+  `n ? memcpy(d, s, n) : d`. When the size is zero, the result is the value
+  that the call returns: `d`, `0` or a null pointer.
 - The `cir2c --version` command prints the commit of the build. The releases
   include the `llvm-version.txt` file. Record the two values with each result.
 

@@ -26,8 +26,10 @@
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 
 #include <limits>
+#include <map>
 #include <sstream>
 #include <string>
+#include <vector>
 
 using namespace mlir;
 
@@ -208,6 +210,7 @@ private:
 
     // Build argument list with address-of adjustment for direct access allocas
     std::string args;
+    std::vector<std::string> argList;
     unsigned startIdx = isIndirectCall ? 1 : 0; // Skip first operand if it's the function pointer
     // A record too large for registers is passed in memory. The ABI models that
     // as a POINTER argument marked `llvm.byval`, meaning "the callee receives a
@@ -244,14 +247,51 @@ private:
       }
       if (isByVal) {
         std::string n = m.getOrCreateName(argV);
-        args += m.isDirectAccess(argV) ? n : ("*(" + n + ")");
+        argList.push_back(m.isDirectAccess(argV) ? n : ("*(" + n + ")"));
+        args += argList.back();
         continue;
       }
 
       // pointerOperandExpr takes the address of a direct-access scalar lvalue but
       // leaves an array/VLA name to decay (a VLA alloca is CIR ptr<scalar>, so a
       // naive pointee-array check would wrongly emit `&v` = pointer-to-VLA).
-      args += pointerOperandExpr(argV, m);
+      argList.push_back(pointerOperandExpr(argV, m));
+      args += argList.back();
+    }
+
+    // A null pointer argument of memcpy and the other functions of this group
+    // is undefined also when the size is zero (C11 7.24.1p2, 7.29.4p2). libc++
+    // calls them so for an empty range, for example memmove from the data of an
+    // empty vector. With a size of zero, a call does nothing and its result is
+    // known, so the output makes no call then.
+    if (!isIndirectCall && argList.size() == 3) {
+      static const std::map<std::string, int> zeroSizeResult = {
+          // 0: the first argument, 1: zero, 2: a null pointer
+          {"memcpy", 0}, {"memmove", 0}, {"memset", 0}, {"memcmp", 1},
+          {"memchr", 2}, {"wmemcpy", 0}, {"wmemmove", 0}, {"wmemset", 0},
+          {"wmemcmp", 1}, {"wmemchr", 2}};
+      auto it = zeroSizeResult.find(callee);
+      auto fn = mlir::SymbolTable::lookupNearestSymbolFrom<cir::FuncOp>(
+          o, mlir::StringAttr::get(o->getContext(), callee));
+      bool libraryDecl = fn && fn.getOperation()->getRegion(0).empty() &&
+                         outCallee == callee;
+      if (it != zeroSizeResult.end() && libraryDecl) {
+        const std::string &size = argList[2];
+        std::string call = outCallee + "(" + args + ")";
+        if (o->getNumResults() > 0) {
+          std::string tmp = m.freshName("r");
+          std::string ctype = m.mapTypeToC(o->getResult(0).getType());
+          std::string zero = it->second == 0   ? "(" + ctype + ")(" + argList[0] + ")"
+                             : it->second == 1 ? std::string("0")
+                                               : "(" + ctype + ")0";
+          out << "  " << ctype << " " << tmp << " = (" << size << ") ? " << call
+              << " : " << zero << ";\n";
+          m.setName(o->getResult(0), tmp);
+        } else {
+          out << "  if (" << size << ") " << call << ";\n";
+        }
+        return true;
+      }
     }
 
     // For indirect calls, we need to cast the void* back to a function pointer
