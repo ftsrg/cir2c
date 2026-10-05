@@ -309,6 +309,12 @@ the message of an assertion. It also removes the directories of the models and
 of libc++ from `__FILE__` in their headers. Thus the output does not contain a
 local path, and the output is the same in each directory.
 
+For C++ input, the script gives the `-fno-threadsafe-statics` option to clang.
+The output C program has one thread. With this option, a flag guards the
+initialization of a static local variable. Without it, clang calls the
+`__cxa_guard_*` functions of the C++ runtime, and the output does not contain
+them.
+
 ```
 run-cir2c.sh [OPTIONS] <input-file> <output.c>
 ```

@@ -110,7 +110,11 @@ CLANG_BIN="$CLANG"
 STDLIB_FLAGS=()
 if [[ "$LANG" == "c++" ]]; then
     CLANG_BIN="$CLANGPP"
-    STDLIB_FLAGS=(-stdlib=libc++ -nostdinc++ -isystem "$LIBCXX_INCLUDE")
+    # The output C has one thread. Without thread-safe statics, clang guards a
+    # static local variable with a plain flag. Otherwise it calls the
+    # __cxa_guard_* functions of the C++ runtime, which the output does not have.
+    STDLIB_FLAGS=(-stdlib=libc++ -nostdinc++ -isystem "$LIBCXX_INCLUDE"
+                  -fno-threadsafe-statics)
 fi
 
 # The models for --no-externalize-std (README 8.2). A model is a directory in
