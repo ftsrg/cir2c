@@ -84,7 +84,7 @@ private:
 
   // cir.vtable.get_virtual_fn_addr: indexes into the vtable to get the address of
   // a specific virtual function pointer slot. We extend the dispatch chain and
-  // record the slot index so handleCall can pass it to __VERIFIER_virtual_call.
+  // record the slot index so handleCall can pass it to __cir2c_virtual_call.
   // Emits nothing (the slot is consumed by the eventual call).
   static bool handleVTableGetVirtualFnAddr(cir::VTableGetVirtualFnAddrOp op, Mapper &m, std::ostream &out) {
     if (op->getNumResults() > 0) {

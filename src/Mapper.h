@@ -299,7 +299,7 @@ public:
   static std::string sanitizeIdentifier(const std::string &s);
 
   /// Convert a C type string (as returned by mapTypeToC) into a short
-  /// identifier suffix suitable for __VERIFIER_virtual_call_<suffix>.
+  /// identifier suffix suitable for __cir2c_virtual_call_<suffix>.
   /// E.g. "int" -> "int", "long long" -> "long_long", "void*" -> "void_ptr".
   static std::string virtualCallTypeSuffix(const std::string &ctype);
 
@@ -427,15 +427,15 @@ private:
   // fn ptr) back to the original object pointer operand.
   llvm::DenseMap<mlir::Value, mlir::Value> vtableDispatchChain;
   // Set of SSA values that are final virtual function pointers (loaded from
-  // get_virtual_fn_addr result) and should trigger __VERIFIER_virtual_call
+  // get_virtual_fn_addr result) and should trigger __cir2c_virtual_call
   // when used as a callee in cir.call.
   llvm::DenseSet<mlir::Value> virtualFnPtrSet;
   bool anyVirtualCalls_ = false;
   // Maps a virtual fn-ptr SSA value (and the chain it flows through) to the
-  // vtable slot index, passed to __VERIFIER_virtual_call_<sig> at the call site.
+  // vtable slot index, passed to __cir2c_virtual_call_<sig> at the call site.
   llvm::DenseMap<mlir::Value, int> virtualFnSlots_;
   // All distinct virtual-call wrapper signatures: suffix -> (retCtype, argCtypes).
-  // Drives emission of one default __VERIFIER_virtual_call_<suffix> per signature.
+  // Drives emission of one default __cir2c_virtual_call_<suffix> per signature.
   std::map<std::string, std::pair<std::string, std::vector<std::string>>> virtualCallSigs_;
 
   // Set when the module dispatches through a pointer-to-member-function (the
@@ -548,12 +548,12 @@ public:
   bool isVirtualFnPtr(mlir::Value v) const;
 
   /// Record that at least one virtual call has been emitted (used to decide
-  /// whether to emit the __VERIFIER_virtual_call declaration).
+  /// whether to emit the __cir2c_virtual_call declaration).
   void setHasVirtualCalls();
 
   /// Associate the vtable slot index of a virtual dispatch with an SSA value
   /// (the get_virtual_fn_addr result and any value it flows into). The slot is
-  /// passed as the second argument to __VERIFIER_virtual_call_<sig>.
+  /// passed as the second argument to __cir2c_virtual_call_<sig>.
   void setVirtualFnSlot(mlir::Value v, int slot) { virtualFnSlots_[v] = slot; }
   /// Return the slot for a virtual fn-ptr value, or -1 if unknown.
   int getVirtualFnSlot(mlir::Value v) const {
@@ -565,7 +565,7 @@ public:
   /// type. `ft` is the `cir.func<(this, args...) -> ret>` stored in the vtable.
   /// Returns a unique suffix and outputs the wrapper's return C type and the
   /// argument C types (the callee's params minus the leading `this`). Also
-  /// records the signature so a default __VERIFIER_virtual_call_<suffix>
+  /// records the signature so a default __cir2c_virtual_call_<suffix>
   /// implementation is emitted.
   std::string registerVirtualCallSig(mlir::Type funcType, std::string &retOut,
                                      std::vector<std::string> &argsOut);

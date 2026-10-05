@@ -67,7 +67,7 @@ private:
     // ── Virtual dispatch: check BEFORE the generic indirect-call path ────────
     // If the first operand is a tracked virtual function pointer (produced by
     // the cir.vtable.get_vptr → load → get_virtual_fn_addr → load chain), emit
-    // __VERIFIER_virtual_call(object, args...) instead of a function-pointer
+    // __cir2c_virtual_call(object, args...) instead of a function-pointer
     // call.  The verifier tool itself gives the semantics of this intrinsic.
     //
     // The `this` pointer is already present as operand 1 of the CIR call, so we
@@ -93,7 +93,7 @@ private:
       std::string retType;
       std::vector<std::string> argTypes;
       std::string suffix = m.registerVirtualCallSig(ft, retType, argTypes);
-      std::string intrinsic = "__VERIFIER_virtual_call_" + suffix;
+      std::string intrinsic = "__cir2c_virtual_call_" + suffix;
       m.setHasVirtualCalls();
 
       // Argument list: this-ptr, slot index, then the remaining call arguments.

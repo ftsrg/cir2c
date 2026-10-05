@@ -18,9 +18,15 @@
 //
 // Exercises the vtable-array lowering: the constructor installs &_ZTV[k] as the
 // object's vtable pointer, and `b->f(...)` becomes
-// __VERIFIER_virtual_call_<sig>(b, slot, args), whose default implementation
+// __cir2c_virtual_call_<sig>(b, slot, args), whose default implementation
 // loads the function pointer from vtable[slot] and calls it. Dynamic type is
 // Derived, so Derived::f must be selected (not Base::f).
+//
+// Issue #12: SV-COMP reserves the prefix __VERIFIER_ for its special functions,
+// and a verifier can give such a name its own semantics. Thus the helper has a
+// cir2c name.
+//
+// cir2c-test-output-lacks: __VERIFIER_virtual_call
 
 struct Base {
   virtual int f(int x) { return x; }

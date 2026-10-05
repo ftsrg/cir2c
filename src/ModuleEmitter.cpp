@@ -1332,7 +1332,7 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
 
   // Vtable (`_ZTV*`) and construction vtable (`_ZTC*`): emit as flat `void*
   // <sym>[]` arrays so constructors can install address-points into vptr fields
-  // and __VERIFIER_virtual_call can index them. `_ZTC*` construction vtables are
+  // and __cir2c_virtual_call can index them. `_ZTC*` construction vtables are
   // used with virtual inheritance and have the same VTableAttr structure.
   bool isVtableSym = rawSym.rfind("_ZTV", 0) == 0 || rawSym.rfind("_ZTC", 0) == 0;
   if (isVtableSym) {
@@ -2290,7 +2290,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   for (auto &s : remaining) order.push_back(s);
 
   // Pre-scan: collect the C return types of all virtual calls so we can emit
-  // one typed __VERIFIER_virtual_call_<suffix> declaration per distinct return
+  // one typed __cir2c_virtual_call_<suffix> declaration per distinct return
   // type.  We find these by inspecting the result type of every
   // cir.vtable.get_virtual_fn_addr op: its type is
   //   !cir.ptr<!cir.ptr<!cir.func<(params) -> RetType>>>
@@ -2514,7 +2514,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     // both in the artifact and on stderr (below, in mapModule).
     emitAbiAttrNote(out);
 
-    // Default __VERIFIER_virtual_call_<sig> implementations. Emitted after
+    // Default __cir2c_virtual_call_<sig> implementations. Emitted after
     // struct definitions because return types may be std__ structs that need
     // a complete definition (e.g. a virtual function returning std::string).
     // The call site passes (object, slot, args...); the wrapper loads the
@@ -2524,7 +2524,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     // so no `weak` linkage is needed (and it would not be plain ISO C).
     if (!virtualCallSigs_.empty()) {
       out << "// Virtual dispatch: default implementations.\n"
-             "// __VERIFIER_virtual_call_<sig>(obj, slot, args): obj's vtable\n"
+             "// __cir2c_virtual_call_<sig>(obj, slot, args): obj's vtable\n"
              "// pointer is at offset 0; the function is vtable[slot].\n";
       for (const auto &kv : virtualCallSigs_) {
         const std::string &suffix = kv.first;
@@ -2541,7 +2541,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
         // pointer result as void* (see Mapper::planReceiverWrappers). Thus the
         // function type of the call is exactly that of the wrapper.
         bool pointerResult = !ret.empty() && ret.back() == '*';
-        out << ret << " __VERIFIER_virtual_call_"
+        out << ret << " __cir2c_virtual_call_"
             << suffix << "(void* __obj, int __slot" << params << ") {\n";
         out << "  void* __fn = ((void**)*(void**)__obj)[__slot];\n";
         out << "  " << (ret == "void" ? "" : "return ")
