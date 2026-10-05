@@ -278,6 +278,8 @@ bool Mapper::usedByOutput(mlir::Operation *symbolOp) const {
       auto global = llvm::dyn_cast<cir::GlobalOp>(user);
       auto init = global ? global.getInitialValue() : std::nullopt;
       if (init && mlir::isa<cir::TypeInfoAttr>(*init)) continue;
+      auto globalSym = global ? symbolNameAttr(global) : mlir::StringAttr();
+      if (globalSym && globalElided(globalSym.getValue())) continue;
       return true;
     }
     auto funcSym = symbolNameAttr(func);
@@ -681,6 +683,11 @@ bool Mapper::funcDefElided(llvm::StringRef sym) const {
   return droppableDefs_.count(s) || declOnlyFuncs_.count(s);
 }
 
+bool Mapper::globalElided(llvm::StringRef sym) const {
+  std::string s = sym.str();
+  return droppableGlobals_.count(s) && !reachableDefs_.count(s);
+}
+
 void Mapper::computeReachableDefs(mlir::ModuleOp module) {
   if (reachabilityComputed_) return;
   reachabilityComputed_ = true;
@@ -757,13 +764,25 @@ void Mapper::computeReachableDefs(mlir::ModuleOp module) {
     }
   });
 
-  // `main` and any function referenced by a global initializer (vtables,
-  // function-pointer tables) are roots regardless of linkage.
+  // `main` and each global that the program must keep are roots. A linkonce
+  // global, for example the vtable of a class whose virtual functions are all
+  // inline, is kept only when a kept function or global refers to it. The
+  // models of issue #7 make clang emit the vtables of the exception classes in
+  // every program, and such a vtable would otherwise keep the virtual
+  // functions of its class.
   markRoot("main");
   module->walk([&](cir::GlobalOp g) {
+    std::string sym = symbolNameAttr(g) ? symbolNameAttr(g).getValue().str()
+                                        : std::string();
+    if (sym.empty()) return;
+    cir::GlobalLinkageKind lk = g.getLinkage();
+    if (cir::isLinkOnceLinkage(lk) || cir::isAvailableExternallyLinkage(lk))
+      droppableGlobals_.insert(sym);
+    else
+      markRoot(sym);
     if (auto uses = mlir::SymbolTable::getSymbolUses(g.getOperation()))
       for (const auto &u : *uses)
-        markRoot(u.getSymbolRef().getRootReference().str());
+        edges[sym].insert(u.getSymbolRef().getRootReference().str());
   });
 
   // Propagate reachability across the call graph.
@@ -2590,6 +2609,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     if (!sym) continue;
     std::string rs = sym.getValue().str();
     if (rs.rfind("_ZTV", 0) != 0 && rs.rfind("_ZTC", 0) != 0) continue;
+    if (globalElided(rs)) continue;
     auto iv = gop.getInitialValue();
     if (iv && mlir::isa<cir::VTableAttr>(*iv)) continue; // has a definition
     out << "extern void *" << sanitizeIdentifier(rs) << "[];\n";
@@ -2605,6 +2625,8 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   for (auto &op : module.getOps()) {
     auto globalOp = llvm::dyn_cast<cir::GlobalOp>(&op);
     if (!globalOp) continue;
+    if (auto sym = symbolNameAttr(&op))
+      if (globalElided(sym.getValue())) continue; // unreferenced linkonce global
     auto initVal = globalOp.getInitialValue();
     // Vtable and VTT globals reference functions (declared in the next pass) and
     // each other (vtables → functions, VTTs → vtables), so emit them all AFTER

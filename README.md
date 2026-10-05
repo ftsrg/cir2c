@@ -641,6 +641,15 @@ fixed sequence:
    `__VERIFIER_nondet_*` declarations that it finds during this step can go to
    the top of the file.
 
+The output does not contain an inline definition that nothing uses. Before the
+first step, `computeReachableDefs` starts at `main` and at each function and
+global that does not have a linkonce or weak linkage. It follows the references
+from function bodies and from initializers. A linkonce, weak or
+available-externally function that it does not reach is not in the output. A
+linkonce or available-externally global that it does not reach is also not in
+the output. An example is the vtable of a class whose key function is inline,
+which clang emits also when nothing creates an object of the class.
+
 ### 7.5 The C models of the C++ constructions
 
 **Virtual dispatch.** cir2c writes the vtables as `void*` arrays. A virtual call

@@ -166,6 +166,9 @@ public:
   /// True when a function definition should be dropped: it is an inline/weak
   /// definition that is not reachable from any retained root.
   bool funcDefElided(llvm::StringRef sym) const;
+  /// True when a global has a discardable linkage and no kept function or
+  /// global refers to it, so the output does not contain it.
+  bool globalElided(llvm::StringRef sym) const;
 
   /// Record `extern <ctype> __VERIFIER_nondet_<suffix>(void);` once per suffix
   /// into an internal buffer; mapModule flushes it before function bodies.
@@ -394,6 +397,7 @@ private:
   std::set<std::string> reachableDefs_;   // function symbols to retain
   std::set<std::string> droppableDefs_;   // inline/weak defs eligible to drop
   std::set<std::string> declOnlyFuncs_;   // body-less declarations
+  std::set<std::string> droppableGlobals_; // linkonce/weak globals eligible to drop
   // Alloca result Values that are accessed atomically / volatilely.
   llvm::DenseSet<mlir::Value> atomicAllocaValues_;
   llvm::DenseSet<mlir::Value> volatileAllocaValues_;
