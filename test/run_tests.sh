@@ -432,6 +432,20 @@ output_has_unwanted_text() {
     return 1
 }
 
+# A test with "cir2c-test-cflags:" lines passes only when the output C compiles
+# with these options, for example -Werror=uninitialized for undefined behavior that
+# clang can report. Echoes the options when the compilation fails.
+output_fails_cflags() {
+    local src_file="$1" output_c_file="$2" log="$3" flags
+    flags=$(sed -n 's|^// cir2c-test-cflags: ||p' "$src_file" | tr '\n' ' ')
+    [[ -z "${flags// /}" ]] && return 1
+    # shellcheck disable=SC2086
+    if ! "$GCC" -c -fsyntax-only $flags "$output_c_file" > "$log" 2>&1; then
+        echo "$flags" | sed 's/ *$//'; return 0
+    fi
+    return 1
+}
+
 run_c_test() {
     local c_file="$1"
     local test_name pipeline_rc=0
@@ -470,6 +484,10 @@ run_c_test() {
     local unwanted
     if unwanted=$(log_has_unwanted_text "$c_file" "$pipeline_log"); then
         echo "MISMATCH|$test_name|the log contains: $unwanted"; return
+    fi
+    local cflags_log="$INTEGRATION_OUTPUT_DIR/${test_name}_cflags_log.txt" failed
+    if failed=$(output_fails_cflags "$c_file" "$output_c_file" "$cflags_log"); then
+        echo "COMPILE_FAILED|$test_name|compilation with $failed failed"; return
     fi
     if unwanted=$(output_has_unwanted_text "$c_file" "$output_c_file"); then
         echo "MISMATCH|$test_name|the output contains: $unwanted"; return
@@ -542,6 +560,10 @@ run_cpp_test() {
     local unwanted
     if unwanted=$(log_has_unwanted_text "$cpp_file" "$pipeline_log"); then
         echo "MISMATCH|$test_name|the log contains: $unwanted"; return
+    fi
+    local cflags_log="$INTEGRATION_OUTPUT_DIR/${test_name}_cflags_log.txt" failed
+    if failed=$(output_fails_cflags "$cpp_file" "$output_c_file" "$cflags_log"); then
+        echo "COMPILE_FAILED|$test_name|compilation with $failed failed"; return
     fi
     if unwanted=$(output_has_unwanted_text "$cpp_file" "$output_c_file"); then
         echo "MISMATCH|$test_name|the output contains: $unwanted"; return
@@ -719,7 +741,7 @@ run_esbmc_test() {
 # Export everything workers need
 export TIMEOUT RUNNER GCC CLANGPP INTEGRATION_OUTPUT_DIR LLVM_EVAL_DIR LLVM_EVAL_OUTPUT_DIR
 export ESBMC_EVAL_DIR ESBMC_EVAL_OUTPUT_DIR EXTERNALIZE_STD_FLAG
-export -f pipeline_stage log_has_unwanted_text output_has_unwanted_text run_selfchecking run_c_test run_cpp_test run_llvm_test run_esbmc_test
+export -f pipeline_stage log_has_unwanted_text output_has_unwanted_text output_fails_cflags run_selfchecking run_c_test run_cpp_test run_llvm_test run_esbmc_test
 
 # ---------------------------------------------------------------------------
 # Preflight checks

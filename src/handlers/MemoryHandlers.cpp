@@ -116,9 +116,20 @@ private:
 
     // Handle struct types first: use typed API instead of textual type string inspection.
     // This needs to come before array check since some struct names might contain "array"
-    if (mlir::isa<cir::RecordType>(allocaTy)) {
+    if (auto recordTy = mlir::dyn_cast<cir::RecordType>(allocaTy)) {
       std::string ctype = m.mapTypeToC(allocaTy);
-      out << "  " << qualPrefix << ctype << " " << uniqueVarName << ";\n";
+      // A record without data for argument passing, for example an empty
+      // class, leaves the arguments of a call, but the CIR still loads it from
+      // its uninitialized temporary. In C, a copy of an uninitialized local
+      // whose address is not taken is undefined (C11 6.3.2.1p2), so the
+      // variable starts as zero.
+      bool noData = recordTy.isComplete() && !recordTy.isUnion() &&
+                    !cir::anyMemberHoldsDataForABI(recordTy.getMembers(),
+                                                   recordTy.getMemberKinds());
+      std::string init = (noData && qualPrefix.find("_Atomic") == std::string::npos)
+                             ? " = {0}"
+                             : "";
+      out << "  " << qualPrefix << ctype << " " << uniqueVarName << init << ";\n";
       for (Value res : o->getResults()) {
         m.setName(res, uniqueVarName);
         m.markAsDirectAccess(res);

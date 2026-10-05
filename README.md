@@ -1217,6 +1217,12 @@ A test can also forbid a text in the output C code. Write the text in a line
 that starts with `// cir2c-test-output-lacks: `. The test fails when the output
 contains the text.
 
+A test can also require that the output C code compiles with more compiler
+options, for example `-Werror=uninitialized`. Write the options in a line that
+starts with `// cir2c-test-cflags: `. The test fails when the
+`clang -fsyntax-only` command with these options fails. Use this to find
+undefined behavior that clang can report.
+
 The tests examine arithmetic, casts, comparisons, control flow, arrays, records,
 globals, floating-point numbers, pointers, integer promotion and bit operations.
 The C++ tests examine exceptions, RAII scopes, and virtual dispatch with member
