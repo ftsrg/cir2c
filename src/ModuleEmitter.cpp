@@ -198,6 +198,52 @@ static bool isCLibraryName(const std::string &name) {
   return false;
 }
 
+// The parameters of a C library function whose standard prototype points to
+// const (C11 7.1.4 and the prototypes of each header), as a bit mask of the
+// parameter indexes. The CIR has no const, but a declaration of a library
+// function whose type is not compatible with the standard one is undefined
+// (C11 6.2.7p2). __assert_fail is not in the table: the output keeps its char *
+// parameters. mbsrtowcs and wcsrtombs are not in the table either: their
+// parameter is `const char **`, and a call with a `char **` argument is not
+// valid C.
+static unsigned cLibraryConstParams(const std::string &name) {
+  static const std::map<std::string, unsigned> masks = {
+      // <locale.h>, <wctype.h>
+      {"setlocale", 0x2}, {"wctype", 0x1}, {"wctrans", 0x1},
+      // <math.h>
+      {"nan", 0x1}, {"nanf", 0x1}, {"nanl", 0x1},
+      // <stdio.h>
+      {"remove", 0x1}, {"rename", 0x3}, {"fopen", 0x3}, {"freopen", 0x3},
+      {"fprintf", 0x2}, {"fscanf", 0x2}, {"printf", 0x1}, {"scanf", 0x1},
+      {"snprintf", 0x4}, {"sprintf", 0x2}, {"sscanf", 0x3}, {"vfprintf", 0x2},
+      {"vfscanf", 0x2}, {"vprintf", 0x1}, {"vscanf", 0x1}, {"vsnprintf", 0x4},
+      {"vsprintf", 0x2}, {"vsscanf", 0x3}, {"fputs", 0x1}, {"puts", 0x1},
+      {"fwrite", 0x1}, {"fsetpos", 0x2}, {"perror", 0x1},
+      // <stdlib.h>
+      {"atof", 0x1}, {"atoi", 0x1}, {"atol", 0x1}, {"atoll", 0x1},
+      {"strtod", 0x1}, {"strtof", 0x1}, {"strtold", 0x1}, {"strtol", 0x1},
+      {"strtoll", 0x1}, {"strtoul", 0x1}, {"strtoull", 0x1}, {"getenv", 0x1},
+      {"system", 0x1}, {"bsearch", 0x3}, {"mblen", 0x1}, {"mbtowc", 0x2},
+      {"mbstowcs", 0x2}, {"wcstombs", 0x2},
+      // <string.h>
+      {"memcpy", 0x2}, {"memmove", 0x2}, {"strcpy", 0x2}, {"strncpy", 0x2},
+      {"strcat", 0x2}, {"strncat", 0x2}, {"memcmp", 0x3}, {"strcmp", 0x3},
+      {"strcoll", 0x3}, {"strncmp", 0x3}, {"strxfrm", 0x2}, {"memchr", 0x1},
+      {"strchr", 0x1}, {"strcspn", 0x3}, {"strpbrk", 0x3}, {"strrchr", 0x1},
+      {"strspn", 0x3}, {"strstr", 0x3}, {"strtok", 0x2}, {"strlen", 0x1},
+      // <wchar.h>
+      {"wmemcpy", 0x2}, {"wmemmove", 0x2}, {"wmemcmp", 0x3}, {"wmemchr", 0x1},
+      {"wcscpy", 0x2}, {"wcsncpy", 0x2}, {"wcscat", 0x2}, {"wcsncat", 0x2},
+      {"wcscmp", 0x3}, {"wcsncmp", 0x3}, {"wcslen", 0x1}, {"wcschr", 0x1},
+      {"wcsrchr", 0x1}, {"wcsstr", 0x3}, {"wcstok", 0x2}, {"mbrtowc", 0x2},
+      {"mbsinit", 0x1}, {"mbrlen", 0x1},
+      // <time.h>
+      {"asctime", 0x1}, {"ctime", 0x1}, {"gmtime", 0x1}, {"localtime", 0x1},
+      {"strftime", 0xc}};
+  auto it = masks.find(name);
+  return it == masks.end() ? 0 : it->second;
+}
+
 // With --no-externalize-std, a C++ program must define each function and
 // object that its output uses (README 8.2). Only the C standard library and SV-COMP
 // may stay undefined: a verification tool knows them. For any other undefined
@@ -315,9 +361,8 @@ void Mapper::ensureMemcpyDeclared() {
   if (memcpyDeclared_) return;
   memcpyDeclared_ = true;
   // If the program already references memcpy, emitFuncForwardDecl has emitted a
-  // prototype for it (non-const, derived from the CIR type — CIR drops the
-  // const). Emitting our const-correct one too would be a conflicting
-  // redeclaration, so defer to the existing one.
+  // prototype for it (with the const of the standard prototype, see
+  // cLibraryConstParams), so do not declare it a second time.
   if (forwardDeclaredFuncNames_.count("memcpy")) return;
   verifierDeclsBuf_ << "extern void *memcpy(void*, const void*, unsigned long);\n";
 }
@@ -742,7 +787,14 @@ void Mapper::buildCPrototype(mlir::Operation *fop, std::string &retType,
   else
     retType = mapTypeToC(rty);
 
-  outName = getFunctionOutputName(symbolNameAttr(fop).getValue().str());
+  std::string sym = symbolNameAttr(fop).getValue().str();
+  outName = getFunctionOutputName(sym);
+
+  // A declaration of a C library function gets the const of the standard
+  // prototype back. A definition keeps the types of the CIR: there the program
+  // defines the function itself.
+  bool hasBody = fop->getNumRegions() > 0 && !fop->getRegion(0).empty();
+  unsigned constParams = (hasBody || sym != outName) ? 0 : cLibraryConstParams(sym);
 
   // The parameters are named p0, p1, … here, not with the names that mapFunc
   // assigns, so that this does not interfere with those assignments.
@@ -752,8 +804,10 @@ void Mapper::buildCPrototype(mlir::Operation *fop, std::string &retType,
   for (mlir::Type paramType : fty.getInputs()) {
     if (!first) params += ", ";
     first = false;
+    bool isConst = paramIndex < 32 && (constParams >> paramIndex & 1) &&
+                   mlir::isa<cir::PointerType>(paramType);
     std::string paramName = "p" + std::to_string(paramIndex++);
-    params += mapParamTypeToC(*this, paramType, paramName);
+    params += (isConst ? "const " : "") + mapParamTypeToC(*this, paramType, paramName);
   }
   if (fty.isVarArg()) {
     // C forbids a lone "..." with no preceding named parameter. For such
