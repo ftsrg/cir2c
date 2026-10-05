@@ -419,6 +419,19 @@ log_has_unwanted_text() {
     return 1
 }
 
+# A test with "cir2c-test-output-lacks:" lines passes only when the output C
+# contains none of the texts.
+output_has_unwanted_text() {
+    local src_file="$1" output_c_file="$2" text
+    while IFS= read -r text; do
+        [[ -z "$text" ]] && continue
+        if grep -qF -- "$text" "$output_c_file"; then
+            echo "$text"; return 0
+        fi
+    done < <(sed -n 's|^// cir2c-test-output-lacks: ||p' "$src_file")
+    return 1
+}
+
 run_c_test() {
     local c_file="$1"
     local test_name pipeline_rc=0
@@ -457,6 +470,9 @@ run_c_test() {
     local unwanted
     if unwanted=$(log_has_unwanted_text "$c_file" "$pipeline_log"); then
         echo "MISMATCH|$test_name|the log contains: $unwanted"; return
+    fi
+    if unwanted=$(output_has_unwanted_text "$c_file" "$output_c_file"); then
+        echo "MISMATCH|$test_name|the output contains: $unwanted"; return
     fi
 
     run_selfchecking "$test_name" "$c_file" "$output_c_file" c || return
@@ -526,6 +542,9 @@ run_cpp_test() {
     local unwanted
     if unwanted=$(log_has_unwanted_text "$cpp_file" "$pipeline_log"); then
         echo "MISMATCH|$test_name|the log contains: $unwanted"; return
+    fi
+    if unwanted=$(output_has_unwanted_text "$cpp_file" "$output_c_file"); then
+        echo "MISMATCH|$test_name|the output contains: $unwanted"; return
     fi
 
     run_selfchecking "$test_name" "$cpp_file" "$output_c_file" c++ || return
@@ -700,7 +719,7 @@ run_esbmc_test() {
 # Export everything workers need
 export TIMEOUT RUNNER GCC CLANGPP INTEGRATION_OUTPUT_DIR LLVM_EVAL_DIR LLVM_EVAL_OUTPUT_DIR
 export ESBMC_EVAL_DIR ESBMC_EVAL_OUTPUT_DIR EXTERNALIZE_STD_FLAG
-export -f pipeline_stage log_has_unwanted_text run_selfchecking run_c_test run_cpp_test run_llvm_test run_esbmc_test
+export -f pipeline_stage log_has_unwanted_text output_has_unwanted_text run_selfchecking run_c_test run_cpp_test run_llvm_test run_esbmc_test
 
 # ---------------------------------------------------------------------------
 # Preflight checks

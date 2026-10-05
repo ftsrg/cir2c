@@ -687,8 +687,11 @@ static unsigned    __cir_exc_type_id;  /* The numeric tag */
 static int         __cir_exc_active;   /* 1 while an exception is active */
 ```
 
-A `throw` statement sets these variables and returns. After each call that can
-throw, cir2c writes a test of `__cir_exc_active`. Each `catch` clause becomes a
+A `throw` statement sets these variables and returns. Each `throw` statement
+has a static variable of the thrown type, and the exception object is in that
+variable. Thus the object has its correct type and alignment, and it is
+available after the function returns. After each call that can throw, cir2c
+writes a test of `__cir_exc_active`. Each `catch` clause becomes a
 comparison with the RTTI tag. Each `typeinfo` symbol becomes a
 `static const char __cir_eh_type_<sym>[]` array. Thus the address of the array is
 a unique tag.
@@ -1209,6 +1212,10 @@ runner skips such a test.
 A test can also forbid a text in the log of the translation, for example a
 warning of cir2c. Write the text in a line that starts with
 `// cir2c-test-log-lacks: `. The test fails when the log contains the text.
+
+A test can also forbid a text in the output C code. Write the text in a line
+that starts with `// cir2c-test-output-lacks: `. The test fails when the output
+contains the text.
 
 The tests examine arithmetic, casts, comparisons, control flow, arrays, records,
 globals, floating-point numbers, pointers, integer promotion and bit operations.

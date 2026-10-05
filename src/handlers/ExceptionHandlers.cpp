@@ -586,24 +586,34 @@ private:
     return true;
   }
 
-  // cir.alloc.exception conceptually calls __cxa_allocate_exception.  Since the
-  // allocated buffer is only ever consumed by the (unreachable) throw path, we
-  // hand out a stack buffer of the requested size cast to the result pointer
-  // type.  This keeps any in-between cir.store ops well-defined.
+  // cir.alloc.exception conceptually calls __cxa_allocate_exception. Each throw
+  // site gets a static object of the thrown type. The address must stay valid
+  // after the throwing function returns, because the catcher reads the object
+  // through __cir_exc_ptr in its own frame. A char buffer cast to the thrown
+  // type is not correct: the stores through the cast pointer access a char
+  // array as another type (C11 6.5p7), and the array has no alignment for the
+  // thrown type.
   static bool handleAllocException(cir::AllocExceptionOp op, Mapper &m, std::ostream &out) {
     if (op->getNumResults() < 1) return false;
-    uint64_t size = 0;
-    if (auto sa = op->getAttrOfType<mlir::IntegerAttr>("size"))
-      size = static_cast<uint64_t>(sa.getInt());
-    if (size == 0) size = 16;  // safety floor for any pathological 0-sized cases
+    auto ptrTy = mlir::dyn_cast<cir::PointerType>(op->getResult(0).getType());
+    mlir::Type thrownTy = ptrTy ? ptrTy.getPointee() : mlir::Type();
+    if (!thrownTy || mlir::isa<cir::VoidType>(thrownTy)) {
+      llvm::errs() << "AllocException: the thrown type is unknown, so the "
+                      "exception object cannot get its own type\n";
+      return false;
+    }
     std::string ctype = m.mapTypeToC(op->getResult(0).getType());
-    std::string buf = m.freshName("exc_buf");
+    std::string obj = m.freshName("exc_obj");
     std::string tmp = m.freshName("exc");
-    // Static storage: the address must remain valid after the throwing function
-    // returns (the catcher dereferences __cir_exc_ptr in its own frame).
-    // freshName guarantees each throw site gets its own uniquely-named static.
-    out << "  static char " << buf << "[" << size << "] = {0};\n";
-    out << "  " << ctype << " " << tmp << " = (" << ctype << ")" << buf << ";\n";
+    if (auto arrayTy = mlir::dyn_cast<cir::ArrayType>(thrownTy)) {
+      std::string dims;
+      std::string elemCType = m.arrayBaseTypeAndDims(arrayTy, dims);
+      out << "  static " << elemCType << " " << obj << dims << ";\n";
+      out << "  " << ctype << " " << tmp << " = (" << ctype << ")" << obj << ";\n";
+    } else {
+      out << "  static " << m.mapTypeToC(thrownTy) << " " << obj << ";\n";
+      out << "  " << ctype << " " << tmp << " = &" << obj << ";\n";
+    }
     m.setName(op->getResult(0), tmp);
     return true;
   }
