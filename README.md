@@ -314,6 +314,17 @@ table below. Each option changes the CIR, so record them with a result.
 | `-fno-threadsafe-statics` | C++ | A plain flag guards the initialization of a static local variable, for example `static int v = f();`. Without this option, clang calls `__cxa_guard_acquire` and `__cxa_guard_release` of the C++ runtime, which lock the variable against other threads. The output does not contain these functions. For a program with one thread, the two forms have the same behavior: the initializer runs once, and when it throws, the next call runs it again. |
 | `-I`, `-include` of the models | C++, `--no-externalize-std` | See [8.2](#82-the-standard-library). |
 
+**Programs with threads.** The output of a C++ program has one thread. The
+`-fno-threadsafe-statics` option and the exception state of
+[7.5](#75-the-c-models-of-the-c-constructions) (plain global variables) are not
+correct for more than one thread. Thus cir2c stops with an error when the output
+of a C++ program calls `pthread_create` or `thrd_create`. `std::thread` and
+`std::async` start their threads with `pthread_create`. With the
+`--no-externalize-std` option, `<thread>` does not compile with the models (see
+[8.2](#82-the-standard-library)). cir2c does not stop for a C program with
+threads: C has no exceptions, and the script gives `-fno-threadsafe-statics`
+only for C++.
+
 ```
 run-cir2c.sh [OPTIONS] <input-file> <output.c>
 ```

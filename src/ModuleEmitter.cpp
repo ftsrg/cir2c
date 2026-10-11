@@ -2789,6 +2789,29 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
             cir::CIRDialect::getSourceLanguageAttrName()))
       isCxx = isCxx || language.isCXX();
   });
+  // The output of a C++ program has one thread. The exception state
+  // (__cir_exc_*) is a set of plain globals, and run-cir2c.sh compiles C++
+  // with -fno-threadsafe-statics, so a static local variable has no lock
+  // (README 5.1). Thus a C++ program that starts a thread is not translated.
+  // std::thread and std::async start their threads with pthread_create.
+  if (isTopLevelModule && isCxx) {
+    std::vector<std::string> threadFns;
+    module.walk([&](cir::FuncOp f) {
+      auto sym = symbolNameAttr(f);
+      if (sym && (sym.getValue() == "pthread_create" ||
+                  sym.getValue() == "thrd_create") &&
+          usedByOutput(f))
+        threadFns.push_back(sym.getValue().str());
+    });
+    if (!threadFns.empty()) {
+      llvm::errs() << "cir2c: error: the program starts a thread ("
+                   << threadFns.front()
+                   << "). cir2c translates only C++ programs with one thread "
+                      "(README 5.1).\n";
+      return false;
+    }
+  }
+
   bool definesMain = false;
   module.walk([&](cir::FuncOp f) {
     auto sym = symbolNameAttr(f);
