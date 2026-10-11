@@ -934,6 +934,7 @@ script stops.
 | Model | Function | Relation to libc++ |
 |---|---|---|
 | `ostream-sink` | `std::cout`, `std::cerr` and `std::clog` discard all output. | An abstraction. The model uses only names from the C++ standard. |
+| `istream-nondet` | `std::cin` gives an unknown value for each arithmetic extraction. | An abstraction. The model uses only names from the C++ standard and the SV-COMP functions `__VERIFIER_nondet_*`. |
 | `libcxx-out-of-line` | The members of six exception classes, and `std::nothrow`, that libc++ keeps in its compiled library. The libc++ headers use them, for example in `vector::at` and `std::stable_sort`. | The same behavior and the same `what()` texts as libc++. The model uses two private libc++ names. |
 
 **The ostream-sink model.** The model replaces the `<ios>`, `<ostream>` and
@@ -960,14 +961,40 @@ The ostream-sink model has these limits:
   a `char*`. If the pointer is not valid, that read is undefined behavior. A
   verification tool cannot find this undefined behavior in the model. The
   program evaluates the operands as usual: `std::cout << f()` calls `f()`.
-- The model does not include input, string streams, file streams, stream
-  buffers, locales or format manipulators. For each of `<istream>`,
-  `<sstream>`, `<fstream>`, `<streambuf>`, `<strstream>`, `<syncstream>`,
-  `<iomanip>`, `<locale>` and `<print>`, the model has a header that stops the
-  compilation with an `#error` message. `std::cin` is not declared.
+- The model does not include string streams, file streams, stream buffers,
+  locales or format manipulators. For each of `<sstream>`, `<fstream>`,
+  `<streambuf>`, `<strstream>`, `<syncstream>`, `<iomanip>`, `<locale>` and
+  `<print>`, the model has a header that stops the compilation with an
+  `#error` message. The input (`<istream>` and `std::cin`) is in the
+  istream-nondet model. `<iostream>` needs that model.
 - Some libc++ headers use the libc++ stream code internally. `<chrono>`,
   `<complex>`, `<filesystem>`, `<format>` and `<thread>` do not compile with the
   model.
+
+**The istream-nondet model.** The model replaces the `<istream>` header and
+completes the declaration of `basic_istream` from `<iosfwd>`, as the
+ostream-sink model does. The `<iostream>` header of the ostream-sink model
+defines `std::cin`. The input of a verification task is unknown. Thus each
+extraction of an arithmetic value succeeds, and the variable gets the value of
+`__VERIFIER_nondet_<type>()`. The input never ends.
+
+| Part | libc++ | The model |
+|---|---|---|
+| `>>` for `bool`, `short`, `int`, `long`, `long long`, their unsigned forms, `float` and `double` | Reads and converts the text. At the end of the input or for text that is not a number, sets `failbit`. | Gives the variable an unknown value. Never fails. |
+| `std::ws`, `ignore()` | Skip input. | Do nothing. The next values stay unknown. |
+| `>>` for `char`, `char*`, `std::string`, `long double` and `void*`; `get()`, `getline()`, `read()`, `peek()` | Read characters or a value. | No definition. cir2c rejects the program. |
+| `good()`, `eof()`, `fail()`, `bad()`, `rdstate()`, `operator bool`, `operator!` of the input stream | Read the state. | No definition. cir2c rejects the program. |
+
+The model rejects these parts on purpose:
+
+- The input of characters and strings. A model of such input needs a bound on
+  the length of the input.
+- The state of the input stream. In the model, an extraction never fails. A
+  loop like `while (std::cin >> x)` would never end, and the code after it would
+  not be accessible. In the program, the loop ends at the end of the input. A
+  proof for the model would not be true for the program.
+- `long double` and `void*`. SV-COMP has no `__VERIFIER_nondet` function for
+  them.
 
 **The libcxx-out-of-line model.** The `prelude.h` file defines these members
 and objects as libc++ does. clang emits only the members and objects that the

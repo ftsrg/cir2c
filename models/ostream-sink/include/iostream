@@ -14,12 +14,15 @@
  * limitations under the License.
  */
 
-// cir2c model "ostream-sink": <iostream>, the output streams only (README 8.2).
+// cir2c model "ostream-sink": <iostream>, the standard streams (README 8.2).
+//
+// std::cin needs <istream> of the model "istream-nondet".
 
 #ifndef CIR2C_MODEL_OSTREAM_SINK_IOSTREAM
 #define CIR2C_MODEL_OSTREAM_SINK_IOSTREAM
 
 #include <ios>
+#include <istream>
 #include <ostream>
 
 namespace std {
@@ -29,6 +32,7 @@ namespace std {
 inline ostream cout;
 inline ostream cerr;
 inline ostream clog;
+inline istream cin;
 
 } // namespace std
 

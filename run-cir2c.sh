@@ -123,7 +123,7 @@ fi
 # header there replaces the libc++ header of the same name. clang reads
 # prelude.h before the first line of the program. To use other models, change
 # this list.
-MODELS=(libcxx-out-of-line ostream-sink)
+MODELS=(libcxx-out-of-line ostream-sink istream-nondet)
 MODEL_FLAGS=()
 if [[ "$LANG" == "c++" && "$EXTERNALIZE_STD" == false ]]; then
     declare -A MODEL_HEADERS=()

@@ -23,7 +23,13 @@
 #ifndef CIR2C_MODEL_OSTREAM_SINK_IOS
 #define CIR2C_MODEL_OSTREAM_SINK_IOS
 
+#include <cstddef>
 #include <iosfwd>
+
+namespace std {
+// [ios.syn]. libc++ defines it in <ios>, which this file replaces.
+typedef ptrdiff_t streamsize;
+} // namespace std
 
 class std::ios_base {
 public:

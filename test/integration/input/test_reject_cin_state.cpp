@@ -14,9 +14,19 @@
  * limitations under the License.
  */
 
+// In the istream-nondet model (README 8.2), an extraction never fails. A loop
+// like `while (cin >> x)` would not end, but in the program it ends at the end
+// of the input. Thus the model has no stream state for input.
 
-// cir2c model "ostream-sink" (README 8.2): <istream> is not modeled. Without
-// this file, the libc++ header would need the libc++ stream code that the
-// model replaces, and clang would report an error inside libc++.
+// cir2c-test-expect-error: These have no definition:
+// cir2c-test-expect-error: basic_istream<char, std::__1::char_traits<char> >::operator bool() const
 
-#error "cir2c model ostream-sink: <istream> is not modeled (input, std::cin). The model supports output to std::cout, std::cerr and std::clog only."
+#include <iostream>
+
+int main() {
+  int value = 0;
+  int sum = 0;
+  while (std::cin >> value)
+    sum += value;
+  return sum > 100 ? 1 : 0;
+}
