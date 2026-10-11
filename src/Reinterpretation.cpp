@@ -209,6 +209,33 @@ std::unique_ptr<mlir::DataLayout> findDataLayout(mlir::ModuleOp module) {
 
 } // namespace
 
+namespace {
+
+// The alignment of the C type that cir2c writes for \p t: 1 for a packed
+// struct, the largest alignment of the members for another struct.
+uint64_t cAlignment(mlir::Type t, const mlir::DataLayout &layout) {
+  if (auto array = mlir::dyn_cast<cir::ArrayType>(t))
+    return cAlignment(array.getElementType(), layout);
+  if (auto record = mlir::dyn_cast<cir::RecordType>(t)) {
+    if (!record.isComplete() || record.getPacked()) return 1;
+    uint64_t align = 1;
+    for (mlir::Type member : record.getMembers())
+      align = std::max(align, cAlignment(member, layout));
+    return align;
+  }
+  return layout.getTypeABIAlignment(t);
+}
+
+} // namespace
+
+std::string Mapper::localAlignmentAttribute(mlir::Type type, mlir::IntegerAttr align) {
+  if (!align || !type) return "";
+  if (!dataLayout_) return "";
+  uint64_t wanted = align.getValue().getZExtValue();
+  if (wanted <= cAlignment(type, *dataLayout_)) return "";
+  return " __attribute__((aligned(" + std::to_string(wanted) + ")))";
+}
+
 bool Mapper::reinterpretsObject(mlir::Type object, mlir::Type view) {
   if (object == view) return false;
   // Two CIR types with one C type, `void *`. (mapTypeToC is not usable here:
@@ -338,13 +365,16 @@ void Mapper::planUnionSlots(mlir::ModuleOp module) {
   for (mlir::Operation *cast : unionSlotCasts_) addView(cast->getResult(0));
 }
 
-bool Mapper::emitUnionSlot(mlir::Value result, const std::string &name, std::ostream &out) {
+bool Mapper::emitUnionSlot(mlir::Value result, const std::string &name,
+                           const std::string &alignAttr, std::ostream &out) {
   auto it = unionSlotTypes_.find(result);
   if (it == unionSlotTypes_.end()) return false;
   out << "  union {";
   for (size_t i = 0; i < it->second.size(); ++i)
     out << " " << mapTypeToC(it->second[i]) << " v" << i << ";";
-  out << " } " << name << ";\n";
+  // The other members can give the union a larger alignment; an extra
+  // attribute does not hurt.
+  out << " } " << name << alignAttr << ";\n";
   ensureMemsetDeclared();
   out << "  memset(&" << name << ", 0, sizeof " << name << ");\n";
   unionSlotNames_[result] = name;

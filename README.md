@@ -1199,6 +1199,14 @@ test. Try the two modes when a translation fails.
   `X.base` for a base subobject, without the tail padding. cir2c writes
   `X.base` as its own struct, `<tag of X>__base`. A record that CIR marks as
   packed gets `__attribute__((packed))`, and a verification tool must honor it.
+- In C, a packed struct has the alignment 1, but its C++ objects have the
+  alignment of the class, for example 8. The address of a member, for example
+  `&node->right`, is aligned only when the object is aligned (C11 6.3.2.3p7).
+  Thus a local or global variable gets the alignment of the CIR, for example
+  `struct Node node2 __attribute__((aligned(8)));`, when it is larger than the
+  alignment of its C type. An object from `malloc` is always aligned. clang
+  still warns (`-Waddress-of-packed-member`), because it cannot see the object
+  at the address operation. gcc-5 and clang-3.9 do not have this warning.
 - The output uses the target of the pinned toolchain. Do not give the output to a
   tool with a different data model, for example a 32-bit model or a different
   byte sequence.
@@ -1329,6 +1337,10 @@ warning of cir2c. Write the text in a line that starts with
 A test can also forbid a text in the output C code. Write the text in a line
 that starts with `// cir2c-test-output-lacks: `. The test fails when the output
 contains the text.
+
+A test can also require a text in the output C code. Write the text in a line
+that starts with `// cir2c-test-output-contains: `. The test fails when the
+output does not contain the text.
 
 A test can also require that the output C code compiles with more compiler
 options, for example `-Werror=uninitialized`. Write the options in a line that

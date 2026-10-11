@@ -569,9 +569,15 @@ public:
   /// Query whether an alloca result Value is accessed with volatile semantics.
   bool isVolatileAlloca(mlir::Value v) const { return volatileAllocaValues_.count(v) > 0; }
 
+  /// ` __attribute__((aligned(N)))` for a local variable of CIR type \p type
+  /// whose CIR alignment \p align is larger than the alignment of the C type
+  /// that cir2c writes, and "" otherwise. A packed struct has the alignment 1
+  /// in C, but its objects have the alignment of the C++ class.
+  std::string localAlignmentAttribute(mlir::Type type, mlir::IntegerAttr align);
   /// Union slots (issue #11). Declare the alloca \p result as a union named
   /// \p name when the pre-scan planned one. Returns false otherwise.
-  bool emitUnionSlot(mlir::Value result, const std::string &name, std::ostream &out);
+  bool emitUnionSlot(mlir::Value result, const std::string &name,
+                     const std::string &alignAttr, std::ostream &out);
   /// Name the result of \p castOp as a member of a union slot. Returns false
   /// when the cast does not read a union slot.
   bool mapUnionSlotView(mlir::Operation *castOp);

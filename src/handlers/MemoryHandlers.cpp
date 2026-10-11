@@ -92,6 +92,9 @@ private:
     // Get the allocated type (first operand type in the operation signature)
     // cir.alloca returns a pointer, but we want to declare the variable as the pointed-to type
     Type allocaTy = op.getAllocaType();
+    // The alignment of the C++ object, when the C type has a smaller one: a
+    // packed struct has the alignment 1 in C (issue #12).
+    std::string alignAttr = m.localAlignmentAttribute(allocaTy, op.getAlignmentAttr());
 
     // Variable-length array: a dynamic alloc-size operand makes this a VLA.
     // Map it to a C99 VLA `T name[n]` so its lifetime is managed by the
@@ -102,7 +105,7 @@ private:
       std::string dims;
       std::string elemCType = m.arrayBaseTypeAndDims(allocaTy, dims);
       out << "  " << qualPrefix << elemCType << " " << uniqueVarName
-          << "[" << sizeName << "]" << dims << ";\n";
+          << "[" << sizeName << "]" << dims << alignAttr << ";\n";
       for (Value res : o->getResults()) {
         m.setName(res, uniqueVarName);
         m.markAsDirectAccess(res);
@@ -111,7 +114,8 @@ private:
     }
 
     // A variable that the CIR also reads as another type (issue #11).
-    if (o->getNumResults() > 0 && m.emitUnionSlot(o->getResult(0), uniqueVarName, out))
+    if (o->getNumResults() > 0 &&
+        m.emitUnionSlot(o->getResult(0), uniqueVarName, alignAttr, out))
       return true;
 
     // Handle struct types first: use typed API instead of textual type string inspection.
@@ -129,7 +133,7 @@ private:
       std::string init = (noData && qualPrefix.find("_Atomic") == std::string::npos)
                              ? " = {0}"
                              : "";
-      out << "  " << qualPrefix << ctype << " " << uniqueVarName << init << ";\n";
+      out << "  " << qualPrefix << ctype << " " << uniqueVarName << alignAttr << init << ";\n";
       for (Value res : o->getResults()) {
         m.setName(res, uniqueVarName);
         m.markAsDirectAccess(res);
@@ -142,7 +146,7 @@ private:
     if (auto arrayTy = llvm::dyn_cast<cir::ArrayType>(allocaTy)) {
       std::string dims;
       std::string elemCType = m.arrayBaseTypeAndDims(arrayTy, dims);
-      out << "  " << qualPrefix << elemCType << " " << uniqueVarName << dims << ";\n";
+      out << "  " << qualPrefix << elemCType << " " << uniqueVarName << dims << alignAttr << ";\n";
       for (Value res : o->getResults()) {
         m.setName(res, uniqueVarName);
         m.markAsDirectAccess(res);
@@ -156,7 +160,7 @@ private:
       ctype = m.mapTypeToC(allocaTy);
     }
 
-    out << "  " << qualPrefix << ctype << " " << uniqueVarName << ";\n";
+    out << "  " << qualPrefix << ctype << " " << uniqueVarName << alignAttr << ";\n";
     for (Value res : o->getResults()) {
       m.setName(res, uniqueVarName);
       m.markAsDirectAccess(res); // Mark alloca results as direct access
