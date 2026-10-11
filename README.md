@@ -304,16 +304,15 @@ steps: `clang -emit-cir`, then preprocessing, then optional flattening, then
 
 The script makes the output directory if it is not there.
 
-The script removes the directory of the input from `__FILE__`, for example in
-the message of an assertion. It also removes the directories of the models and
-of libc++ from `__FILE__` in their headers. Thus the output does not contain a
-local path, and the output is the same in each directory.
+The script gives these options to `clang`, in addition to the options of the
+table below. Each option changes the CIR, so record them with a result.
 
-For C++ input, the script gives the `-fno-threadsafe-statics` option to clang.
-The output C program has one thread. With this option, a flag guards the
-initialization of a static local variable. Without it, clang calls the
-`__cxa_guard_*` functions of the C++ runtime, and the output does not contain
-them.
+| Option | Input | Function |
+|---|---|---|
+| `-fmacro-prefix-map=<dir>/=` | C and C++ | Removes the directory from `__FILE__`. The script gives one option for the directory of the input file, one for `models/`, and one for the libc++ headers. Thus the message of an assertion contains `main.cpp`, not `/home/user/tasks/main.cpp`, and the output does not change with the directory of the translation. |
+| `-stdlib=libc++ -nostdinc++ -isystem <libc++>` | C++ | Uses the libc++ headers of the toolchain (see [8.2](#82-the-standard-library)). |
+| `-fno-threadsafe-statics` | C++ | A plain flag guards the initialization of a static local variable, for example `static int v = f();`. Without this option, clang calls `__cxa_guard_acquire` and `__cxa_guard_release` of the C++ runtime, which lock the variable against other threads. The output does not contain these functions. For a program with one thread, the two forms have the same behavior: the initializer runs once, and when it throws, the next call runs it again. |
+| `-I`, `-include` of the models | C++, `--no-externalize-std` | See [8.2](#82-the-standard-library). |
 
 ```
 run-cir2c.sh [OPTIONS] <input-file> <output.c>
