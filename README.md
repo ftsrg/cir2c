@@ -880,6 +880,7 @@ incorrect code. The corpus tests ignore these constructions. The
 | Floating-point classification | `cir.is_fp_class` | There is no portable C function. |
 | 128-bit integers | `cir.int<s,128>`, `cir.int<u,128>` | Not supported. This also stops cir2c. |
 | MSVC SEH | `cir.eh.setjmp`, `cir.eh.longjmp` | This control flow has no model here. |
+| Virtual base classes | `cir.vtt.address_point`, a VTT or construction vtable (`_ZTT…`, `_ZTC…`), a vtable of a class with a virtual base | The vtables have no virtual-base offsets yet, and the VTT is not real (issue #3). cir2c stops with an error instead of a translation that gives wrong values. The blocklist does not contain this construction: cir2c gives the error. |
 | Computed goto | `cir.indirect_br` | The GNU `&&label` and `goto *p` extensions have no ISO C equivalent. A sound translation must change the function into a switch statement on a label number. cir2c does not do this yet. |
 
 Clang cannot make CIR for some other constructions. In this condition,
@@ -1104,9 +1105,9 @@ These limits apply:
 - cir2c knows only the types that the module throws. For a module without
   `main()`, an exception from another part of the program matches only a
   handler of its own type.
-- The offset of a virtual base class is in the vtable of the object (see 8.7).
-  cir2c stops with an error when a handler can match a thrown type through a
-  virtual base class.
+- The offset of a virtual base class is in the vtable of the object. cir2c
+  stops with an error for a program with a virtual base (see 8.1), and also
+  when a handler can match a thrown type through a virtual base class.
 
 The global-variable model has these other effects:
 

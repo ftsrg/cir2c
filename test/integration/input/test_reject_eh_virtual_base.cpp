@@ -16,9 +16,10 @@
 
 // Issue #2 and #3: a handler of a virtual base class needs the offset of the
 // virtual base, which is in the vtable of the object. cir2c does not translate
-// virtual bases yet, so it rejects such a handler.
+// virtual bases yet, so it rejects the program. The general rejection of #3
+// part 2 comes before the check of the handler selection.
 
-// cir2c-test-expect-error: through a virtual base class
+// cir2c-test-expect-error: the program uses a virtual base class
 
 struct Base { int b; };
 struct Derived : virtual Base { int d; };

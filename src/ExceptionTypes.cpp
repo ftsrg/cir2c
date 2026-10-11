@@ -323,4 +323,50 @@ void Mapper::emitExceptionMatchers(std::ostream &out) {
   ehMatchersPending_.clear();
 }
 
+bool Mapper::rejectVirtualBases(mlir::ModuleOp module) {
+  // The classes with a virtual base, directly or through a base class.
+  std::function<bool(const std::string &, int)> hasVirtualBase =
+      [&](const std::string &cls, int depth) {
+        auto it = ehTypeInfos_.find(cls);
+        if (it == ehTypeInfos_.end() || depth > 64) return false;
+        for (const EhBase &base : it->second.bases)
+          if (base.isVirtual || hasVirtualBase(base.sym, depth + 1)) return true;
+        return false;
+      };
+  std::string what;
+  module->walk([&](cir::GlobalOp global) {
+    if (!what.empty()) return;
+    auto symAttr = symbolNameAttr(global);
+    if (!symAttr) return;
+    std::string sym = symAttr.getValue().str();
+    if (globalElided(sym)) return;
+    if (sym.rfind("_ZTT", 0) == 0 || sym.rfind("_ZTC", 0) == 0) {
+      what = demangle(sym);
+      return;
+    }
+    if (sym.rfind("_ZTV", 0) != 0) return;
+    auto init = global.getInitialValue();
+    auto vtable = init ? mlir::dyn_cast<cir::VTableAttr>(*init) : cir::VTableAttr();
+    if (!vtable) return;
+    // The RTTI entries of the vtable name its class.
+    vtable.walk([&](cir::GlobalViewAttr view) {
+      std::string target = view.getSymbol().getValue().str();
+      if (what.empty() && target.rfind("_ZTI", 0) == 0 && hasVirtualBase(target, 0))
+        what = demangle(sym);
+    });
+  });
+  module->walk([&](cir::VTTAddrPointOp op) {
+    if (!what.empty()) return;
+    auto func = op->getParentOfType<cir::FuncOp>();
+    auto funcSym = func ? symbolNameAttr(func) : mlir::StringAttr();
+    if (!funcSym || !funcDefElided(funcSym.getValue()))
+      what = "a VTT in " + (funcSym ? demangle(funcSym.getValue()) : std::string("a global"));
+  });
+  if (what.empty()) return true;
+  llvm::errs() << "cir2c: error: the program uses a virtual base class (" << what
+               << "). cir2c does not translate virtual bases yet: the vtables have no "
+                  "virtual-base offsets (issue #3).\n";
+  return false;
+}
+
 } // namespace cir2c

@@ -433,6 +433,9 @@ private:
   std::set<std::string> ehMatchersPlanned_;
   std::vector<std::string> ehMatchersPending_;
   void planExceptionTypes(mlir::ModuleOp module);
+  // Issue #3 part 2: false, with an error message, when the output would use a
+  // virtual base class.
+  bool rejectVirtualBases(mlir::ModuleOp module);
   EhMatch matchClass(const std::string &thrown, const std::string &handler) const;
   EhMatch matchHandler(const std::string &thrown, const std::string &handler) const;
   // Alloca result Values that are accessed atomically / volatilely.

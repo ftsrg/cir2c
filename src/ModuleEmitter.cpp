@@ -1683,7 +1683,10 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   // externalization) can be elided. Computed once for the whole module tree.
   computeReachableDefs(module);
   computeMayThrow(module);
-  if (isTopLevelModule) planExceptionTypes(module);
+  if (isTopLevelModule) {
+    planExceptionTypes(module);
+    if (!rejectVirtualBases(module)) return false;
+  }
   planReceiverWrappers(module);
 
   // Visit \p root and every module nested inside it. A module-level attribute is
