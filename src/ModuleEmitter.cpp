@@ -1683,6 +1683,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   // externalization) can be elided. Computed once for the whole module tree.
   computeReachableDefs(module);
   computeMayThrow(module);
+  if (isTopLevelModule) planExceptionTypes(module);
   planReceiverWrappers(module);
 
   // Visit \p root and every module nested inside it. A module-level attribute is
@@ -2485,6 +2486,10 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     // ABI where __cxa_end_catch destroys the exception when the last handler
     // exits. Stored as void* and called through a (void(*)(void*)) cast.
     out << "static void *__cir_exc_dtor;\n";
+    // The address of the subobject that the selected handler binds, and the
+    // converted pointer for a pointer handler (see ExceptionTypes.cpp).
+    out << "static void *__cir_exc_adj;\n";
+    out << "static void *__cir_exc_pval;\n";
     if (!ehTypeSymbols_.empty()) {
       out << "// Per-RTTI address tags: each thrown/caught type symbol gets a\n"
           << "// distinct storage location so catch dispatch is a pointer compare.\n";
@@ -2774,6 +2779,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   verifierDeclsBuf_.clear();
   if (!decls.empty()) out << decls;
   out << funcsBuf.str();
+  emitExceptionMatchers(out);
 
   // Each function and global is processed now, so the list of undefined
   // symbols is complete. Stop before any output (see requireDefinition). The

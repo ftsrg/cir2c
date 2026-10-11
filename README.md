@@ -1079,14 +1079,34 @@ To correct the error, add a model of the missing part, or use the
 
 ### 8.3 Exceptions
 
-**The catch selection does not use inheritance.** cir2c compares the RTTI tag by
-exact pointer equality. Thus a `catch (Base&)` clause does not operate for a
-`Derived` exception. In the model, the handler is not accessible. In the
-program, the handler operates.
+**The selection of a handler.** A handler of type `H` matches an exception of
+type `E` as in C++ ([except.handle]/3): when `E` is `H`, when `H` is an
+unambiguous public base class of `E`, or when `H` and `E` are pointers and `E`
+converts to `H` (more qualifiers, `void *`, or a pointer to an unambiguous
+public base class). cir2c decides each pair during the translation, from the
+RTTI objects of the CIR, and writes one function for each handler type:
 
-This is conservative. The model examines fewer handler paths. A proof that an
-error is not accessible is true. But you cannot show that the program catches an
-exception.
+```c
+static int __cir_eh_match__ZTI4Base(void) {
+  if (__cir_exc_type == (const void*)__cir_eh_type__ZTI4Base) { __cir_exc_adj = __cir_exc_ptr; return 1; }
+  if (__cir_exc_type == (const void*)__cir_eh_type__ZTI5Multi) { __cir_exc_adj = (void*)((char*)__cir_exc_ptr + 4); return 1; }
+  return 0;
+}
+```
+
+The handler binds `__cir_exc_adj`, the address of the base subobject. A pointer
+handler binds `__cir_exc_pval`, the converted pointer; a null pointer stays
+null. `__cir_exc_ptr` and `__cir_exc_type` keep the exception object and its
+type, for a rethrow and for the destructor at the end of the handler.
+
+These limits apply:
+
+- cir2c knows only the types that the module throws. For a module without
+  `main()`, an exception from another part of the program matches only a
+  handler of its own type.
+- The offset of a virtual base class is in the vtable of the object (see 8.7).
+  cir2c stops with an error when a handler can match a thrown type through a
+  virtual base class.
 
 The global-variable model has these other effects:
 

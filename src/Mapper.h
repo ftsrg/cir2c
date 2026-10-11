@@ -29,6 +29,7 @@
 #include <ostream>
 #include <sstream>
 #include <memory>
+#include <map>
 #include <set>
 #include <string>
 #include <functional>
@@ -407,6 +408,33 @@ private:
   std::set<std::string> droppableGlobals_; // linkonce/weak globals eligible to drop
   bool mayThrowComputed_ = false;
   std::set<std::string> mayThrowFuncs_;   // functions that can leave an exception
+  // Handler selection (issue #2, src/ExceptionTypes.cpp).
+  struct EhBase {
+    std::string sym;  // RTTI symbol of the base class
+    int64_t offset;   // offset of the base subobject (non-virtual bases)
+    bool isPublic;
+    bool isVirtual;
+  };
+  struct EhTypeInfo {
+    enum Kind { Unknown, Class, Pointer } kind = Unknown;
+    std::vector<EhBase> bases;  // Class
+    std::string pointee;        // Pointer: RTTI symbol of the pointee
+    unsigned quals = 0;         // Pointer: 1 const, 2 volatile, 4 restrict
+  };
+  struct EhMatch {
+    bool matches = false;
+    bool unsupported = false;  // the match goes through a virtual base
+    bool converts = false;     // a pointer conversion
+    bool nullValue = false;    // a thrown std::nullptr_t
+    int64_t offset = 0;        // of the base subobject
+  };
+  std::map<std::string, EhTypeInfo> ehTypeInfos_;
+  std::map<std::string, mlir::Type> ehThrownTypes_;  // RTTI symbol -> thrown type
+  std::set<std::string> ehMatchersPlanned_;
+  std::vector<std::string> ehMatchersPending_;
+  void planExceptionTypes(mlir::ModuleOp module);
+  EhMatch matchClass(const std::string &thrown, const std::string &handler) const;
+  EhMatch matchHandler(const std::string &thrown, const std::string &handler) const;
   // Alloca result Values that are accessed atomically / volatilely.
   llvm::DenseSet<mlir::Value> atomicAllocaValues_;
   llvm::DenseSet<mlir::Value> volatileAllocaValues_;
@@ -632,6 +660,15 @@ public:
     if (!sym.empty()) ehTypeSymbols_.insert(sym);
     hasExceptions_ = true;
   }
+  /// Handler selection (issue #2, src/ExceptionTypes.cpp). Writes to \p call
+  /// the C call that selects the handler of RTTI symbol \p handler, and plans
+  /// its function. Returns false, with an error message, when a thrown type
+  /// can match the handler through a virtual base class.
+  bool exceptionMatchCall(const std::string &handler, std::string &call);
+  /// True when no other thrown type of the module matches the handler.
+  bool handlerMatchesOnlyItself(const std::string &handler) const;
+  /// Write the planned handler-selection functions.
+  void emitExceptionMatchers(std::ostream &out);
   /// The set of RTTI symbols that need per-type address tags emitted.
   const std::set<std::string> &getEhTypeSymbols() const { return ehTypeSymbols_; }
   /// Push a landing-pad label for the currently-open structured cir.try body.
