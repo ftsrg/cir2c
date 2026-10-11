@@ -137,6 +137,9 @@ private:
   static bool handleGetMember(cir::GetMemberOp op, Mapper &m, std::ostream &out) {
     Operation *o = op.getOperation();
     if (o->getNumOperands() < 1) return false;
+    // A member of a member-wise view (issue #11): its loads and stores name the
+    // variable itself.
+    if (m.isMemberwiseViewMember(o)) return true;
     Value base = o->getOperand(0);
     std::string baseName = m.getOrCreateName(base);
 

@@ -429,6 +429,26 @@ private:
   void planUnionSlots(mlir::ModuleOp module);
   std::string memberwiseCopy(mlir::Type type, const std::string &dst,
                              const std::string &src);
+  // Member-wise views: a read of a local variable as another type, where each
+  // scalar of the other type is exactly one scalar member of the variable
+  // (same offset, same size, same kind). The variable keeps its own type, and
+  // a load or a store through the bitcast converts the scalars one by one.
+  llvm::DenseSet<mlir::Operation *> memberwiseCasts_;
+  // The cir.get_member operations on a member-wise view; they write nothing.
+  llvm::DenseSet<mlir::Operation *> memberwiseMembers_;
+  // A member-wise view or a member of it -> the variable and the offset of the
+  // view part in it.
+  llvm::DenseMap<mlir::Value, std::pair<mlir::Value, uint64_t>> memberwiseViews_;
+  void addMemberwiseView(mlir::Value view, mlir::Value slot, uint64_t offset);
+  struct ScalarLeaf {
+    uint64_t offset;
+    mlir::Type type;
+    std::string path;  // member access from the object, for example ".a.p"
+  };
+  bool scalarLeaves(mlir::Type type, uint64_t offset, const std::string &path,
+                    std::vector<ScalarLeaf> &leaves) const;
+  bool pairScalarLeaves(mlir::Type object, mlir::Type view,
+                        std::vector<std::pair<ScalarLeaf, ScalarLeaf>> *pairs) const;
 
   // The C name of the last non-variadic parameter of the function currently
   // being mapped.  Set by mapFunc when the function is variadic (isVarArg).
@@ -530,6 +550,16 @@ public:
   bool copyThroughUnionSlot(mlir::Value dstAddr, mlir::Value srcAddr, mlir::Type type,
                             const std::string &dstExpr, const std::string &srcExpr,
                             bool declareDst, std::ostream &out);
+  /// Member-wise views (issue #11). Write a load of \p result through
+  /// \p addr, or a store of \p value through \p addr, as a conversion of
+  /// each scalar member when \p addr is a member-wise view of a local variable.
+  /// Returns false and writes nothing otherwise.
+  bool loadThroughMemberwiseView(mlir::Value addr, mlir::Value result, std::ostream &out);
+  bool storeThroughMemberwiseView(mlir::Value addr, mlir::Value value, std::ostream &out);
+  /// True when \p op is a cir.get_member on a member-wise view. It writes no C.
+  bool isMemberwiseViewMember(mlir::Operation *op) const {
+    return memberwiseMembers_.count(op) > 0;
+  }
   
   /// Returns the C name of the last named (non-variadic) parameter of the
   /// function body currently being mapped. Empty if the current function is

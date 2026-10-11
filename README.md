@@ -780,8 +780,30 @@ between the record and these values, the CIR stores one type into a local
 variable and reads the other type from the same address. In C, that read is
 undefined behavior (C11 6.5p7).
 
-Thus cir2c declares such a variable as a union of all the types that the CIR
-reads it as. Each read as another type becomes a read of the member of that
+Usually, each value of the other type is exactly one scalar member of the
+record: the same offset, the same size and the same kind. Examples are an
+iterator `{ int *p; }` that travels as one pointer, and a
+`{ const char *p; unsigned long n; }` that travels as a pointer and an integer.
+Then the variable keeps its type, and cir2c converts the values one by one. The
+CIR has only an untyped pointer, so a pointer member travels as `void *`:
+
+```c
+struct Iter coerce61;
+/* ... */
+void* t62 = (void*)coerce61.p;     /* the read as the other type */
+int r63 = f(t62);
+```
+
+The kinds are an object pointer (converted through `void *`, C11 6.3.2.3p1),
+an integer or a `bool` (converted to the integer of the same size), and `float`
+and `double` (the same type). These conversions do not change the value.
+cir2c makes this check on the two CIR types of the variable. It does not use
+the signature of the function, which the CIR does not keep. A member that is
+an array, a union, a bit-field or a vector, and a type of another kind, for
+example `long double`, prevent the conversion.
+
+Otherwise, for example when one integer holds two members, cir2c declares such
+a variable as a union of all the types that the CIR reads it as. Each read as another type becomes a read of the member of that
 type. For a `struct P { char c; int i; }` that a function returns:
 
 ```c

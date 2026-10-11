@@ -31,6 +31,12 @@
 // 6.5.2.3 (note 95) defines a read through another member: it reinterprets the
 // bytes.
 //
+// A member-wise view needs no union: each scalar of the other type is exactly
+// one scalar member of the variable, at the same offset, with the same size and
+// kind (a pointer, an integer or bool, a float, a double). Then the variable
+// keeps its type, and a load or a store through the bitcast converts the
+// scalars one by one. The check uses only the two CIR types of the variable.
+//
 // A struct goes into and out of the union member by member:
 //   * The union is zeroed at its declaration. A copy of a whole struct would
 //     also copy its padding, which nothing wrote, and the other member would
@@ -47,11 +53,13 @@
 
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 #include <clang/CIR/Dialect/IR/CIRTypes.h>
+#include <llvm/ADT/MapVector.h>
 #include <llvm/Support/raw_ostream.h>
 
 #include <algorithm>
 #include <cctype>
 #include <functional>
+#include <sstream>
 
 namespace cir2c {
 
@@ -148,6 +156,48 @@ bool isPlainLvalue(const std::string &e) {
   return true;
 }
 
+// True when every use of the pointer \p v is a plain load from it, a plain
+// store to it, or a member access with the same uses. The handlers write each
+// load and store as a conversion of the scalar members.
+bool usedOnlyForLoadAndStore(mlir::Value v) {
+  for (mlir::OpOperand &use : v.getUses()) {
+    mlir::Operation *user = use.getOwner();
+    if (auto load = mlir::dyn_cast<cir::LoadOp>(user)) {
+      if (load.getMemOrderAttr() || load.getIsVolatile()) return false;
+      continue;
+    }
+    if (auto store = mlir::dyn_cast<cir::StoreOp>(user)) {
+      if (store.getMemOrderAttr() || store.getIsVolatile()) return false;
+      if (use.getOperandNumber() != 1) return false;
+      continue;
+    }
+    if (auto member = mlir::dyn_cast<cir::GetMemberOp>(user)) {
+      if (!usedOnlyForLoadAndStore(member.getResult())) return false;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+// The kind of a scalar for a member-wise view. Two scalars of one kind and one
+// size convert to each other without a change of the value: an object pointer
+// through `void *` (C11 6.3.2.3p1; a function pointer is `void *` in the
+// output), an integer or a bool to an integer of the same width (C11 6.3.1.3;
+// a bool holds 0 or 1), a float or a double to the same type. 0: no scalar
+// of these kinds, for example an array, a vector or a long double.
+int scalarKind(mlir::Type t) {
+  if (mlir::isa<cir::PointerType, cir::VPtrType>(t)) return 1;
+  if (mlir::isa<cir::BoolType>(t)) return 2;
+  if (auto it = mlir::dyn_cast<cir::IntType>(t)) {
+    unsigned w = it.getWidth();
+    return (w == 8 || w == 16 || w == 32 || w == 64) ? 2 : 0;
+  }
+  if (mlir::isa<cir::SingleType>(t)) return 3;
+  if (mlir::isa<cir::DoubleType>(t)) return 4;
+  return 0;
+}
+
 // The data layout of the CIR module, which is a module nested in \p module.
 std::unique_ptr<mlir::DataLayout> findDataLayout(mlir::ModuleOp module) {
   std::unique_ptr<mlir::DataLayout> layout;
@@ -184,8 +234,54 @@ bool Mapper::reinterpretsObject(mlir::Type object, mlir::Type view) {
   return true;
 }
 
+bool Mapper::scalarLeaves(mlir::Type type, uint64_t offset, const std::string &path,
+                          std::vector<ScalarLeaf> &leaves) const {
+  if (scalarKind(type) != 0) {
+    leaves.push_back({offset, type, path});
+    return true;
+  }
+  // A struct, also nested, gives the scalars of its data members. A union, a
+  // bit-field, an array and every other type keep the union slot.
+  auto record = mlir::dyn_cast<cir::RecordType>(type);
+  if (!record || !record.isComplete() || record.isUnion() || !dataLayout_) return false;
+  llvm::ArrayRef<mlir::Type> members = record.getMembers();
+  llvm::ArrayRef<cir::RecordMemberKind> kinds = record.getMemberKinds();
+  std::string tag = (record.getName() && !record.getName().getValue().empty())
+                        ? recordCName(record.getName())
+                        : anonRecordCName(record);
+  for (size_t i = 0; i < members.size(); ++i) {
+    if (!isDataMember(record, i)) continue;
+    if (i < kinds.size() && kinds[i] == cir::RecordMemberKind::BitField) return false;
+    std::string field = lookupFieldName(tag, static_cast<int>(i));
+    if (field.empty()) field = "__field" + std::to_string(i);
+    uint64_t memberOffset = offset + record.getElementOffset(*dataLayout_, i);
+    if (!scalarLeaves(members[i], memberOffset, path + "." + field, leaves)) return false;
+  }
+  return true;
+}
+
+bool Mapper::pairScalarLeaves(mlir::Type object, mlir::Type view,
+                              std::vector<std::pair<ScalarLeaf, ScalarLeaf>> *pairs) const {
+  std::vector<ScalarLeaf> a, b;
+  if (!scalarLeaves(object, 0, "", a) || !scalarLeaves(view, 0, "", b)) return false;
+  if (a.empty() || a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (a[i].offset != b[i].offset) return false;
+    int kind = scalarKind(a[i].type);
+    if (kind != scalarKind(b[i].type)) return false;
+    if (dataLayout_->getTypeSize(a[i].type) != dataLayout_->getTypeSize(b[i].type))
+      return false;
+  }
+  if (pairs)
+    for (size_t i = 0; i < a.size(); ++i) pairs->push_back({a[i], b[i]});
+  return true;
+}
+
 void Mapper::planUnionSlots(mlir::ModuleOp module) {
   if (!dataLayout_) dataLayout_ = findDataLayout(module);
+  // In the order of the walk, so that the output does not depend on pointer
+  // values.
+  llvm::MapVector<mlir::Value, std::vector<mlir::Operation *>> candidates;
   module->walk([&](cir::CastOp cast) {
     if (cast.getKind() != cir::CastKind::bitcast) return;
     auto alloca = cast.getSrc().getDefiningOp<cir::AllocaOp>();
@@ -201,11 +297,35 @@ void Mapper::planUnionSlots(mlir::ModuleOp module) {
     for (mlir::Type t : {own, view})
       if (mlir::isa<cir::ArrayType, cir::VectorType>(t)) return;
     if (!reinterpretsObject(own, view) || !usedOnlyForAccess(cast.getResult())) return;
-    std::vector<mlir::Type> &types = unionSlotTypes_[slot];
-    if (types.empty()) types.push_back(own);
-    if (std::find(types.begin(), types.end(), view) == types.end()) types.push_back(view);
-    unionSlotCasts_.insert(cast.getOperation());
+    candidates[slot].push_back(cast.getOperation());
   });
+  // A variable keeps its own type when each of its views is member-wise.
+  // Otherwise it becomes a union of all its types.
+  for (auto &candidate : candidates) {
+    mlir::Value slot = candidate.first;
+    mlir::Type own = slot.getDefiningOp<cir::AllocaOp>().getAllocaType();
+    bool memberwise = true;
+    for (mlir::Operation *castOp : candidate.second) {
+      auto cast = mlir::cast<cir::CastOp>(castOp);
+      mlir::Type view = mlir::cast<cir::PointerType>(cast.getType()).getPointee();
+      memberwise = memberwise && usedOnlyForLoadAndStore(cast.getResult()) &&
+                   pairScalarLeaves(own, view, nullptr);
+    }
+    if (memberwise) {
+      for (mlir::Operation *castOp : candidate.second) {
+        memberwiseCasts_.insert(castOp);
+        addMemberwiseView(castOp->getResult(0), slot, 0);
+      }
+      continue;
+    }
+    std::vector<mlir::Type> &types = unionSlotTypes_[slot];
+    types.push_back(own);
+    for (mlir::Operation *castOp : candidate.second) {
+      mlir::Type view = mlir::cast<cir::PointerType>(castOp->getResult(0).getType()).getPointee();
+      if (std::find(types.begin(), types.end(), view) == types.end()) types.push_back(view);
+      unionSlotCasts_.insert(castOp);
+    }
+  }
   // The C names of these values are a member of a union slot, or a member of
   // such a member.
   std::function<void(mlir::Value)> addView = [&](mlir::Value v) {
@@ -234,6 +354,8 @@ bool Mapper::emitUnionSlot(mlir::Value result, const std::string &name, std::ost
 }
 
 bool Mapper::mapUnionSlotView(mlir::Operation *castOp) {
+  // The loads and stores through a member-wise view name the variable itself.
+  if (memberwiseCasts_.count(castOp)) return true;
   if (!unionSlotCasts_.count(castOp)) return false;
   auto cast = mlir::cast<cir::CastOp>(castOp);
   mlir::Value slot = cast.getSrc();
@@ -297,12 +419,98 @@ bool Mapper::copyThroughUnionSlot(mlir::Value dstAddr, mlir::Value srcAddr, mlir
   return true;
 }
 
+void Mapper::addMemberwiseView(mlir::Value view, mlir::Value slot, uint64_t offset) {
+  memberwiseViews_[view] = {slot, offset};
+  auto pointer = mlir::cast<cir::PointerType>(view.getType());
+  auto record = mlir::dyn_cast<cir::RecordType>(pointer.getPointee());
+  for (mlir::Operation *user : view.getUsers()) {
+    auto member = mlir::dyn_cast<cir::GetMemberOp>(user);
+    if (!member || !record) continue;
+    memberwiseMembers_.insert(user);
+    addMemberwiseView(member.getResult(), slot,
+                      offset + record.getElementOffset(*dataLayout_, member.getIndex()));
+  }
+}
+
+bool Mapper::loadThroughMemberwiseView(mlir::Value addr, mlir::Value result,
+                                       std::ostream &out) {
+  // The scalar of the variable at an offset, or null.
+  auto leafAt = [](const std::vector<ScalarLeaf> &leaves, uint64_t offset) -> const ScalarLeaf * {
+    for (const ScalarLeaf &leaf : leaves)
+      if (leaf.offset == offset) return &leaf;
+    return nullptr;
+  };
+  auto view = memberwiseViews_.find(addr);
+  if (view == memberwiseViews_.end()) return false;
+  mlir::Value slot = view->second.first;
+  std::vector<ScalarLeaf> own, part;
+  if (!scalarLeaves(slot.getDefiningOp<cir::AllocaOp>().getAllocaType(), 0, "", own) ||
+      !scalarLeaves(result.getType(), view->second.second, "", part))
+    return false;
+  std::string object = getOrCreateName(slot);
+  std::string ctype = mapTypeToC(result.getType());
+  std::string tmp = freshName("t");
+  std::ostringstream code;
+  if (part.size() == 1 && part[0].path.empty()) {
+    const ScalarLeaf *from = leafAt(own, part[0].offset);
+    if (!from) return false;
+    code << "  " << ctype << " " << tmp << " = (" << ctype << ")" << object << from->path
+         << ";\n";
+  } else {
+    code << "  " << ctype << " " << tmp << ";\n";
+    for (const ScalarLeaf &to : part) {
+      const ScalarLeaf *from = leafAt(own, to.offset);
+      if (!from) return false;
+      code << "  " << tmp << to.path << " = (" << mapTypeToC(to.type) << ")" << object
+           << from->path << ";\n";
+    }
+  }
+  out << code.str();
+  setName(result, tmp);
+  return true;
+}
+
+bool Mapper::storeThroughMemberwiseView(mlir::Value addr, mlir::Value value,
+                                        std::ostream &out) {
+  // The scalar of the variable at an offset, or null.
+  auto leafAt = [](const std::vector<ScalarLeaf> &leaves, uint64_t offset) -> const ScalarLeaf * {
+    for (const ScalarLeaf &leaf : leaves)
+      if (leaf.offset == offset) return &leaf;
+    return nullptr;
+  };
+  auto view = memberwiseViews_.find(addr);
+  if (view == memberwiseViews_.end()) return false;
+  mlir::Value slot = view->second.first;
+  std::vector<ScalarLeaf> own, part;
+  if (!scalarLeaves(slot.getDefiningOp<cir::AllocaOp>().getAllocaType(), 0, "", own) ||
+      !scalarLeaves(value.getType(), view->second.second, "", part))
+    return false;
+  std::string object = getOrCreateName(slot);
+  std::string source = getOrCreateName(value);
+  std::ostringstream code;
+  if (!isPlainLvalue(source)) {
+    std::string tmp = freshName("t");
+    code << "  " << mapTypeToC(value.getType()) << " " << tmp << " = " << source << ";\n";
+    source = tmp;
+  }
+  for (const ScalarLeaf &from : part) {
+    const ScalarLeaf *to = leafAt(own, from.offset);
+    if (!to) return false;
+    code << "  " << object << to->path << " = (" << mapTypeToC(to->type) << ")" << source
+         << from.path << ";\n";
+  }
+  out << code.str();
+  return true;
+}
+
 void Mapper::reportReinterpretations(mlir::ModuleOp module) {
   if (!dataLayout_) dataLayout_ = findDataLayout(module);
   unsigned total = 0, onLocals = 0;
   std::string first;
   module->walk([&](cir::CastOp cast) {
-    if (cast.getKind() != cir::CastKind::bitcast || unionSlotCasts_.count(cast.getOperation())) return;
+    if (cast.getKind() != cir::CastKind::bitcast || unionSlotCasts_.count(cast.getOperation()) ||
+        memberwiseCasts_.count(cast.getOperation()))
+      return;
     auto from = mlir::dyn_cast<cir::PointerType>(cast.getSrc().getType());
     auto to = mlir::dyn_cast<cir::PointerType>(cast.getType());
     if (!from || !to || !reinterpretsObject(from.getPointee(), to.getPointee())) return;

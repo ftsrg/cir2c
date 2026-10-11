@@ -169,6 +169,10 @@ private:
     if (o->getNumOperands() < 1) return false;
     Value ptr = o->getOperand(0);
 
+    // A read of a local variable as another type, member by member (issue #11).
+    if (o->getNumResults() > 0 && m.loadThroughMemberwiseView(ptr, o->getResult(0), out))
+      return true;
+
     // Vtable dispatch chain: if loading from a tracked chain value, propagate
     // the chain and emit a C declaration when the loaded value will be referenced
     // by downstream ops (e.g. virtual-base offset computation).
@@ -234,6 +238,9 @@ private:
     if (o->getNumOperands() < 2) return false;
     Value val = o->getOperand(0);
     Value ptr = o->getOperand(1);
+
+    // A write of a local variable as another type, member by member (issue #11).
+    if (m.storeThroughMemberwiseView(ptr, val, out)) return true;
 
     // Vtable-pointer install: a constructor stores a !cir.vptr (from
     // cir.vtable.address_point, i.e. `&_ZTV[k]`) into the object's __vptr slot at
