@@ -48,7 +48,7 @@ private:
 
     // A vtable dispatch chain emits no C of its own: everything from
     // cir.vtable.get_vptr through the function-pointer load is suppressed, and
-    // the call site turns the whole chain into __cir2c_virtual_call_<sig>.
+    // the call site turns the whole chain into __VERIFIER_virtual_call_<sig>.
     //
     // A cast of the function pointer belongs to that chain. Upstream inserts one
     // whenever the callee signature differs from the vtable slot's — returning a

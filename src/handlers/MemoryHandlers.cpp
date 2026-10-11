@@ -180,7 +180,7 @@ private:
         bool isFnPtr = false;
         // If the result is a pointer to a function type this is the final
         // function-pointer load -- mark it so that handleCall can emit the
-        // __cir2c_virtual_call intrinsic.
+        // __VERIFIER_virtual_call intrinsic.
         if (auto ptrTy = mlir::dyn_cast<cir::PointerType>(result.getType()))
           if (mlir::isa<cir::FuncType>(ptrTy.getPointee())) {
             isFnPtr = true;

@@ -84,7 +84,7 @@ of these intrinsics in the output file.
 | Construction | Form in the output |
 |---|---|
 | Unknown value | `__VERIFIER_nondet_<type>()`, `__VERIFIER_nondet_memory(p, n)` |
-| Virtual dispatch | `__cir2c_virtual_call_<sig>(obj, slot, …)` with a vtable |
+| Virtual dispatch | `__VERIFIER_virtual_call_<sig>(obj, slot, …)` with a vtable |
 | `throw`, `try`, `catch` | The `__cir_exc_*` global variables and a comparison of the RTTI tag |
 | Static initialization | Calls to the global constructors at the start of `main` |
 | C++ names | Demangled and made safe: `ns::f(int)` becomes `ns__f_int` |
@@ -668,7 +668,7 @@ becomes a call to a wrapper function:
 
 ```c
 /* The vtable pointer of obj is at offset 0. The function is vtable[slot]. */
-int __cir2c_virtual_call_i_pv(void* __obj, int __slot) {
+int __VERIFIER_virtual_call_i_pv(void* __obj, int __slot) {
   void* __fn = ((void**)*(void**)__obj)[__slot];
   return ((int(*)(void*))__fn)(__obj);
 }
