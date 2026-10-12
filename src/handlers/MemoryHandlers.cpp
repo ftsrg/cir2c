@@ -34,6 +34,23 @@ using namespace mlir;
 
 namespace cir2c {
 
+// Whether a record holds data for argument passing. A member that is itself a
+// record holds data only when one of its own members does: clang treats a
+// record whose members are all records without data as empty for argument
+// passing, for example a wrapper that keeps only an empty function object.
+static bool recordHoldsDataForABI(cir::RecordType record) {
+  llvm::ArrayRef<mlir::Type> members = record.getMembers();
+  llvm::ArrayRef<cir::RecordMemberKind> kinds = record.getMemberKinds();
+  for (size_t i = 0; i < members.size() && i < kinds.size(); ++i) {
+    if (!cir::holdsDataForABI(members[i], kinds[i])) continue;
+    auto inner = mlir::dyn_cast<cir::RecordType>(members[i]);
+    if (inner && inner.isComplete() && !inner.isUnion() && !recordHoldsDataForABI(inner))
+      continue;
+    return true;
+  }
+  return false;
+}
+
 /// Handlers for memory allocation and basic load/store/copy operations:
 /// cir.alloca, cir.load, cir.store, cir.copy, cir.stack_save, cir.stack_restore.
 class MemoryHandlers : public HandlerModule {
@@ -128,8 +145,7 @@ private:
       // whose address is not taken is undefined (C11 6.3.2.1p2), so the
       // variable starts as zero.
       bool noData = recordTy.isComplete() && !recordTy.isUnion() &&
-                    !cir::anyMemberHoldsDataForABI(recordTy.getMembers(),
-                                                   recordTy.getMemberKinds());
+                    !recordHoldsDataForABI(recordTy);
       std::string init = (noData && qualPrefix.find("_Atomic") == std::string::npos)
                              ? " = {0}"
                              : "";

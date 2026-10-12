@@ -38,9 +38,24 @@ int pick(Less c, int a, int b) { return c(a, b) ? a : b; }
 
 int tagged(Tag, int v, Tag) { return v + 1; }
 
+// A record whose only member is an empty class has no data either, for example
+// a lambda that captures only an empty function object (as libc++'s radix sort
+// does). Nothing writes the lambda object, and the call copies it.
+struct Identity {
+  int operator()(int x) const { return x; }
+};
+
+template <class F> int apply(F f, int v) { return f(v); }
+
+int mapped(Identity id, int v) {
+  auto plusOne = [id = id](int x) { return id(x) + 1; };
+  return apply(plusOne, v);
+}
+
 int main() {
   Holder h(Less(), 3);
   int r = pick(Less(), h.x, 5);
   int s = tagged(Tag(), r, Tag());
-  return (r == 3 && s == 4 && h.cmp(1, 2)) ? 0 : 1;
+  int w = mapped(Identity(), s);
+  return (r == 3 && s == 4 && w == 5 && h.cmp(1, 2)) ? 0 : 1;
 }
