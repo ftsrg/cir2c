@@ -1497,8 +1497,8 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
   std::string initExpr;
   if (auto initVal = globalOp.getInitialValue()) {
     mlir::Attribute attr = *initVal;
-    if (auto intAttr = mlir::dyn_cast<cir::IntAttr>(attr)) {
-      initExpr = std::to_string(intAttr.getValue().getSExtValue());
+    if (mlir::isa<cir::IntAttr>(attr)) {
+      initExpr = ConstantEmitter::formatIntLiteral(attr);
     } else if (auto fpAttr = mlir::dyn_cast<cir::FPAttr>(attr)) {
       // Floating-point constant initializer (e.g. `double d = 1.5;`). Without
       // this the initializer was dropped and the global defaulted to 0.

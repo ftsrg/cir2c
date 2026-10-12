@@ -103,12 +103,8 @@ private:
     // Try to find literals: integers, floats, or bools
     for (NamedAttribute a : o->getAttrs()) {
       // Integer literals
-      if (auto ia = llvm::dyn_cast<mlir::IntegerAttr>(a.getValue())) {
-        litVal = std::to_string(ia.getValue().getSExtValue());
-        break;
-      }
-      if (auto cia = llvm::dyn_cast<cir::IntAttr>(a.getValue())) {
-        litVal = std::to_string(static_cast<int64_t>(cia.getValue().getSExtValue()));
+      if (mlir::isa<mlir::IntegerAttr, cir::IntAttr>(a.getValue())) {
+        litVal = ConstantEmitter::formatIntLiteral(a.getValue());
         break;
       }
       // Boolean literals
