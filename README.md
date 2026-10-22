@@ -680,7 +680,8 @@ becomes a call to a wrapper function:
 /* The vtable pointer of obj is at offset 0. The function is vtable[slot]. */
 int __VERIFIER_virtual_call_i_pv(void* __obj, int __slot) {
   void* __fn = ((void**)*(void**)__obj)[__slot];
-  return ((int(*)(void*))__fn)(__obj);
+  int (*__f)(void*) = (int (*)(void*))__fn;
+  return __f(__obj);
 }
 ```
 
@@ -688,6 +689,12 @@ There is one wrapper for each different signature. Each wrapper has one
 definition in each output file. A tool that models indirect calls exactly gets
 exact dispatch. A different tool sees a call through a pointer from a real
 array.
+
+Each call through a function pointer goes through a variable of the
+function-pointer type, also at an indirect call of the program and at the
+destructor call of an exception (`void (*__dtor)(void*) = …; __dtor(…);`).
+A verifier frontend can know the targets of a call only from a declared
+function pointer: Theta rejects a call whose callee is a cast expression.
 
 A method has a `struct T*` receiver, but the wrapper calls through a pointer
 with a `void*` receiver. In C, a call through a pointer of an incompatible type

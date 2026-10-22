@@ -2487,7 +2487,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     // Destructor for the in-flight exception object (set by cir.throw from its
     // dtor operand); cir.end_catch runs it on the object, mirroring the Itanium
     // ABI where __cxa_end_catch destroys the exception when the last handler
-    // exits. Stored as void* and called through a (void(*)(void*)) cast.
+    // exits. Stored as void*; a call converts it to void (*)(void *) first.
     out << "static void *__cir_exc_dtor;\n";
     // The address of the subobject that the selected handler binds, and the
     // converted pointer for a pointer handler (see ExceptionTypes.cpp).
@@ -2610,13 +2610,16 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
         // pointer result as void* (see Mapper::planReceiverWrappers). Thus the
         // function type of the call is exactly that of the wrapper.
         bool pointerResult = !ret.empty() && ret.back() == '*';
+        std::string fnRet = pointerResult ? "void*" : ret;
         out << ret << " __VERIFIER_virtual_call_"
             << suffix << "(void* __obj, int __slot" << params << ") {\n";
         out << "  void* __fn = ((void**)*(void**)__obj)[__slot];\n";
+        // A variable of the function-pointer type, as at an indirect call
+        // (see handleCallLikeOp): Theta rejects a cast expression as callee.
+        out << "  " << fnRet << " (*__f)(" << fnArgTypes << ") = (" << fnRet
+            << " (*)(" << fnArgTypes << "))__fn;\n";
         out << "  " << (ret == "void" ? "" : "return ")
-            << (pointerResult ? "(" + ret + ")" : "")
-            << "((" << (pointerResult ? "void*" : ret) << "(*)(" << fnArgTypes
-            << "))__fn)(__obj" << fwd << ");\n";
+            << (pointerResult ? "(" + ret + ")" : "") << "__f(__obj" << fwd << ");\n";
         out << "}\n";
       }
       out << "\n";

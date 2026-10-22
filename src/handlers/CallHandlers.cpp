@@ -326,7 +326,15 @@ private:
         if (!firstParam) paramTypes += ", ";
         paramTypes += "...";
       }
-      callExpr = "((" + retType + " (*)(" + paramTypes + "))" + outCallee + ")";
+      // The converted pointer goes into a variable of the function-pointer
+      // type, and the call goes through that variable. A verifier frontend
+      // can know the target set of a call only from a declared function
+      // pointer: Theta rejects a call whose callee is a cast expression.
+      std::string fnPtrType = retType + " (*)(" + paramTypes + ")";
+      std::string fnPtr = m.freshName("fp");
+      out << "  " << retType << " (*" << fnPtr << ")(" << paramTypes << ") = ("
+          << fnPtrType << ")" << outCallee << ";\n";
+      callExpr = fnPtr;
     } else {
       callExpr = outCallee;
     }
