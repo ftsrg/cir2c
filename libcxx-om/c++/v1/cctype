@@ -1,0 +1,56 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <cctype>
+// Simplified character classification and conversion for verification
+
+#ifndef _LIBCXX_OM_CCTYPE
+#define _LIBCXX_OM_CCTYPE
+
+#include <ctype.h>
+
+// Undefine macros that conflict with our function names
+#undef isascii
+#undef toascii
+#undef isblank
+
+namespace std {
+
+// Character classification functions
+inline bool isalnum(int c) { return ::isalnum(c); }
+inline bool isalpha(int c) { return ::isalpha(c); }
+inline bool iscntrl(int c) { return ::iscntrl(c); }
+inline bool isdigit(int c) { return ::isdigit(c); }
+inline bool isgraph(int c) { return ::isgraph(c); }
+inline bool islower(int c) { return ::islower(c); }
+inline bool isprint(int c) { return ::isprint(c); }
+inline bool ispunct(int c) { return ::ispunct(c); }
+inline bool isspace(int c) { return ::isspace(c); }
+inline bool isupper(int c) { return ::isupper(c); }
+inline bool isxdigit(int c) { return ::isxdigit(c); }
+
+// C++11 extended character classification
+inline bool isblank(int c) { return c == ' ' || c == '\t'; }
+inline bool isascii(int c) { return c >= 0 && c <= 127; }
+
+// Character conversion functions
+inline int tolower(int c) { return ::tolower(c); }
+inline int toupper(int c) { return ::toupper(c); }
+inline int toascii(int c) { return c & 0x7F; }
+
+} // namespace std
+
+#endif // _LIBCXX_OM_CCTYPE

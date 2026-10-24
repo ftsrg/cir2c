@@ -1,0 +1,99 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <sstream>
+// Simplified string streams for verification
+
+#ifndef _LIBCXX_OM_SSTREAM
+#define _LIBCXX_OM_SSTREAM
+
+#include <string>
+
+namespace std {
+
+// String stream buffer — stores data in a string
+class stringbuf {
+public:
+    stringbuf() noexcept {}
+    explicit stringbuf(const string& s) : str_(s) {}
+    virtual ~stringbuf() noexcept {}
+
+    string str() const { return str_; }
+    void str(const string& s) { str_ = s; }
+
+private:
+    string str_;
+};
+
+// Output string stream — simplified wrapper
+class ostringstream {
+public:
+    ostringstream() noexcept {}
+    explicit ostringstream(const string& s) : buf_(s) {}
+    ~ostringstream() noexcept {}
+
+    string str() const { return buf_.str(); }
+    void str(const string& s) { buf_.str(s); }
+
+    // Allow streaming output
+    template<typename T>
+    ostringstream& operator<<(T val) { (void)val; return *this; }
+    ostringstream& operator<<(ostream& (*func)(ostream&)) { return *this; }
+
+private:
+    stringbuf buf_;
+};
+
+// Input string stream — simplified wrapper
+class istringstream {
+public:
+    istringstream() noexcept {}
+    explicit istringstream(const string& s) : buf_(s) {}
+    ~istringstream() noexcept {}
+
+    string str() const { return buf_.str(); }
+    void str(const string& s) { buf_.str(s); }
+
+    // Allow streaming input
+    template<typename T>
+    istringstream& operator>>(T& val) { (void)val; return *this; }
+
+private:
+    stringbuf buf_;
+};
+
+// String stream (both input and output) — simplified wrapper
+class stringstream {
+public:
+    stringstream() noexcept {}
+    explicit stringstream(const string& s) : buf_(s) {}
+    ~stringstream() noexcept {}
+
+    string str() const { return buf_.str(); }
+    void str(const string& s) { buf_.str(s); }
+
+    template<typename T>
+    stringstream& operator<<(T val) { (void)val; return *this; }
+    template<typename T>
+    stringstream& operator>>(T& val) { (void)val; return *this; }
+
+private:
+    stringbuf buf_;
+};
+
+} // namespace std
+
+#endif // _LIBCXX_OM_SSTREAM

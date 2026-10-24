@@ -42,6 +42,8 @@ This causes clang to use the operational model headers instead of the real libc+
 
 ## Supported Headers
 
+### Containers
+
 | Header | Description |
 |--------|-------------|
 | `<vector>` | Dynamic array with push_back, pop_back, iterators, swap |
@@ -53,28 +55,75 @@ This causes clang to use the operational model headers instead of the real libc+
 | `<list>` | Doubly-linked list with push/pop, sort, merge |
 | `<deque>` | Double-ended queue with push/pop front/back |
 | `<array>` | Fixed-size array container |
+| `<bitset>` | Fixed-size bit vector with bitwise operations |
+
+### Algorithms and Utilities
+
+| Header | Description |
+|--------|-------------|
 | `<algorithm>` | sort, find, count, min/max, reverse, copy, fill |
-| `<iostream>` | cout, cin, cerr as no-ops for verification |
-| `<memory>` | unique_ptr, shared_ptr, weak_ptr, make_unique, make_shared |
 | `<numeric>` | accumulate, inner_product, partial_sum |
 | `<optional>` | Optional value wrapper with has_value, value_or |
 | `<tuple>` | Tuple types (up to 3 elements) |
 | `<utility>` | pair, swap, type traits, move, forward |
 | `<functional>` | function, default_delete, comparators |
+| `<memory>` | unique_ptr, shared_ptr, weak_ptr, make_unique, make_shared |
+| `<iterator>` | Iterator traits, begin/end, insert iterators |
+| `<complex>` | Complex number arithmetic and functions |
+
+### I/O
+
+| Header | Description |
+|--------|-------------|
+| `<iostream>` | cout, cin, cerr as no-ops for verification |
+| `<fstream>` | ifstream, ofstream, fstream (no-op I/O) |
+| `<sstream>` | stringstream, ostringstream, istringstream |
+| `<iomanip>` | setw, setprecision, hex, dec, manipulators |
+| `<cstdio>` | printf, scanf, fopen, fclose (no-ops) |
+
+### C Standard Library Wrappers
+
+| Header | Description |
+|--------|-------------|
 | `<cassert>` | assert macro mapped to __VERIFIER_error |
 | `<cstring>` | strlen, strcpy, strcmp, memcpy, memset |
 | `<cmath>` | abs, sqrt, pow, sin, cos, floor, ceil |
 | `<cstdlib>` | abs, rand, malloc, free, atoi, exit |
-| `<cstdio>` | printf, scanf, fopen, fclose (no-ops) |
+| `<ctime>` | time, clock, gmtime, localtime, difftime |
+| `<cctype>` | isdigit, isalpha, tolower, toupper |
+| `<cstddef>` | size_t, ptrdiff_t, nullptr_t, byte |
+| `<cstdint>` | int8_t, int16_t, int32_t, int64_t (and unsigned) |
+| `<climits>` | INT_MIN, INT_MAX, LONG_MIN, LONG_MAX |
+
+### Type System
+
+| Header | Description |
+|--------|-------------|
+| `<limits>` | std::numeric_limits for all fundamental types |
+| `<typeinfo>` | std::type_info, typeid, bad_cast, bad_typeid |
+
+### Exceptions
+
+| Header | Description |
+|--------|-------------|
+| `<exception>` | std::exception base class with what() |
+| `<stdexcept>` | logic_error, runtime_error, out_of_range, etc. |
+
+### Random Number Generation
+
+| Header | Description |
+|--------|-------------|
+| `<random>` | mt19937, uniform_int_distribution, normal_distribution |
 
 ## Limitations
 
 - Containers are limited to 64 elements maximum
-- No exception handling
+- Exception handling is simplified (no actual throw/catch semantics)
 - No multithreading support
-- No file I/O (fstream)
+- File I/O uses no-op and nondeterministic stubs
 - No regex, filesystem, or coroutine support
 - Algorithms use simple O(n²) implementations for verifiability
+- Random number generation uses nondeterminism for verification
 
 ## Testing
 

@@ -1,0 +1,225 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <bitset>
+// Simplified bitset for verification
+
+#ifndef _LIBCXX_OM_BITSET
+#define _LIBCXX_OM_BITSET
+
+namespace std {
+
+template<size_t N>
+class bitset {
+public:
+    // Constructors
+    constexpr bitset() noexcept : words_{} {}
+    explicit bitset(unsigned long long val) noexcept : words_{} {
+        for (size_t i = 0; i < N && i < 64; ++i) {
+            if (val & (1ULL << i)) {
+                words_[i / 64] |= (1ULL << (i % 64));
+            }
+        }
+    }
+
+    // Bit access
+    bool operator[](size_t pos) const noexcept {
+        if (pos >= N) return false;
+        return (words_[pos / 64] >> (pos % 64)) & 1ULL;
+    }
+
+
+    // Bit manipulation
+    bitset& operator&=(const bitset& other) noexcept {
+        for (size_t i = 0; i < num_words_; ++i) words_[i] &= other.words_[i];
+        return *this;
+    }
+
+    bitset& operator|=(const bitset& other) noexcept {
+        for (size_t i = 0; i < num_words_; ++i) words_[i] |= other.words_[i];
+        return *this;
+    }
+
+    bitset& operator^=(const bitset& other) noexcept {
+        for (size_t i = 0; i < num_words_; ++i) words_[i] ^= other.words_[i];
+        return *this;
+    }
+
+    bitset& operator<<=(size_t pos) noexcept {
+        bitset tmp(*this);
+        words_ = {};
+        for (size_t i = 0; i < N; ++i) {
+            if (i + pos < N && tmp[i]) {
+                words_[(i + pos) / 64] |= (1ULL << ((i + pos) % 64));
+            }
+        }
+        return *this;
+    }
+
+    bitset& operator>>=(size_t pos) noexcept {
+        bitset tmp(*this);
+        words_ = {};
+        for (size_t i = 0; i < N; ++i) {
+            if (i >= pos && tmp[i]) {
+                words_[(i - pos) / 64] |= (1ULL << ((i - pos) % 64));
+            }
+        }
+        return *this;
+    }
+
+    bitset operator~() const noexcept {
+        bitset result;
+        for (size_t i = 0; i < num_words_; ++i) result.words_[i] = ~words_[i];
+        // Clear bits beyond N
+        size_t extra = num_words_ * 64 - N;
+        if (extra < 64) {
+            result.words_[num_words_ - 1] &= ((1ULL << extra) - 1) << (64 - extra);
+        }
+        return result;
+    }
+
+    // Set and reset
+    bitset& set() noexcept {
+        for (size_t i = 0; i < num_words_; ++i) words_[i] = ~0ULL;
+        // Clear bits beyond N
+        size_t extra = num_words_ * 64 - N;
+        if (extra < 64) {
+            words_[num_words_ - 1] &= ((1ULL << extra) - 1) << (64 - extra);
+        }
+        return *this;
+    }
+
+    bitset& set(size_t pos, bool val = true) noexcept {
+        if (pos < N) {
+            if (val) words_[pos / 64] |= (1ULL << (pos % 64));
+            else words_[pos / 64] &= ~(1ULL << (pos % 64));
+        }
+        return *this;
+    }
+
+    bitset& reset() noexcept {
+        for (size_t i = 0; i < num_words_; ++i) words_[i] = 0;
+        return *this;
+    }
+
+    bitset& reset(size_t pos) noexcept {
+        if (pos < N) words_[pos / 64] &= ~(1ULL << (pos % 64));
+        return *this;
+    }
+
+    bitset& flip() noexcept {
+        for (size_t i = 0; i < num_words_; ++i) words_[i] = ~words_[i];
+        // Clear bits beyond N
+        size_t extra = num_words_ * 64 - N;
+        if (extra < 64) {
+            words_[num_words_ - 1] &= ((1ULL << extra) - 1) << (64 - extra);
+        }
+        return *this;
+    }
+
+    bitset& flip(size_t pos) noexcept {
+        if (pos < N) words_[pos / 64] ^= (1ULL << (pos % 64));
+        return *this;
+    }
+
+    // Queries
+    size_t size() const noexcept { return N; }
+    size_t count() const noexcept {
+        size_t c = 0;
+        for (size_t i = 0; i < N; ++i) if (operator[](i)) ++c;
+        return c;
+    }
+    bool none() const noexcept { return count() == 0; }
+    bool all() const noexcept { return count() == N; }
+    bool any() const noexcept { return count() > 0; }
+    unsigned long long to_ullong() const noexcept {
+        unsigned long long val = 0;
+        for (size_t i = 0; i < N && i < 64; ++i) {
+            if (operator[](i)) val |= (1ULL << i);
+        }
+        return val;
+    }
+    size_t test(size_t pos) const noexcept { return operator[](pos); }
+    size_t find(bool bit, size_t pos = 0) const noexcept {
+        for (size_t i = pos; i < N; ++i) {
+            if (operator[](i) == bit) return i;
+        }
+        return npos;
+    }
+    size_t _Find_first() const noexcept { return find(true, 0); }
+    size_t _Find_next(size_t pos) const noexcept { return find(true, pos + 1); }
+
+    static constexpr size_t npos = static_cast<size_t>(-1);
+
+    // Comparison
+    bool operator==(const bitset& other) const noexcept {
+        for (size_t i = 0; i < num_words_; ++i) {
+            if (words_[i] != other.words_[i]) return false;
+        }
+        return true;
+    }
+
+    bool operator!=(const bitset& other) const noexcept { return !(*this == other); }
+
+    // I/O
+    string to_string() const noexcept {
+        string s;
+        for (size_t i = 0; i < N; ++i) {
+            s += operator[](i) ? '1' : '0';
+        }
+        return s;
+    }
+
+private:
+    static constexpr size_t num_words_ = (N + 63) / 64;
+    unsigned long long words_[(num_words_ > 0) ? num_words_ : 1];
+};
+
+// Non-member operators
+template<size_t N>
+inline bitset<N> operator&(const bitset<N>& lhs, const bitset<N>& rhs) noexcept {
+    return bitset<N>(lhs) &= rhs;
+}
+
+template<size_t N>
+inline bitset<N> operator|(const bitset<N>& lhs, const bitset<N>& rhs) noexcept {
+    return bitset<N>(lhs) |= rhs;
+}
+
+template<size_t N>
+inline bitset<N> operator^(const bitset<N>& lhs, const bitset<N>& rhs) noexcept {
+    return bitset<N>(lhs) ^= rhs;
+}
+
+template<size_t N>
+inline bitset<N> operator<<(const bitset<N>& lhs, size_t pos) noexcept {
+    return bitset<N>(lhs) <<= pos;
+}
+
+template<size_t N>
+inline bitset<N> operator>>(const bitset<N>& lhs, size_t pos) noexcept {
+    return bitset<N>(lhs) >>= pos;
+}
+
+// I/O operator (ostream only)
+template<size_t N>
+inline ostream& operator<<(ostream& os, const bitset<N>& bs) {
+    return os << bs.to_string();
+}
+
+} // namespace std
+
+#endif // _LIBCXX_OM_BITSET

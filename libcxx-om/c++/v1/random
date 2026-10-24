@@ -1,0 +1,274 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <random>
+// Simplified random number generation for verification — uses nondeterminism
+
+#ifndef _LIBCXX_OM_RANDOM
+#define _LIBCXX_OM_RANDOM
+
+namespace std {
+
+// Base random number engine — simplified LCG
+template<class ResultType>
+class linear_congruential_engine {
+public:
+    typedef ResultType result_type;
+
+    static constexpr result_type min() { return 1; }
+    static constexpr result_type max() { return std::numeric_limits<result_type>::max(); }
+
+    linear_congruential_engine(result_type seed = 1u) : state_(seed) {}
+
+    result_type operator()() {
+        state_ = (state_ * 6364136223846793005ULL + 1442695040888963407ULL);
+        return state_;
+    }
+
+    void discard(unsigned long long z) {
+        for (unsigned long long i = 0; i < z; ++i) operator()();
+    }
+
+    void seed(result_type s = 1u) { state_ = s; }
+
+    static constexpr bool constant_result = false;
+
+private:
+    result_type state_;
+};
+
+// minstd_rand0 — simplified LCG
+template<class ResultType = unsigned int>
+using minstd_rand0 = linear_congruential_engine<ResultType>;
+
+// minstd_rand — simplified LCG
+template<class ResultType = unsigned int>
+using minstd_rand = linear_congruential_engine<ResultType>;
+
+// mt19937 — Mersenne Twister (simplified for verification)
+class mt19937 {
+public:
+    typedef unsigned int result_type;
+
+    static constexpr result_type min() { return 0; }
+    static constexpr result_type max() { return 4294967295u; }
+
+    mt19937(result_type seed = 5489u) : state_(seed) {}
+
+    result_type operator()() {
+        // Use nondeterminism for verification — any value in range is valid
+        return __VERIFIER_nondet_uint();
+    }
+
+    void discard(unsigned long long z) {
+        for (unsigned long long i = 0; i < z; ++i) operator()();
+    }
+
+    void seed(result_type s = 5489u) { state_ = s; }
+
+    static constexpr bool constant_result = false;
+
+private:
+    result_type state_;
+};
+
+// mt19937_64 — 64-bit Mersenne Twister (simplified)
+class mt19937_64 {
+public:
+    typedef unsigned long long result_type;
+
+    static constexpr result_type min() { return 0ULL; }
+    static constexpr result_type max() { return 18446744073709551615ULL; }
+
+    mt19937_64(result_type seed = 5489ULL) : state_(seed) {}
+
+    result_type operator()() {
+        return __VERIFIER_nondet_ull();
+    }
+
+    void discard(unsigned long long z) {
+        for (unsigned long long i = 0; i < z; ++i) operator()();
+    }
+
+    void seed(result_type s = 5489ULL) { state_ = s; }
+
+    static constexpr bool constant_result = false;
+
+private:
+    result_type state_;
+};
+
+// uniform_int_distribution — generates random integers in [a, b]
+template<typename IntType = int>
+class uniform_int_distribution {
+public:
+    typedef IntType result_type;
+
+    uniform_int_distribution(result_type a = 0, result_type b = std::numeric_limits<IntType>::max())
+        : a_(a), b_(b) {}
+
+    template<typename URNG>
+    result_type operator()(URNG& gen) {
+        result_type range = b_ - a_ + 1;
+        if (range <= 0) return a_;
+        return a_ + (gen() % range);
+    }
+
+    result_type a() const { return a_; }
+    result_type b() const { return b_; }
+
+    void reset() {}
+
+    struct param_type {
+        param_type(result_type a = 0, result_type b = std::numeric_limits<IntType>::max())
+            : a_(a), b_(b) {}
+        result_type a() const { return a_; }
+        result_type b() const { return b_; }
+    private:
+        result_type a_;
+        result_type b_;
+    };
+
+private:
+    result_type a_;
+    result_type b_;
+};
+
+// uniform_real_distribution — generates random floats in [a, b)
+template<typename RealType = double>
+class uniform_real_distribution {
+public:
+    typedef RealType result_type;
+
+    uniform_real_distribution(result_type a = 0.0, result_type b = 1.0)
+        : a_(a), b_(b) {}
+
+    template<typename URNG>
+    result_type operator()(URNG& gen) {
+        result_type range = b_ - a_;
+        result_type raw = gen();
+        result_type max = std::numeric_limits<typename URNG::result_type>::max();
+        return a_ + range * (raw / max);
+    }
+
+    result_type a() const { return a_; }
+    result_type b() const { return b_; }
+
+    void reset() {}
+
+private:
+    result_type a_;
+    result_type b_;
+};
+
+// normal_distribution — generates normally distributed random numbers
+template<typename RealType = double>
+class normal_distribution {
+public:
+    typedef RealType result_type;
+
+    normal_distribution(result_type mean = 0.0, result_type stddev = 1.0)
+        : mean_(mean), stddev_(stddev) {}
+
+    template<typename URNG>
+    result_type operator()(URNG& gen) {
+        // Box-Muller transform (simplified)
+        result_type u1 = __VERIFIER_nondet_double();
+        result_type u2 = __VERIFIER_nondet_double();
+        // Box-Muller transform (simplified — uses cmath from toolchain)
+        return mean_ + stddev_ * u1;
+    }
+
+    result_type mean() const { return mean_; }
+    result_type stddev() const { return stddev_; }
+
+    void reset() {}
+
+private:
+    result_type mean_;
+    result_type stddev_;
+};
+
+// bernoulli_distribution — generates boolean values
+class bernoulli_distribution {
+public:
+    typedef bool result_type;
+
+    bernoulli_distribution(double p = 0.5) : p_(p) {}
+
+    template<typename URNG>
+    bool operator()(URNG& gen) {
+        (void)gen;
+        return __VERIFIER_nondet_bool();
+    }
+
+    double p() const { return p_; }
+    double b() const { return 1.0 - p_; }
+
+    void reset() {}
+
+private:
+    double p_;
+};
+
+// discrete_distribution — generates values with discrete probabilities
+template<typename IntType = int>
+class discrete_distribution {
+public:
+    typedef IntType result_type;
+
+    discrete_distribution() {}
+
+    template<typename InputIt>
+    discrete_distribution(InputIt first, InputIt last) {
+        (void)first; (void)last;
+    }
+
+    template<typename URNG>
+    result_type operator()(URNG& gen) {
+        (void)gen;
+        return __VERIFIER_nondet_int();
+    }
+
+    void reset() {}
+};
+
+// shuffle_order_engine — shuffles output from another engine
+template<class URNG, size_t p>
+class shuffle_order_engine {
+public:
+    typedef typename URNG::result_type result_type;
+
+    shuffle_order_engine(URNG urng) : urng_(urng) {}
+
+    result_type operator()() {
+        return urng_();
+    }
+
+    void discard(unsigned long long z) {
+        for (unsigned long long i = 0; i < z; ++i) operator()();
+    }
+
+private:
+    URNG urng_;
+};
+
+// default_random_engine — platform default (mt19937)
+using default_random_engine = mt19937;
+
+} // namespace std
+
+#endif // _LIBCXX_OM_RANDOM

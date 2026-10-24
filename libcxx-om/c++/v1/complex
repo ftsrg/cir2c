@@ -1,0 +1,244 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <complex>
+// Simplified complex number support for verification
+
+#ifndef _LIBCXX_OM_COMPLEX
+#define _LIBCXX_OM_COMPLEX
+
+namespace std {
+
+// Complex number template
+template<typename T>
+class complex {
+public:
+    typedef T value_type;
+
+    // Constructors
+    complex() noexcept : re_(0), im_(0) {}
+    complex(T real, T imag = T()) noexcept : re_(real), im_(imag) {}
+
+    // Accessors
+    T real() const noexcept { return re_; }
+    T imag() const noexcept { return im_; }
+    T& real() noexcept { return re_; }
+    T& imag() noexcept { return im_; }
+
+    // Arithmetic operators
+    complex& operator+=(const complex& other) noexcept { re_ += other.re_; im_ += other.im_; return *this; }
+    complex& operator-=(const complex& other) noexcept { re_ -= other.re_; im_ -= other.im_; return *this; }
+    complex& operator*=(const complex& other) noexcept {
+        T r = re_ * other.re_ - im_ * other.im_;
+        im_ = re_ * other.im_ + im_ * other.re_;
+        re_ = r;
+        return *this;
+    }
+    complex& operator/=(const complex& other) noexcept {
+        T denom = other.re_ * other.re_ + other.im_ * other.im_;
+        T r = (re_ * other.re_ + im_ * other.im_) / denom;
+        im_ = (im_ * other.re_ - re_ * other.im_) / denom;
+        re_ = r;
+        return *this;
+    }
+
+    complex& operator+=(T scalar) noexcept { re_ += scalar; return *this; }
+    complex& operator-=(T scalar) noexcept { re_ -= scalar; return *this; }
+    complex& operator*=(T scalar) noexcept { re_ *= scalar; im_ *= scalar; return *this; }
+    complex& operator/=(T scalar) noexcept { re_ /= scalar; im_ /= scalar; return *this; }
+
+    // Unary operators
+    complex operator-() const noexcept { return complex(-re_, -im_); }
+    complex operator+() const noexcept { return *this; }
+
+    // Comparison
+    bool operator==(const complex& other) const noexcept { return re_ == other.re_ && im_ == other.im_; }
+    bool operator!=(const complex& other) const noexcept { return !(*this == other); }
+
+private:
+    T re_;
+    T im_;
+};
+
+// Non-member arithmetic operators
+template<typename T>
+inline complex<T> operator+(const complex<T>& lhs, const complex<T>& rhs) noexcept {
+    return complex<T>(lhs.real() + rhs.real(), lhs.imag() + rhs.imag());
+}
+
+template<typename T>
+inline complex<T> operator-(const complex<T>& lhs, const complex<T>& rhs) noexcept {
+    return complex<T>(lhs.real() - rhs.real(), lhs.imag() - rhs.imag());
+}
+
+template<typename T>
+inline complex<T> operator*(const complex<T>& lhs, const complex<T>& rhs) noexcept {
+    return complex<T>(lhs.real() * rhs.real() - lhs.imag() * rhs.imag(),
+                      lhs.real() * rhs.imag() + lhs.imag() * rhs.real());
+}
+
+template<typename T>
+inline complex<T> operator/(const complex<T>& lhs, const complex<T>& rhs) noexcept {
+    T denom = rhs.real() * rhs.real() + rhs.imag() * rhs.imag();
+    return complex<T>((lhs.real() * rhs.real() + lhs.imag() * rhs.imag()) / denom,
+                      (lhs.imag() * rhs.real() - lhs.real() * rhs.imag()) / denom);
+}
+
+// Scalar operations
+template<typename T>
+inline complex<T> operator+(const complex<T>& lhs, T rhs) noexcept {
+    return complex<T>(lhs.real() + rhs, lhs.imag());
+}
+
+template<typename T>
+inline complex<T> operator+(T lhs, const complex<T>& rhs) noexcept {
+    return complex<T>(lhs + rhs.real(), rhs.imag());
+}
+
+template<typename T>
+inline complex<T> operator-(const complex<T>& lhs, T rhs) noexcept {
+    return complex<T>(lhs.real() - rhs, lhs.imag());
+}
+
+template<typename T>
+inline complex<T> operator*(const complex<T>& lhs, T rhs) noexcept {
+    return complex<T>(lhs.real() * rhs, lhs.imag() * rhs);
+}
+
+template<typename T>
+inline complex<T> operator*(T lhs, const complex<T>& rhs) noexcept {
+    return complex<T>(lhs * rhs.real(), lhs * rhs.imag());
+}
+
+// Complex functions
+template<typename T>
+inline T real(const complex<T>& c) noexcept { return c.real(); }
+
+template<typename T>
+inline T imag(const complex<T>& c) noexcept { return c.imag(); }
+
+template<typename T>
+inline T abs(const complex<T>& c) noexcept {
+    return std::sqrt(c.real() * c.real() + c.imag() * c.imag());
+}
+
+template<typename T>
+inline T arg(const complex<T>& c) noexcept {
+    return std::atan2(c.imag(), c.real());
+}
+
+template<typename T>
+inline T norm(const complex<T>& c) noexcept {
+    return c.real() * c.real() + c.imag() * c.imag();
+}
+
+template<typename T>
+inline complex<T> conj(const complex<T>& c) noexcept {
+    return complex<T>(c.real(), -c.imag());
+}
+
+template<typename T>
+inline complex<T> proj(const complex<T>& c) noexcept {
+    return c;
+}
+
+// Complex exponential and logarithmic functions
+template<typename T>
+inline complex<T> exp(const complex<T>& c) noexcept {
+    T e = std::exp(c.real());
+    return complex<T>(e * std::cos(c.imag()), e * std::sin(c.imag()));
+}
+
+template<typename T>
+inline complex<T> log(const complex<T>& c) noexcept {
+    return complex<T>(std::log(abs(c)), arg(c));
+}
+
+template<typename T>
+inline complex<T> log10(const complex<T>& c) noexcept {
+    return log(c) / log(T(10));
+}
+
+// Complex power functions
+template<typename T>
+inline complex<T> pow(const complex<T>& base, const complex<T>& exp) noexcept {
+    return exp(exp * log(base));
+}
+
+template<typename T>
+inline complex<T> pow(const complex<T>& base, T exp) noexcept {
+    return pow(base, complex<T>(exp));
+}
+
+template<typename T>
+inline complex<T> pow(T base, const complex<T>& exp) noexcept {
+    return pow(complex<T>(base), exp);
+}
+
+// Hyperbolic helpers (simplified)
+template<typename T>
+inline T cosh(T x) noexcept {
+    T e = std::exp(x);
+    return (e + T(1) / e) / T(2);
+}
+
+template<typename T>
+inline T sinh(T x) noexcept {
+    T e = std::exp(x);
+    return (e - T(1) / e) / T(2);
+}
+
+// Complex trigonometric functions
+template<typename T>
+inline complex<T> sin(const complex<T>& c) noexcept {
+    return complex<T>(std::sin(c.real()) * cosh(c.imag()),
+                      std::cos(c.real()) * sinh(c.imag()));
+}
+
+template<typename T>
+inline complex<T> cos(const complex<T>& c) noexcept {
+    return complex<T>(std::cos(c.real()) * cosh(c.imag()),
+                      -std::sin(c.real()) * sinh(c.imag()));
+}
+
+template<typename T>
+inline complex<T> tan(const complex<T>& c) noexcept {
+    return sin(c) / cos(c);
+}
+
+// Complex square root
+template<typename T>
+inline complex<T> sqrt(const complex<T>& c) noexcept {
+    T r = abs(c);
+    T theta = arg(c);
+    T sqrtR = std::sqrt(r);
+    return complex<T>(sqrtR * std::cos(theta / 2), sqrtR * std::sin(theta / 2));
+}
+
+// Type aliases
+using complex_float = complex<float>;
+using complex_double = complex<double>;
+using complex_long_double = complex<long double>;
+
+// I/O operator (ostream only — istream defined in iostream)
+template<typename T>
+inline ostream& operator<<(ostream& os, const complex<T>& c) {
+    return os << '(' << c.real() << ',' << c.imag() << ')';
+}
+
+} // namespace std
+
+#endif // _LIBCXX_OM_COMPLEX

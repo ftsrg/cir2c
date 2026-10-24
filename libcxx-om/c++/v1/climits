@@ -1,0 +1,100 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <climits>
+// Simplified C limits macros for verification
+
+#ifndef _LIBCXX_OM_CLIMITS
+#define _LIBCXX_OM_CLIMITS
+
+#include <limits.h>
+
+// Undefine macros from limits.h so we can define std:: versions
+#undef CHAR_MIN
+#undef CHAR_MAX
+#undef SCHAR_MIN
+#undef SCHAR_MAX
+#undef UCHAR_MAX
+#undef SHRT_MIN
+#undef SHRT_MAX
+#undef USHRT_MAX
+#undef INT_MIN
+#undef INT_MAX
+#undef UINT_MAX
+#undef LONG_MIN
+#undef LONG_MAX
+#undef ULONG_MAX
+#undef LLONG_MIN
+#undef LLONG_MAX
+#undef ULLONG_MAX
+#undef PTRDIFF_MAX
+#undef SIZE_MAX
+
+namespace std {
+
+// Character limits
+constexpr char CHAR_MIN = -128;
+constexpr char CHAR_MAX = 127;
+constexpr unsigned char SCHAR_MIN = 0;
+constexpr unsigned char SCHAR_MAX = 255;
+constexpr unsigned char UCHAR_MAX = 255;
+
+// Short limits
+constexpr short SHRT_MIN = -32768;
+constexpr short SHRT_MAX = 32767;
+constexpr unsigned short USHRT_MAX = 65535;
+
+// Integer limits
+constexpr int INT_MIN = -2147483648;
+constexpr int INT_MAX = 2147483647;
+constexpr unsigned int UINT_MAX = 4294967295U;
+
+// Long limits
+constexpr long LONG_MIN = -9223372036854775807L - 1;
+constexpr long LONG_MAX = 9223372036854775807L;
+constexpr unsigned long ULONG_MAX = 18446744073709551615UL;
+
+// Long long limits
+constexpr long long LLONG_MIN = -9223372036854775807LL - 1;
+constexpr long long LLONG_MAX = 9223372036854775807LL;
+constexpr unsigned long long ULLONG_MAX = 18446744073709551615ULL;
+
+// Pointer limits
+constexpr unsigned long PTRDIFF_MAX = LONG_MAX;
+constexpr unsigned long SIZE_MAX = ULONG_MAX;
+
+} // namespace std
+
+// Re-export macros at global scope for C compatibility
+#define CHAR_MIN (-128)
+#define CHAR_MAX (127)
+#define SCHAR_MIN (0)
+#define SCHAR_MAX (255)
+#define UCHAR_MAX (255)
+#define SHRT_MIN (-32768)
+#define SHRT_MAX (32767)
+#define USHRT_MAX (65535)
+#define INT_MIN (-2147483648)
+#define INT_MAX (2147483647)
+#define UINT_MAX (4294967295U)
+#define LONG_MIN (-9223372036854775807L - 1)
+#define LONG_MAX (9223372036854775807L)
+#define ULONG_MAX (18446744073709551615UL)
+#define LLONG_MIN (-9223372036854775807LL - 1)
+#define LLONG_MAX (9223372036854775807LL)
+#define ULLONG_MAX (18446744073709551615ULL)
+
+#endif // _LIBCXX_OM_CLIMITS
