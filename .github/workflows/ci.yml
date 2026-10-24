@@ -193,9 +193,13 @@ jobs:
             slug: llvm-std
             env: RUN_INTEGRATION=0 RUN_LLVM=1 RUN_ESBMC=0
             extra_flags: '--no-externalize-std'
-          - name: LLVM MultiSource tests
+          - name: LLVM MultiSource tests (C merge)
             slug: llvm-multi
-            env: RUN_INTEGRATION=0 RUN_LLVM=0 RUN_LLVM_MULTI=1 RUN_ESBMC=0
+            env: RUN_INTEGRATION=0 RUN_LLVM=0 RUN_LLVM_MULTI=1 RUN_ESBMC=0 MULTI_MERGE=c
+            extra_flags: '--externalize-std'
+          - name: LLVM MultiSource tests (CIR merge)
+            slug: llvm-multi-cir
+            env: RUN_INTEGRATION=0 RUN_LLVM=0 RUN_LLVM_MULTI=1 RUN_ESBMC=0 MULTI_MERGE=cir
             extra_flags: '--externalize-std'
     steps:
       - uses: actions/checkout@v4
