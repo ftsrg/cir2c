@@ -1062,9 +1062,19 @@ The `.cir` files are used directly. The `expect` file gives the result:
 | a text (after `error`) | The messages must contain this text |
 | `output-count N TEXT` | The merged CIR must contain `TEXT` `N` times |
 | `run CODE` | Translate the merged CIR, compile it, run it, and expect the exit code `CODE` |
+| `reference FILE` | Like `run`, but compare the output and the exit code with an LLVM test-suite reference file |
 
-The runner merges each case two times, with the inputs in sorted order and in
-reverse order. A successful merge must also pass `cir-opt`.
+A `sources` file in a case directory lists the inputs by their path in the
+repository. The cases use it for programs of the LLVM MultiSource corpus. A
+`// cir-merge-cflags: FLAGS` line in a source adds compiler flags for that
+source.
+
+The result must not depend on the order of the inputs. Thus the runner merges a
+case with up to three inputs in all orders, and a larger case in sorted order
+and in reverse order. A successful merge must also pass `cir-opt`. After the
+cases, the runner checks the command line (a missing input, an old output that
+a failed merge must not change, `--dump-symbols`, `--verbose`) and
+`run-cir2c.sh --merge cir` (a successful merge and exit code 5).
 
 ### 9.3 Suite 1: the integration tests
 

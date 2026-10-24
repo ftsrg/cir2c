@@ -1,0 +1,3 @@
+ok
+output-count 1 cir.func no_inline dso_local @f(
+run 0
