@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#define COMPDATE __DATE__
-#define CFLAGS ""
 /***************************************
  * This program is modified for use in * 
  * benchmarking puposes. The complete  *

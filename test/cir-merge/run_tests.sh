@@ -31,7 +31,8 @@
 #
 # A `sources` file lists inputs by repository-relative path instead (used for
 # programs of the LLVM corpus). A `// cir-merge-cflags: <flags>` line in a
-# source adds compiler flags for that source.
+# source adds compiler flags for that source; a `cflags` file in the case
+# directory adds flags for all its sources.
 #
 # The outcome must not depend on the order of the inputs: a case with up to
 # three inputs is merged in every order, a larger one in sorted and in reverse
@@ -60,6 +61,7 @@ emit_cir() {
     local -a extra=()
     local flags
     flags=$(sed -n 's|.*cir-merge-cflags: *||p' "$src" | head -1)
+    [[ -f "$CASE_CFLAGS" ]] && flags="$(cat "$CASE_CFLAGS") $flags"
     # shellcheck disable=SC2206 # the flags are meant to be split
     [[ -n "$flags" ]] && extra=($flags)
     case "$src" in
@@ -191,6 +193,7 @@ for dir in "$SCRIPT_DIR"/cases/*/; do
         sources=("$dir"/*.c "$dir"/*.cpp "$dir"/*.cir)
     fi
 
+    CASE_CFLAGS="$dir/cflags"
     inputs=()
     emit_failed=""
     for src in "${sources[@]}"; do

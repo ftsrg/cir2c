@@ -634,11 +634,20 @@ run_llvm_multi_test() {
     local -a inc=(); local _d
     while IFS= read -r _d; do [ -n "$_d" ] && inc+=(--include "$_d"); done < <(compute_includes "${src_files[0]}")
 
+    # The program's own settings from llvm-test-suite: standard, defines,
+    # run arguments, stdin, numeric tolerance (see llvm-multisource-options.sh)
+    # shellcheck source=test/llvm-multisource-options.sh
+    source "$MULTISOURCE_OPTIONS"
+    multisource_options "${test_dir#*/MultiSource/}"
+    local -a opts=(); local _f
+    [[ -n "$MS_STD" ]] && opts+=(--std "$MS_STD")
+    for _f in ${MS_CFLAGS[@]+"${MS_CFLAGS[@]}"}; do opts+=(--cflag "$_f"); done
+
     # Run the multi-file pipeline with the merge strategy MULTI_MERGE selects
     # (c: merge the C outputs, cir: merge the CIR modules with cir-merge)
     # shellcheck disable=SC2086
     timeout "$TIMEOUT" "$RUNNER" $lang_flag "$EXTERNALIZE_STD_FLAG" \
-        ${inc[@]+"${inc[@]}"} --merge "${MULTI_MERGE:-c}" \
+        ${inc[@]+"${inc[@]}"} ${opts[@]+"${opts[@]}"} --merge "${MULTI_MERGE:-c}" \
         "${src_files[@]}" "$output_c_file" >"$pipeline_log" 2>&1 || pipeline_rc=$?
 
     if [[ $pipeline_rc -eq 124 ]]; then
@@ -675,13 +684,26 @@ run_llvm_multi_test() {
     awk 'NR==1{prev=$0;next}{print prev;prev=$0}END{sub(/exit [0-9]+$/,"",prev);printf "%s",prev}' \
         "$ref_file" > "$expected_out_file"
 
-    local actual_out_file="$LLVM_EVAL_OUTPUT_DIR/${test_id}_actual.txt"
-    "$binary_file" > "$actual_out_file" 2>/dev/null
+    # Run the program in its directory, where its input files are, with its
+    # arguments and stdin. The reference outputs hold stdout and stderr.
+    local out_dir_abs
+    out_dir_abs=$(cd "$LLVM_EVAL_OUTPUT_DIR" && pwd)
+    local actual_out_file="$out_dir_abs/${test_id}_actual.txt"
+    local stdin_file=/dev/null
+    [[ -n "$MS_STDIN" ]] && stdin_file="$test_dir/$MS_STDIN"
+    (cd "$test_dir" && timeout "$TIMEOUT" "$out_dir_abs/${test_id}_binary" \
+        ${MS_RUN_ARGS[@]+"${MS_RUN_ARGS[@]}"} <"$stdin_file" >"$actual_out_file" 2>&1)
     local actual_exit=$?
+    if [[ $actual_exit -eq 124 ]]; then
+        echo "TIMEDOUT|$test_id|"; return
+    fi
 
     local mismatch_reason=""
     if [[ $actual_exit -ne $expected_exit ]]; then
         mismatch_reason="ran, exit code: expected $expected_exit, got $actual_exit"
+    elif [[ -n "$MS_FP_TOLERANCE" ]]; then
+        python3 "$FPCMP" "$MS_FP_TOLERANCE" "$expected_out_file" "$actual_out_file" ||
+            mismatch_reason="ran, output mismatch (relative tolerance $MS_FP_TOLERANCE)"
     elif ! diff -q "$expected_out_file" "$actual_out_file" > /dev/null 2>&1; then
         mismatch_reason="ran, output mismatch"
     fi
@@ -748,6 +770,9 @@ run_esbmc_test() {
 }
 
 # Export everything workers need
+MULTISOURCE_OPTIONS="$SCRIPT_DIR/llvm-multisource-options.sh"
+FPCMP="$SCRIPT_DIR/fpcmp.py"
+export MULTISOURCE_OPTIONS FPCMP
 export TIMEOUT RUNNER GCC CLANGPP INTEGRATION_OUTPUT_DIR LLVM_EVAL_DIR LLVM_EVAL_OUTPUT_DIR
 export ESBMC_EVAL_DIR ESBMC_EVAL_OUTPUT_DIR EXTERNALIZE_STD_FLAG MULTI_MERGE
 export -f pipeline_stage run_selfchecking run_c_test run_cpp_test run_llvm_test run_llvm_multi_test run_esbmc_test
@@ -936,7 +961,9 @@ else
         while IFS= read -r f; do
             ext="${f##*.}"; base="${f%.$ext}"
             [ -f "${base}.reference_output" ] && echo "$f"
-        done < <(find "$LLVM_EVAL_DIR" \( -name "*.cpp" -o -name "*.c" \) | sort)
+        # MultiSource programs are tested as wholes by RUN_LLVM_MULTI.
+        done < <(find "$LLVM_EVAL_DIR" -path "${LLVM_EVAL_DIR%/}/MultiSource" -prune \
+                     -o \( -name "*.cpp" -o -name "*.c" \) -print | sort)
     )
     printf "\r%-30s\r" ""  # clear the scanning line
     llvm_total=${#llvm_files[@]}

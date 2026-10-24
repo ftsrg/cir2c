@@ -36,6 +36,7 @@
 #   --merge c|cir             Merge strategy for multi-file (default: c)
 #   --mlir FILE               Save intermediate CIR MLIR to FILE (default: temp)
 #   --flat-mlir FILE          Save flattened MLIR to FILE (implies --flatten)
+#   --cflag FLAG              Add FLAG to the CIR generation step (repeatable)
 #   --[no-]externalize-std    Externalize (default) or keep std:: calls
 
 set -euo pipefail
@@ -66,6 +67,7 @@ MERGE_STRATEGY="c"
 MLIR_OUT=""
 FLAT_MLIR_OUT=""
 INCLUDE_FLAGS=()   # -I dirs for CIR generation, supplied by the caller
+EXTRA_CFLAGS=()    # further flags for CIR generation (--cflag), e.g. -D
 EXTERNALIZE_STD=true
 
 usage() {
@@ -74,6 +76,7 @@ usage() {
     echo "  --merge c|cir   merge strategy for multi-file (default: c)" >&2
     echo "  --mlir FILE, --flat-mlir FILE" >&2
     echo "  --include DIR   add -I DIR to CIR generation (repeatable)" >&2
+    echo "  --cflag FLAG    add FLAG to CIR generation (repeatable)" >&2
     echo "  --[no-]externalize-std" >&2
     exit 1
 }
@@ -87,6 +90,7 @@ while [[ $# -gt 0 ]]; do
         --mlir)               MLIR_OUT="$2"; shift 2 ;;
         --flat-mlir)          FLAT_MLIR_OUT="$2"; FLATTEN=true; shift 2 ;;
         --include)            INCLUDE_FLAGS+=(-I "$2"); shift 2 ;;
+        --cflag)              EXTRA_CFLAGS+=("$2"); shift 2 ;;
         --externalize-std)    EXTERNALIZE_STD=true; shift ;;
         --no-externalize-std) EXTERNALIZE_STD=false; shift ;;
         --) shift; break ;;
@@ -158,7 +162,8 @@ run_single_pipeline() {
     cir_file=$(_tmpmlir "")
     "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$input" -o "$cir_file" \
         ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
-        ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} || exit 2
+        ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
+        ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
 
     # Step 2: Preprocess
     local pre_file
@@ -193,7 +198,8 @@ compile_to_cir() {
 
     "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$input" -o "$output" \
         ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
-        ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} || exit 2
+        ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
+        ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
 }
 
 if [[ "$NUM_INPUTS" -eq 1 ]]; then
@@ -204,7 +210,8 @@ if [[ "$NUM_INPUTS" -eq 1 ]]; then
     CIR_FILE=$(_tmpmlir "$MLIR_OUT")
     "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$INPUT_FILE" -o "$CIR_FILE" \
         ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
-        ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} || exit 2
+        ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
+        ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
 
     # Step 2: Preprocess
     PRE_FILE=$(_tmpmlir "")

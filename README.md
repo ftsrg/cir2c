@@ -321,6 +321,7 @@ script merges the translation units into one C program. See
 | `--mlir FILE` | Write the intermediate CIR to `FILE`. Use this option to find problems. |
 | `--flat-mlir FILE` | Write the flat CIR to `FILE`. This option includes `--flatten`. |
 | `--include DIR` | Add the `-I DIR` option to the CIR step. You can give this option more than one time. |
+| `--cflag FLAG` | Add `FLAG` to the CIR step, for example `-DNAME=VALUE`. You can give this option more than one time. The script adds no such flag itself. |
 | `--merge c\|cir` | Set how more than one input file is merged. `c` (the default) merges the C outputs. `cir` merges the CIR modules with `cir-merge`. |
 | `--externalize-std` | Replace the `std::` calls and the library calls with unknown values. This is the default. |
 | `--no-externalize-std` | Keep the bodies of the `std::` functions. **CAUTION: Read [8.2 The standard library](#82-the-standard-library) first.** |
@@ -1116,6 +1117,7 @@ JOBS=8 bash test/run_tests.sh --json-out /tmp/summary.json
 |---|---|---|
 | `RUN_INTEGRATION` | `1` | Run the integration tests |
 | `RUN_LLVM` | `0` | Run the LLVM SingleSource tests (large and slow) |
+| `RUN_LLVM_MULTI` | `0` | Run the LLVM MultiSource tests |
 | `RUN_ESBMC` | `0` | Run the esbmc-eval tests (the corpus is not in this repository) |
 | `JOBS` | `nproc` | The number of parallel jobs |
 | `MULTI_MERGE` | `c` | The merge strategy of the LLVM MultiSource tests: `c` or `cir` (see [5.6](#56-merge-translation-units)) |
@@ -1147,7 +1149,8 @@ The `.cir` files are used directly. The `expect` file gives the result:
 A `sources` file in a case directory lists the inputs by their path in the
 repository. The cases use it for programs of the LLVM MultiSource corpus. A
 `// cir-merge-cflags: FLAGS` line in a source adds compiler flags for that
-source.
+source. A `cflags` file in the case directory adds compiler flags for all its
+sources.
 
 The result must not depend on the order of the inputs. Thus the runner merges a
 case with up to three inputs in all orders, and a larger case in sorted order
@@ -1199,6 +1202,28 @@ input.
 
 The `generate-reference-outputs.py` script makes the missing `.reference_output`
 files. The script compiles and runs each program with the system compiler.
+
+The SingleSource suite does not include the `MultiSource/` directory.
+
+**The LLVM MultiSource tests** (`RUN_LLVM_MULTI=1`) use the programs in
+`sources/llvm-test-suite/MultiSource/`. Each program has more than one source
+file. The runner translates all files of a program into one C file, with the
+merge strategy that `MULTI_MERGE` selects (`c` or `cir`, see
+[5.6](#56-merge-translation-units)). Then it compiles, links and runs the
+program, and compares the output and the exit code with the reference. CI runs
+the suite two times, one time with each strategy.
+
+The reference outputs come from the LLVM test-suite, which builds and runs each
+program with its own settings. `test/llvm-multisource-options.sh` contains
+these settings, taken from the `CMakeLists.txt` file of each program: the
+language standard, the `-D` flags, the program arguments, the file for stdin
+and the numeric tolerance. The runner runs each program in its directory,
+where the input files are. It compares stdout and stderr together, as the
+reference outputs contain both. With a tolerance, `test/fpcmp.py` compares the
+numbers like the `fpcmp -r` tool of the LLVM test-suite.
+
+The vendored sources and input files are the same as in the LLVM test-suite,
+except for the license header.
 
 ### 9.5 Suite 3: the esbmc-eval tests
 

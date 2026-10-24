@@ -51,7 +51,7 @@ print_expr(int opn)
 // --------------------------- print_pgm -------------------------------
 
 void
-print_pgm(int debugLevel)
+print_pgm()
 {
    int i, j, k, opndj;
 
