@@ -201,6 +201,10 @@ jobs:
             slug: llvm-multi-cir
             env: RUN_INTEGRATION=0 RUN_LLVM=0 RUN_LLVM_MULTI=1 RUN_ESBMC=0 MULTI_MERGE=cir
             extra_flags: '--externalize-std'
+          - name: LLVM SingleSource tests (operational models)
+            slug: llvm-om
+            env: RUN_INTEGRATION=0 RUN_LLVM=1 RUN_ESBMC=0
+            extra_flags: '--include libcxx-om/c++/v1 --no-externalize-std'
     steps:
       - uses: actions/checkout@v4
         with:
