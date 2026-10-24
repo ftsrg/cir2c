@@ -1,0 +1,197 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <numeric>
+// Simplified C++ header for numeric algorithms
+
+#ifndef _LIBCXX_OM_NUMERIC
+#define _LIBCXX_OM_NUMERIC
+
+namespace std {
+
+// accumulate
+template<typename InputIt, typename T>
+inline T accumulate(InputIt first, InputIt last, T init) {
+    while (first != last) {
+        init = init + *first;
+        ++first;
+    }
+    return init;
+}
+
+template<typename InputIt, typename T, typename BinaryOp>
+inline T accumulate(InputIt first, InputIt last, T init, BinaryOp op) {
+    while (first != last) {
+        init = op(init, *first);
+        ++first;
+    }
+    return init;
+}
+
+// reduce
+template<typename ExecutionPolicy, typename ForwardIt, typename T>
+inline T reduce(ExecutionPolicy&&, ForwardIt first, ForwardIt last, T init) {
+    return accumulate(first, last, init);
+}
+
+// inner_product
+template<typename InputIt1, typename InputIt2, typename T>
+inline T inner_product(InputIt1 first1, InputIt1 last1, InputIt2 first2, T init) {
+    while (first1 != last1) {
+        init = init + (*first1) * (*first2);
+        ++first1;
+        ++first2;
+    }
+    return init;
+}
+
+template<typename InputIt1, typename InputIt2, typename T, typename BinaryOp1, typename BinaryOp2>
+inline T inner_product(InputIt1 first1, InputIt1 last1, InputIt2 first2, T init, BinaryOp1 op1, BinaryOp2 op2) {
+    while (first1 != last1) {
+        init = op1(init, op2(*first1, *first2));
+        ++first1;
+        ++first2;
+    }
+    return init;
+}
+
+// partial_sum
+template<typename InputIt, typename OutputIt>
+inline OutputIt partial_sum(InputIt first, InputIt last, OutputIt d_first) {
+    if (first == last) return d_first;
+    typename InputIt::difference_type tmp = *first;
+    *d_first = tmp;
+    while (++first != last) {
+        tmp = tmp + *first;
+        *++d_first = tmp;
+    }
+    return ++d_first;
+}
+
+template<typename InputIt, typename OutputIt, typename BinaryOp>
+inline OutputIt partial_sum(InputIt first, InputIt last, OutputIt d_first, BinaryOp op) {
+    if (first == last) return d_first;
+    typename InputIt::difference_type tmp = *first;
+    *d_first = tmp;
+    while (++first != last) {
+        tmp = op(tmp, *first);
+        *++d_first = tmp;
+    }
+    return ++d_first;
+}
+
+// exclusive_scan
+template<typename ExecutionPolicy, typename InputIt, typename OutputIt, typename T, typename BinaryOp = std::plus<>>
+inline OutputIt exclusive_scan(ExecutionPolicy&&, InputIt first, InputIt last, OutputIt d_first, T init, BinaryOp op = BinaryOp()) {
+    if (first == last) return d_first;
+    T tmp = init;
+    while (first != last) {
+        *d_first = tmp;
+        tmp = op(tmp, *first);
+        ++first;
+        ++d_first;
+    }
+    return d_first;
+}
+
+// inclusive_scan
+template<typename ExecutionPolicy, typename InputIt, typename OutputIt, typename BinaryOp = std::plus<>>
+inline OutputIt inclusive_scan(ExecutionPolicy&&, InputIt first, InputIt last, OutputIt d_first, BinaryOp op = BinaryOp()) {
+    return partial_sum(first, last, d_first, op);
+}
+
+// adjacent_difference
+template<typename InputIt, typename OutputIt>
+inline OutputIt adjacent_difference(InputIt first, InputIt last, OutputIt d_first) {
+    if (first == last) return d_first;
+    *d_first = *first;
+    OutputIt prev = d_first;
+    while (++first != last) {
+        *++d_first = *first - *prev;
+        prev = d_first;
+    }
+    return ++d_first;
+}
+
+template<typename InputIt, typename OutputIt, typename BinaryOp>
+inline OutputIt adjacent_difference(InputIt first, InputIt last, OutputIt d_first, BinaryOp op) {
+    if (first == last) return d_first;
+    *d_first = *first;
+    OutputIt prev = d_first;
+    while (++first != last) {
+        *++d_first = op(*first, *prev);
+        prev = d_first;
+    }
+    return ++d_first;
+}
+
+// plus
+template<typename T>
+struct plus {
+    T operator()(const T& x, const T& y) const { return x + y; }
+};
+
+// minus
+template<typename T>
+struct minus {
+    T operator()(const T& x, const T& y) const { return x - y; }
+};
+
+// multiplies
+template<typename T>
+struct multiplies {
+    T operator()(const T& x, const T& y) const { return x * y; }
+};
+
+// divides
+template<typename T>
+struct divides {
+    T operator()(const T& x, const T& y) const { return x / y; }
+};
+
+// modulus
+template<typename T>
+struct modulus {
+    T operator()(const T& x, const T& y) const { return x % y; }
+};
+
+// negate
+template<typename T>
+struct negate {
+    T operator()(const T& x) const { return -x; }
+};
+
+// logical_and
+template<typename T>
+struct logical_and {
+    bool operator()(const T& x, const T& y) const { return x && y; }
+};
+
+// logical_or
+template<typename T>
+struct logical_or {
+    bool operator()(const T& x, const T& y) const { return x || y; }
+};
+
+// logical_not
+template<typename T>
+struct logical_not {
+    bool operator()(const T& x) const { return !x; }
+};
+
+} // namespace std
+
+#endif // _LIBCXX_OM_NUMERIC

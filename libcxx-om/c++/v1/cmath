@@ -1,0 +1,187 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <cmath>
+// Simplified C++ header for math operations
+
+#ifndef _LIBCXX_OM_CMATH
+#define _LIBCXX_OM_CMATH
+
+namespace std {
+
+// Basic math functions - simplified implementations for verification
+inline int abs(int x) {
+    return x < 0 ? -x : x;
+}
+
+inline long abs(long x) {
+    return x < 0 ? -x : x;
+}
+
+inline long long abs(long long x) {
+    return x < 0 ? -x : x;
+}
+
+inline float abs(float x) {
+    return x < 0.0f ? -x : x;
+}
+
+inline double abs(double x) {
+    return x < 0.0 ? -x : x;
+}
+
+inline float fabs(float x) {
+    return x < 0.0f ? -x : x;
+}
+
+inline double fabs(double x) {
+    return x < 0.0 ? -x : x;
+}
+
+inline double floor(double x) {
+    return __builtin_floor(x);
+}
+
+inline float floor(float x) {
+    return __builtin_floorf(x);
+}
+
+inline double ceil(double x) {
+    return __builtin_ceil(x);
+}
+
+inline float ceil(float x) {
+    return __builtin_ceilf(x);
+}
+
+inline double round(double x) {
+    return __builtin_round(x);
+}
+
+inline float round(float x) {
+    return __builtin_roundf(x);
+}
+
+inline double sqrt(double x) {
+    return __builtin_sqrt(x);
+}
+
+inline float sqrt(float x) {
+    return __builtin_sqrtf(x);
+}
+
+inline double pow(double base, double exp) {
+    return __builtin_pow(base, exp);
+}
+
+inline float pow(float base, float exp) {
+    return __builtin_powf(base, exp);
+}
+
+inline double sin(double x) {
+    return __builtin_sin(x);
+}
+
+inline float sin(float x) {
+    return __builtin_sinf(x);
+}
+
+inline double cos(double x) {
+    return __builtin_cos(x);
+}
+
+inline float cos(float x) {
+    return __builtin_cosf(x);
+}
+
+inline double tan(double x) {
+    return __builtin_tan(x);
+}
+
+inline float tan(float x) {
+    return __builtin_tanf(x);
+}
+
+inline double log(double x) {
+    return __builtin_log(x);
+}
+
+inline float log(float x) {
+    return __builtin_logf(x);
+}
+
+inline double log10(double x) {
+    return __builtin_log10(x);
+}
+
+inline float log10(float x) {
+    return __builtin_log10f(x);
+}
+
+inline double exp(double x) {
+    return __builtin_exp(x);
+}
+
+inline float exp(float x) {
+    return __builtin_expf(x);
+}
+
+inline double fmod(double x, double y) {
+    return __builtin_fmod(x, y);
+}
+
+inline float fmod(float x, float y) {
+    return __builtin_fmodf(x, y);
+}
+
+inline double fmax(double x, double y) {
+    return x > y ? x : y;
+}
+
+inline float fmax(float x, float y) {
+    return x > y ? x : y;
+}
+
+inline double fmin(double x, double y) {
+    return x < y ? x : y;
+}
+
+inline float fmin(float x, float y) {
+    return x < y ? x : y;
+}
+
+inline double fabs(double x) {
+    return x < 0.0 ? -x : x;
+}
+
+inline float fabs(float x) {
+    return x < 0.0f ? -x : x;
+}
+
+// Max and min for generic types
+template<typename T>
+inline T max(T a, T b) {
+    return a > b ? a : b;
+}
+
+template<typename T>
+inline T min(T a, T b) {
+    return a < b ? a : b;
+}
+
+} // namespace std
+
+#endif // _LIBCXX_OM_CMATH

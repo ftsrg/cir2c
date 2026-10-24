@@ -1,0 +1,151 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <deque>
+// Simplified C++ header for std::deque
+
+#ifndef _LIBCXX_OM_DEQUE
+#define _LIBCXX_OM_DEQUE
+
+#include <stddef.h>
+
+namespace std {
+
+template<typename T, typename Allocator = allocator<T>>
+class deque {
+public:
+    typedef T value_type;
+    typedef Allocator allocator_type;
+    typedef size_t size_type;
+    typedef ptrdiff_t difference_type;
+    typedef T* iterator;
+    typedef const T* const_iterator;
+
+    static constexpr size_t MAX_SIZE = 64;
+
+    deque() : data_(nullptr), size_(0) {}
+
+    explicit deque(size_type n) : data_(nullptr), size_(0) { resize(n); }
+    deque(size_type n, const T& value) : data_(nullptr), size_(0) { resize(n, value); }
+
+    deque(const deque& other) : data_(nullptr), size_(0) {
+        for (size_type i = 0; i < other.size_; i++) push_back(other.data_[i]);
+    }
+
+    deque(deque&& other) noexcept : data_(other.data_), size_(other.size_) {
+        other.data_ = nullptr; other.size_ = 0;
+    }
+
+    ~deque() { if (data_) delete[] data_; }
+
+    deque& operator=(const deque& other) {
+        if (this != &other) { clear(); for (size_type i = 0; i < other.size_; i++) push_back(other.data_[i]); }
+        return *this;
+    }
+
+    deque& operator=(deque&& other) noexcept {
+        if (this != &other) { if (data_) delete[] data_; data_ = other.data_; size_ = other.size_; other.data_ = nullptr; other.size_ = 0; }
+        return *this;
+    }
+
+    iterator begin() noexcept { return data_; }
+    iterator end() noexcept { return data_ + size_; }
+    const_iterator begin() const noexcept { return data_; }
+    const_iterator end() const noexcept { return data_ + size_; }
+    const_iterator cbegin() const noexcept { return data_; }
+    const_iterator cend() const noexcept { return data_ + size_; }
+
+    size_type size() const noexcept { return size_; }
+    size_type max_size() const noexcept { return MAX_SIZE; }
+    bool empty() const noexcept { return size_ == 0; }
+
+    T& operator[](size_type n) noexcept { return data_[n]; }
+    const T& operator[](size_type n) const noexcept { return data_[n]; }
+
+    T& at(size_type n) { if (n >= size_) __VERIFIER_error(); return data_[n]; }
+    const T& at(size_type n) const { if (n >= size_) __VERIFIER_error(); return data_[n]; }
+
+    T& front() noexcept { return data_[0]; }
+    const T& front() const noexcept { return data_[0]; }
+    T& back() noexcept { return data_[size_ - 1]; }
+    const T& back() const noexcept { return data_[size_ - 1]; }
+
+    void push_front(const T& value) {
+        if (size_ < MAX_SIZE) {
+            T* new_data = new T[size_ + 1];
+            new_data[0] = value;
+            if (data_) { for (size_type i = 0; i < size_; i++) new_data[i + 1] = data_[i]; delete[] data_; }
+            data_ = new_data; size_++;
+        }
+    }
+
+    void push_back(const T& value) {
+        if (size_ < MAX_SIZE) {
+            T* new_data = new T[size_ + 1];
+            if (data_) { for (size_type i = 0; i < size_; i++) new_data[i] = data_[i]; delete[] data_; }
+            new_data[size_] = value; data_ = new_data; size_++;
+        }
+    }
+
+    void pop_front() {
+        if (size_ > 0) {
+            T* new_data = new T[size_ - 1];
+            for (size_type i = 0; i < size_ - 1; i++) new_data[i] = data_[i + 1];
+            delete[] data_; data_ = new_data; size_--;
+        }
+    }
+
+    void pop_back() { if (size_ > 0) size_--; }
+
+    void clear() noexcept { if (data_) delete[] data_; data_ = nullptr; size_ = 0; }
+
+    void resize(size_type n) { resize(n, T()); }
+
+    void resize(size_type n, const T& value) {
+        if (n < size_) size_ = n;
+        else if (n > size_) {
+            T* new_data = new T[n];
+            if (data_) { for (size_type i = 0; i < size_; i++) new_data[i] = data_[i]; delete[] data_; }
+            for (size_type i = size_; i < n; i++) new_data[i] = value;
+            data_ = new_data; size_ = n;
+        }
+    }
+
+    void swap(deque& other) noexcept {
+        T* tmp = data_; size_type tmp_s = size_;
+        data_ = other.data_; size_ = other.size_;
+        other.data_ = tmp; other.size_ = tmp_s;
+    }
+
+    bool operator==(const deque& other) const {
+        if (size_ != other.size_) return false;
+        for (size_type i = 0; i < size_; i++) if (data_[i] != other.data_[i]) return false;
+        return true;
+    }
+
+    bool operator!=(const deque& other) const { return !(*this == other); }
+
+private:
+    T* data_;
+    size_type size_;
+};
+
+template<typename T, typename Allocator>
+void swap(deque<T, Allocator>& x, deque<T, Allocator>& y) noexcept { x.swap(y); }
+
+} // namespace std
+
+#endif // _LIBCXX_OM_DEQUE

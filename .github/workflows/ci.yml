@@ -188,6 +188,10 @@ jobs:
             slug: llvm-std
             env: RUN_INTEGRATION=0 RUN_LLVM=1 RUN_ESBMC=0
             extra_flags: '--no-externalize-std'
+          - name: LLVM SingleSource tests (operational models)
+            slug: llvm-om
+            env: RUN_INTEGRATION=0 RUN_LLVM=1 RUN_ESBMC=0
+            extra_flags: '--include libcxx-om/c++/v1 --no-externalize-std'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -215,7 +219,10 @@ jobs:
             bash test/run_tests.sh ${{ matrix.extra_flags }} \
               --json-out /tmp/${{ matrix.slug }}.json \
             || true
-          cat /tmp/${{ matrix.slug }}.json
+          # Ensure the JSON file exists for the upload step, even if the runner
+          # crashed before writing it.
+          touch /tmp/${{ matrix.slug }}.json
+          cat /tmp/${{ matrix.slug }}.json || true
 
       - name: Upload results
         if: always()
