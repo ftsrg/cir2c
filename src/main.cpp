@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "CPrototypes.h"
 #include "Mapper.h"
 #include "handlers/Handlers.h"
 #include "version.h"
@@ -41,13 +42,14 @@ using namespace cir2c;
 
 int main(int argc, char **argv) {
   const char *monitorJsonFile = nullptr;
+  const char *cPrototypesFile = nullptr;
   std::vector<std::string> positional;
   // Issue #7: externalize all std:: calls (I/O and containers) by default.
   bool externalizeStd = true;
 
   const char *usage =
       "Usage: cir2c [--monitor-json <trace.json>] "
-      "[--[no-]externalize-std] "
+      "[--[no-]externalize-std] [--c-prototypes <decls.json>] "
       "<input.mlir> <output.c>\n";
 
   for (int i = 1; i < argc; ++i) {
@@ -58,6 +60,14 @@ int main(int argc, char **argv) {
     }
     if (arg == "--externalize-std") { externalizeStd = true; continue; }
     if (arg == "--no-externalize-std") { externalizeStd = false; continue; }
+    if (arg == "--c-prototypes") {
+      if (i + 1 >= argc) {
+        llvm::errs() << usage;
+        return 2;
+      }
+      cPrototypesFile = argv[++i];
+      continue;
+    }
     if (arg == "--monitor-json") {
       if (i + 1 >= argc) {
         llvm::errs() << usage;
@@ -123,6 +133,15 @@ int main(int argc, char **argv) {
 
   Mapper mapper;
   mapper.setExternalizeStd(externalizeStd);
+  if (cPrototypesFile) {
+    std::map<std::string, unsigned> constParams;
+    std::string err;
+    if (!readCPrototypes(cPrototypesFile, constParams, err)) {
+      llvm::errs() << "cir2c: error: " << err << "\n";
+      return 2;
+    }
+    mapper.setCPrototypeConstParams(std::move(constParams));
+  }
   registerBuiltinHandlers(mapper);
 
   std::ofstream ofs(outFile);

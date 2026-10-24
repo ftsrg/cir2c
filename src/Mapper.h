@@ -134,6 +134,17 @@ public:
   /// become __VERIFIER_nondet_*() calls.  This covers both I/O and containers.
   void setExternalizeStd(bool v) { externalizeStd_ = v; }
   bool externalizeStd() const { return externalizeStd_; }
+
+  /// The const parameters of the functions that the program declares but does
+  /// not define, as a bit mask for each C symbol, read from clang's AST (see
+  /// readCPrototypes). The CIR has no const (CIR pointer types have no
+  /// qualifiers, llvm/llvm-project#217687).
+  void setCPrototypeConstParams(std::map<std::string, unsigned> m) {
+    cPrototypeConstParams_ = std::move(m);
+  }
+  const std::map<std::string, unsigned> &cPrototypeConstParams() const {
+    return cPrototypeConstParams_;
+  }
   /// True when the named C struct will be emitted with a full definition
   /// (not just a forward declaration). Std__ structs that are pointer-only
   /// get forward declarations only; handlers must guard sizeof on them.
@@ -374,6 +385,8 @@ private:
   std::set<std::string> forwardDeclaredFuncNames_;
   // STD externalization (issue #7). On by default.
   bool externalizeStd_ = true;
+  // See setCPrototypeConstParams.
+  std::map<std::string, unsigned> cPrototypeConstParams_;
   // With --no-externalize-std: the symbols that the output uses without a
   // definition, outside the C standard library (README 8.2). mapModule stops
   // with an error when the list is not empty.

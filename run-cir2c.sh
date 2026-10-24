@@ -184,6 +184,23 @@ CIR_FILE=$(_tmpmlir "$MLIR_OUT")
     ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
     ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} || exit 2
 
+# Step 1b: The declarations of the functions that the program declares but does
+# not define, from clang's AST. The CIR has no const (CIR pointer types have no
+# qualifiers, llvm/llvm-project#217687), but a declaration whose type is not
+# compatible with the function is undefined (C11 6.2.7p2). One clang run for
+# each C symbol: -ast-dump-filter takes one name, and the AST of the whole
+# translation unit is hundreds of megabytes.
+PROTO_FILE=$(mktemp --suffix=.json); _TEMPS+=("$PROTO_FILE")
+while read -r name; do
+    "$CLANG_BIN" -x "$LANG" "-std=$STD" -fsyntax-only "$INPUT_FILE" \
+        -Xclang -ast-dump=json -Xclang "-ast-dump-filter=$name" \
+        "${PREFIX_MAP_FLAGS[@]}" \
+        ${MODEL_FLAGS[@]+"${MODEL_FLAGS[@]}"} \
+        ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
+        ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} >> "$PROTO_FILE" 2>/dev/null || true
+done < <(sed -n -E 's/^ *cir\.func [^@]*private @([A-Za-z_][A-Za-z0-9_]*)\(.*/\1/p' "$CIR_FILE" \
+             | grep -v '^_Z' | sort -u)
+
 # Step 2: Preprocess — strip alloca qualifiers that ClangIR's AllocaOp parser
 # used to reject: ", cleanup_dest_slot" (C++ EH slot) and ", const"
 # (const-qualified catch variable). LLVM >= 23 spells these without commas and
@@ -206,5 +223,6 @@ fi
 # Step 4: cir2c
 MAPPER_CMD=("$CIR2C")
 [[ "$EXTERNALIZE_STD" == true ]] && MAPPER_CMD+=(--externalize-std) || MAPPER_CMD+=(--no-externalize-std)
+[[ -s "$PROTO_FILE" ]] && MAPPER_CMD+=(--c-prototypes "$PROTO_FILE")
 MAPPER_CMD+=("$MAPPER_INPUT" "$OUTPUT_C")
 "${MAPPER_CMD[@]}" || exit 4

@@ -146,6 +146,7 @@ add_executable(cir2c
   src/Traceability.cpp
   src/Reinterpretation.cpp
   src/ExceptionTypes.cpp
+  src/CPrototypes.cpp
   src/handlers/Handlers.cpp
   src/handlers/HandlerModule.cpp
   src/handlers/HandlerSupport.cpp
