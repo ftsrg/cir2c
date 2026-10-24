@@ -1128,8 +1128,8 @@ bool isOdrLinkage(cir::GlobalLinkageKind linkage) {
 
 // A declaration whose type is less complete than the kept symbol's:
 // `extern T a[];` (cir.array<T x 0>) against `T a[N];`, or a C function
-// declared without a prototype (`int f();`, no_proto) against one with a
-// prototype and the same return type. Its input reaches the symbol only
+// declared without a prototype (`int f();`, no_proto) against a definition
+// (prototyped or K&R) or a prototyped declaration with the same return type. Its input reaches the symbol only
 // through cir.get_global (and #cir.global_view initializers, whose meaning
 // does not depend on the symbol's type), so each cir.get_global of it is given
 // the kept symbol's type and followed by a bitcast to the type the input
@@ -1266,7 +1266,8 @@ bool adaptable(const Symbol &kept, const Symbol &decl) {
     return false;
   if (auto keptFunc = dyn_cast<cir::FuncOp>(kept.op)) {
     auto declFunc = cast<cir::FuncOp>(decl.op);
-    return !keptFunc.getNoProto() &&
+    // A K&R definition is no_proto too, but its type has the parameters.
+    return (!keptFunc.getNoProto() || kept.isDefinition) &&
            keptFunc.getFunctionType().getOptionalReturnType() ==
                declFunc.getFunctionType().getOptionalReturnType() &&
            keptFunc.getCallingConv() == declFunc.getCallingConv();
