@@ -38,7 +38,7 @@
 
 #include <llvm/ADT/MapVector.h>
 #include <llvm/ADT/SmallVector.h>
-#include <llvm/ADT/StringSet.h>
+#include <llvm/ADT/StringMap.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/InitLLVM.h>
@@ -46,6 +46,8 @@
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -90,6 +92,13 @@ llvm::raw_ostream &note() { return llvm::errs() << "cir-merge: note: "; }
 // Inputs
 // ---------------------------------------------------------------------------
 
+void registerDialects(MLIRContext &context) {
+  DialectRegistry registry;
+  registry.insert<cir::CIRDialect, DLTIDialect, LLVM::LLVMDialect>();
+  context.appendDialectRegistry(registry);
+  context.loadAllAvailableDialects();
+}
+
 struct Input {
   std::string path;
   OwningOpRef<ModuleOp> module;
@@ -117,6 +126,134 @@ OwningOpRef<ModuleOp> parseInput(const std::string &path, MLIRContext &context) 
     return nullptr;
   }
   return module;
+}
+
+// ---------------------------------------------------------------------------
+// Record definitions
+// ---------------------------------------------------------------------------
+//
+// Named CIR records are uniqued by name in an MLIRContext. If two inputs
+// defined the same record name differently and were parsed into one context,
+// the second input would silently use the first body (and only fail to verify
+// if it happened to access a member). So each input is first parsed in a
+// context of its own, the definition of every complete named record is
+// fingerprinted there, and the fingerprints are compared across inputs.
+
+// A textual fingerprint of `type` in which named records are referred to by
+// name: their bodies are fingerprinted separately, and a record that is
+// incomplete in one input and complete in another must not count as a
+// difference of the types that point to it.
+void typeKey(Type type, llvm::raw_ostream &os) {
+  if (auto record = dyn_cast<cir::RecordType>(type)) {
+    if (record.getName()) {
+      os << "%" << record.getName().getValue();
+      return;
+    }
+    os << (record.isUnion() ? "union{" : "struct{") << record.getPacked()
+       << record.getPadded() << ":";
+    for (Type member : record.getMembers()) {
+      typeKey(member, os);
+      os << ",";
+    }
+    for (cir::RecordMemberKind kind : record.getMemberKinds())
+      os << static_cast<unsigned>(kind);
+    os << "}";
+    return;
+  }
+  if (auto ptr = dyn_cast<cir::PointerType>(type)) {
+    os << "ptr<";
+    typeKey(ptr.getPointee(), os);
+    if (ptr.getAddrSpace())
+      os << "," << ptr.getAddrSpace();
+    os << ">";
+    return;
+  }
+  if (auto array = dyn_cast<cir::ArrayType>(type)) {
+    os << "array<";
+    typeKey(array.getElementType(), os);
+    os << " x " << array.getSize() << ">";
+    return;
+  }
+  if (auto func = dyn_cast<cir::FuncType>(type)) {
+    os << "func<(";
+    for (Type input : func.getInputs()) {
+      typeKey(input, os);
+      os << ",";
+    }
+    os << (func.getVarArg() ? "..." : "") << ")->";
+    typeKey(func.getReturnType(), os);
+    os << ">";
+    return;
+  }
+  type.print(os);
+}
+
+// Record name -> fingerprint of its definition, for one input.
+using RecordDefs = std::map<std::string, std::string>;
+
+void collectRecordDefs(ModuleOp module, RecordDefs &defs) {
+  llvm::DenseSet<Type> seen;
+  std::function<void(Type)> visit = [&](Type type) {
+    if (!seen.insert(type).second)
+      return;
+    if (auto record = dyn_cast<cir::RecordType>(type)) {
+      if (record.getName() && record.isComplete()) {
+        std::string key;
+        llvm::raw_string_ostream os(key);
+        os << (record.isUnion() ? "union" : record.isClass() ? "class" : "struct")
+           << " packed=" << record.getPacked()
+           << " padded=" << record.getPadded() << " {";
+        for (auto [i, member] : llvm::enumerate(record.getMembers())) {
+          os << (i ? ", " : "");
+          if (i < record.getMemberKinds().size())
+            os << static_cast<unsigned>(record.getMemberKinds()[i]) << ":";
+          typeKey(member, os);
+        }
+        os << "}";
+        defs[record.getName().getValue().str()] = key;
+      }
+      // Identified records do not expose their members as sub-elements.
+      for (Type member : record.getMembers())
+        member.walk([&](Type t) { visit(t); });
+    }
+  };
+  auto visitAll = [&](Type type) { type.walk([&](Type t) { visit(t); }); };
+  module->walk([&](Operation *op) {
+    for (Type t : op->getResultTypes())
+      visitAll(t);
+    for (Region &region : op->getRegions())
+      for (Block &block : region)
+        for (BlockArgument arg : block.getArguments())
+          visitAll(arg.getType());
+    op->getAttrDictionary().walk([&](Type t) { visit(t); });
+    if (Attribute props = op->getPropertiesAsAttribute())
+      props.walk([&](Type t) { visit(t); });
+  });
+}
+
+// Returns false after printing every record name that two inputs define
+// differently.
+bool checkRecordDefs(ArrayRef<std::string> paths, ArrayRef<RecordDefs> defs) {
+  bool ok = true;
+  llvm::StringMap<size_t> firstInput;
+  for (size_t i = 0; i < defs.size(); ++i)
+    for (auto &[name, key] : defs[i]) {
+      auto [it, inserted] = firstInput.insert({name, i});
+      if (inserted)
+        continue;
+      const std::string &firstKey = defs[it->second].at(name);
+      if (firstKey == key)
+        continue;
+      error() << paths[i] << ": record '" << name
+              << "' is defined differently than in " << paths[it->second]
+              << "\n";
+      note() << paths[it->second] << ": " << firstKey << "\n";
+      note() << paths[i] << ": " << key << "\n";
+      note() << "CIR identifies records by name, so Phase 1 cannot merge "
+             << "translation units that give one name two definitions\n";
+      ok = false;
+    }
+  return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -659,13 +796,6 @@ std::string printModule(ModuleOp module) {
   return text;
 }
 
-void registerDialects(MLIRContext &context) {
-  DialectRegistry registry;
-  registry.insert<cir::CIRDialect, DLTIDialect, LLVM::LLVMDialect>();
-  context.appendDialectRegistry(registry);
-  context.loadAllAvailableDialects();
-}
-
 // Parses the printed output again in a fresh context, as a consumer would.
 bool reparses(const std::string &text) {
   MLIRContext context;
@@ -722,12 +852,26 @@ int main(int argc, char **argv) {
       "Conservative: inputs outside the supported subset are rejected with a\n"
       "diagnostic instead of being merged approximately.\n");
 
+  // 1. Parse and verify every input on its own, and compare the record
+  //    definitions before the inputs share a context (see checkRecordDefs).
+  std::vector<RecordDefs> recordDefs;
+  bool ok = true;
+  for (const std::string &path : inputPaths) {
+    MLIRContext own;
+    registerDialects(own);
+    OwningOpRef<ModuleOp> module = parseInput(path, own);
+    if (!module) {
+      ok = false;
+      continue;
+    }
+    collectRecordDefs(*module, recordDefs.emplace_back());
+  }
+  if (!ok || !checkRecordDefs(inputPaths, recordDefs))
+    return 1;
+
   MLIRContext context;
   registerDialects(context);
-
-  // 1. Parse and verify every input.
   std::vector<Input> inputs;
-  bool ok = true;
   for (const std::string &path : inputPaths) {
     OwningOpRef<ModuleOp> module = parseInput(path, context);
     if (!module) {
