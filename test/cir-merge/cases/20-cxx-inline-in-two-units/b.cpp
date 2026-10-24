@@ -15,4 +15,5 @@
  */
 
 #include "util.h"
-int fb(int x) { return twice(x) + 1; }
+int fa(int x);
+int main() { return fa(2) + twice(3) - 10; }

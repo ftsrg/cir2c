@@ -27,6 +27,7 @@
 
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
+#include <mlir/IR/AttrTypeSubElements.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/DialectRegistry.h>
 #include <mlir/IR/MLIRContext.h>
@@ -48,6 +49,8 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <functional>
+#include <memory>
+#include <set>
 #include <map>
 #include <optional>
 #include <string>
@@ -692,6 +695,7 @@ bool definitionLinkageMergeable(cir::GlobalLinkageKind linkage) {
   case cir::GlobalLinkageKind::ExternalLinkage:
   case cir::GlobalLinkageKind::LinkOnceODRLinkage:
   case cir::GlobalLinkageKind::WeakODRLinkage:
+  case cir::GlobalLinkageKind::AvailableExternallyLinkage:
     return true;
   default:
     return false;
@@ -732,6 +736,108 @@ std::string incompatibility(const Symbol &a, const Symbol &b) {
   return "";
 }
 
+// ---------------------------------------------------------------------------
+// Equivalence of ODR definitions
+// ---------------------------------------------------------------------------
+//
+// C++ lets every translation unit that uses an inline function, a template
+// instance, a vtable or a typeinfo object emit its own definition, with
+// linkonce_odr (or weak_odr) linkage; the One Definition Rule promises that
+// all of them are the same, and the linker keeps one. cir-merge keeps one only
+// when it can see that they are the same: two definitions are equivalent when
+// they are structurally equal, ignoring source locations, where a reference
+// to a translation-unit-local symbol (a string literal, a static helper)
+// matches a reference to another input's local symbol when those two local
+// symbols are equivalent in turn. Differing definitions are an error: either
+// the program breaks the ODR, or the translation units were compiled with
+// different options.
+
+class OdrComparator {
+public:
+  explicit OdrComparator(std::vector<Input> &inputs) : inputs(inputs) {
+    for (Input &in : inputs)
+      tables.emplace_back(std::make_unique<SymbolTable>(*in.module));
+  }
+
+  bool equivalent(Operation *a, unsigned inputA, Operation *b, unsigned inputB) {
+    // Coinductive: a pair under comparison counts as equivalent, so that
+    // mutually recursive local functions compare as equal when their bodies
+    // are.
+    if (!assumed.insert({a, b}).second)
+      return true;
+    if (a->getName() != b->getName())
+      return false;
+    std::vector<Operation *> localsA, localsB;
+    Operation *canonA = canonicalClone(a, inputA, localsA);
+    Operation *canonB = canonicalClone(b, inputB, localsB);
+    bool same = OperationEquivalence::isEquivalentTo(
+        canonA, canonB, OperationEquivalence::IgnoreLocations);
+    canonA->destroy();
+    canonB->destroy();
+    if (!same || localsA.size() != localsB.size())
+      return false;
+    for (size_t i = 0; i < localsA.size(); ++i)
+      if (!equivalent(localsA[i], inputA, localsB[i], inputB))
+        return false;
+    return true;
+  }
+
+private:
+  // A copy of `op` in which the k-th distinct translation-unit-local symbol
+  // it references (in traversal order) is renamed to a placeholder for k; the
+  // referenced local symbols are returned in `locals`.
+  Operation *canonicalClone(Operation *op, unsigned input,
+                            std::vector<Operation *> &locals) {
+    Operation *clone = op->clone();
+    MLIRContext *context = op->getContext();
+    // The names differ for two local symbols, and the linkage, COMDAT and
+    // dso_local flags may differ between equivalent ODR definitions (weak_odr
+    // for an explicit instantiation, available_externally for an extern
+    // template); none of them is part of what the definition means.
+    SymbolTable::setSymbolName(clone, "\x01cir-merge-self");
+    if (auto func = dyn_cast<cir::FuncOp>(clone)) {
+      func.setLinkage(cir::GlobalLinkageKind::LinkOnceODRLinkage);
+      func.setComdat(false);
+      func.setDsoLocal(false);
+    } else if (auto global = dyn_cast<cir::GlobalOp>(clone)) {
+      global.setLinkage(cir::GlobalLinkageKind::LinkOnceODRLinkage);
+      global.setComdat(false);
+      global.setDsoLocal(false);
+    }
+    llvm::DenseMap<StringAttr, unsigned> index;
+    AttrTypeReplacer replacer;
+    replacer.addReplacement(
+        [&](SymbolRefAttr ref) -> std::optional<Attribute> {
+          Operation *target = tables[input]->lookup(ref.getRootReference());
+          if (!target)
+            return std::nullopt;
+          std::optional<cir::GlobalLinkageKind> linkage = linkageOf(target);
+          if (!linkage || !isTranslationUnitLocal(*linkage))
+            return std::nullopt;
+          auto [it, inserted] =
+              index.insert({ref.getRootReference(), locals.size()});
+          if (inserted)
+            locals.push_back(target);
+          return FlatSymbolRefAttr::get(
+              context, "\x01cir-merge-local-" + std::to_string(it->second));
+        });
+    replacer.recursivelyReplaceElementsIn(clone, /*replaceAttrs=*/true,
+                                          /*replaceLocs=*/false,
+                                          /*replaceTypes=*/false);
+    return clone;
+  }
+
+  std::vector<Input> &inputs;
+  std::vector<std::unique_ptr<SymbolTable>> tables;
+  std::set<std::pair<Operation *, Operation *>> assumed;
+};
+
+bool isOdrLinkage(cir::GlobalLinkageKind linkage) {
+  return linkage == cir::GlobalLinkageKind::LinkOnceODRLinkage ||
+         linkage == cir::GlobalLinkageKind::WeakODRLinkage ||
+         linkage == cir::GlobalLinkageKind::AvailableExternallyLinkage;
+}
+
 struct Plan {
   llvm::DenseSet<Operation *> keep;
 };
@@ -744,8 +850,9 @@ void explain(const std::vector<Input> &inputs, const Symbol &s,
                  << ")\n";
 }
 
-bool planMerge(const std::vector<Input> &inputs,
-               const std::vector<Symbol> &symbols, Plan &plan) {
+bool planMerge(std::vector<Input> &inputs, const std::vector<Symbol> &symbols,
+               Plan &plan) {
+  OdrComparator odr(inputs);
   llvm::MapVector<StringRef, SmallVector<const Symbol *, 2>> byName;
   for (const Symbol &s : symbols)
     byName[s.name].push_back(&s);
@@ -807,7 +914,42 @@ bool planMerge(const std::vector<Input> &inputs,
         if (s->isDefinition)
           defs.push_back(s);
 
-    if (groupOk && defs.size() > 1) {
+    const Symbol *chosen = defs.empty() ? &first : defs.front();
+
+    bool allOdr = llvm::all_of(
+        defs, [](const Symbol *d) { return isOdrLinkage(d->linkage); });
+    if (groupOk && defs.size() > 1 && allOdr) {
+      for (size_t j = 1; j < defs.size(); ++j) {
+        if (odr.equivalent(defs[0]->op, defs[0]->input, defs[j]->op,
+                           defs[j]->input))
+          continue;
+        error() << inputs[defs[j]->input].path << ": the definition of "
+                << kindName(defs[j]->kind) << " @" << name << " ("
+                << cir::stringifyGlobalLinkageKind(defs[j]->linkage)
+                << " linkage) differs from the one in "
+                << inputs[defs[0]->input].path << "\n";
+        note() << where(*defs[j]) << " vs " << where(*defs[0]) << "\n";
+        note() << "the One Definition Rule requires them to be the same: the "
+               << "program breaks it, or the translation units were compiled "
+               << "with different options\n";
+        groupOk = false;
+        break;
+      }
+      // Keep the strongest of the equivalent definitions: weak_odr (an
+      // explicit instantiation), else linkonce_odr, else available_externally.
+      auto rank = [](cir::GlobalLinkageKind linkage) {
+        return linkage == cir::GlobalLinkageKind::WeakODRLinkage       ? 0
+               : linkage == cir::GlobalLinkageKind::LinkOnceODRLinkage ? 1
+                                                                       : 2;
+      };
+      for (const Symbol *d : defs)
+        if (rank(d->linkage) < rank(chosen->linkage))
+          chosen = d;
+      if (groupOk)
+        explain(inputs, *chosen,
+                std::to_string(defs.size()) +
+                    " equivalent ODR definitions, this one kept");
+    } else if (groupOk && defs.size() > 1) {
       error() << inputs[defs[1]->input].path << ": duplicate definition of "
               << kindName(defs[1]->kind) << " @" << name << " ("
               << cir::stringifyGlobalLinkageKind(defs[1]->linkage)
@@ -817,13 +959,10 @@ bool planMerge(const std::vector<Input> &inputs,
           defs[1]->linkage == cir::GlobalLinkageKind::ExternalLinkage)
         note() << "the program defines this symbol in two translation units\n";
       else
-        note() << "cir-merge does not implement ODR, COMDAT or weak-definition "
-               << "selection (inline functions, templates and vtables defined "
-               << "in several translation units)\n";
+        note() << "only definitions that all have linkonce_odr, weak_odr or "
+               << "available_externally linkage can be merged\n";
       groupOk = false;
     }
-
-    const Symbol *chosen = defs.empty() ? &first : defs.front();
 
     if (groupOk && !defs.empty() &&
         !definitionLinkageMergeable(chosen->linkage)) {

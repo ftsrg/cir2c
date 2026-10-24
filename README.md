@@ -473,12 +473,13 @@ is not known.
 | The symbol is in one input only | Keep it |
 | Compatible declarations only | Keep the first declaration |
 | Compatible declarations and one definition | Keep the definition |
-| Two or more definitions | Error. This includes `linkonce_odr` definitions: inline functions, templates and vtables that two translation units both emit. |
+| Two or more equivalent definitions with `linkonce_odr`, `weak_odr` or `available_externally` linkage | Keep one (see below) |
+| Two or more definitions with another linkage, or ODR definitions that differ | Error |
 | A function and a global | Error |
 | Different function types, no-prototype flags or calling conventions | Error |
 | Globals with different types, constness, TLS models or address spaces | Error |
 | A symbol with internal or private linkage | Renamed before the merge (see below), so it does not collide |
-| A definition that is not `external`, `linkonce_odr` or `weak_odr`, or a declaration that is not `external` | Error |
+| A definition that is not `external`, `linkonce_odr`, `weak_odr` or `available_externally`, or a declaration that is not `external` | Error |
 
 A function is a definition when it has a body or is an alias (`alias(@...)`).
 A global is a definition when it has an initial value, a constructor region, a
@@ -520,6 +521,28 @@ to the initializer of an `extern thread_local` variable weakly. The CUDA
 attributes also name kernels with strings. `cir-merge` does not change them,
 so it rejects an input that has one.
 
+**The ODR definitions.** In C++, each translation unit that uses an inline
+function, a template instance, a vtable or a typeinfo object emits its own
+definition, with `linkonce_odr` linkage (`weak_odr` for an explicit
+instantiation, `available_externally` for an `extern template` such as the
+members of `std::string`). The One Definition Rule says that all of them are
+the same, and the linker keeps one. `cir-merge` keeps one only if it can see
+that they are the same:
+
+- The definitions must be equal, operation by operation. The source locations,
+  the linkage, the COMDAT flag and the `dso_local` flag do not count.
+- A reference to a translation-unit-local symbol matches a reference to a local
+  symbol of the other input if the two local symbols are equivalent in turn.
+  Thus an inline function that returns `"hello"` matches in two translation
+  units, also if the literal is `.str.1` in one unit and `.str` in the other.
+  Mutually recursive local functions are compared coinductively.
+- If the definitions differ, `cir-merge` stops with an error. The program
+  breaks the ODR, or the translation units were compiled with different
+  options.
+
+`cir-merge` keeps a `weak_odr` definition if there is one, else a
+`linkonce_odr` definition, else an `available_externally` definition.
+
 **The records.** CIR identifies a named record by its name in an MLIR context.
 If two inputs define the same name differently, the MLIR parser uses the first
 definition for both inputs and gives no error. Thus `cir-merge` compares the
@@ -531,8 +554,6 @@ input is correct.
 
 These usual programs are errors at the moment:
 
-- C++ programs whose translation units include the same inline function,
-  template instance or vtable (`linkonce_odr`).
 - C programs that use the same struct name for different structs in two files.
 - Declarations whose type is different from the definition, for example
   `extern int a[];` and `int a[10];`.

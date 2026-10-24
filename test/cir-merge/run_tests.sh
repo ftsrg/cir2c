@@ -23,6 +23,8 @@
 #   output-count <n> <text>   (ok) the merged CIR contains <text> n times
 #   run <code>                (ok) translate the merged CIR with cir2c,
 #                             compile it, run it, expect exit code <code>
+#   compile                   (ok) translate the merged CIR with cir2c and
+#                             compile the C (without linking it)
 #   reference <file>          (ok) like run, but compare the output and the
 #                             exit code with an LLVM test-suite reference file
 #                             (a path relative to the repository)
@@ -147,6 +149,13 @@ check_case() {
                 local n; n=$(grep -oF -- "$rest" "$merged" | wc -l)
                 if [[ "$n" -ne "$arg" ]]; then
                     echo "merged CIR contains '$rest' $n times, expected $arg"; return 1
+                fi ;;
+            compile)
+                if ! "$CIR2C_BIN" --no-externalize-std "$merged" "$work/out.c" >"$work/cir2c.log" 2>&1; then
+                    echo "cir2c failed:"; sed 's/^/    /' "$work/cir2c.log"; return 1
+                fi
+                if ! "$CIR_CLANG" -w -c "$work/out.c" -o "$work/out.o" 2>"$work/cc.log"; then
+                    echo "the translated C does not compile:"; sed 's/^/    /' "$work/cc.log"; return 1
                 fi ;;
             run)
                 translate_and_run "$merged" "$work" || return 1
