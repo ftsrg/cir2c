@@ -149,7 +149,10 @@ jobs:
             -DCIR2C_LLVM_PREFIX=/opt/cir
 
       - name: Build
-        run: cmake --build build --target cir2c -j "$(nproc)"
+        run: cmake --build build --target cir2c cir-merge -j "$(nproc)"
+
+      - name: cir-merge tests
+        run: CIR2C_BUILD_DIR=build bash test/cir-merge/run_tests.sh
 
       - name: Report versions
         run: |
@@ -160,7 +163,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: cir2c-binary
-          path: build/cir2c
+          path: |
+            build/cir2c
+            build/cir-merge
 
   test:
     name: ${{ matrix.name }}
@@ -204,7 +209,7 @@ jobs:
 
       - name: Prepare
         run: |
-          chmod +x build/cir2c
+          chmod +x build/cir2c build/cir-merge
           apt-get update -qq
           apt-get install -y --no-install-recommends parallel
 

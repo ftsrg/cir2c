@@ -1,0 +1,3 @@
+error
+duplicate definition of function @_Z5twicei (linkonce_odr linkage)
+Phase 1 does not implement ODR

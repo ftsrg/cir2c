@@ -274,6 +274,15 @@ add_test(NAME version
   COMMAND $<TARGET_FILE:cir2c> --version
 )
 
+add_test(NAME cir-merge
+  COMMAND bash ${CMAKE_SOURCE_DIR}/test/cir-merge/run_tests.sh
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(cir-merge PROPERTIES
+  ENVIRONMENT "CIR2C_BUILD_DIR=${CMAKE_BINARY_DIR}"
+  TIMEOUT 600
+)
+
 add_test(NAME integration
   COMMAND bash ${CMAKE_SOURCE_DIR}/test/run_tests.sh
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
