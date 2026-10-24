@@ -1,5 +1,6 @@
 // Test: smart pointer operations with operational models
 #include <memory>
+#include <utility>
 #include <cassert>
 
 using namespace std;

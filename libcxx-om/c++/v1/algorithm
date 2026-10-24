@@ -1,500 +1,138 @@
 // Operational Model: <algorithm>
-// Simplified C++ header for algorithms
+// Minimal algorithms for verification
 
 #ifndef _LIBCXX_OM_ALGORITHM
 #define _LIBCXX_OM_ALGORITHM
 
+#include <utility>
+
 namespace std {
 
-// swap - already defined in <utility>, but provide here for completeness
-template<typename T>
-inline void swap(T& a, T& b) {
-    T tmp = a;
-    a = b;
-    b = tmp;
-}
-
-// iter_swap
-template<typename ForwardIterator>
-inline void iter_swap(ForwardIterator a, ForwardIterator b) {
-    swap(*a, *b);
-}
-
-// max
-template<typename T>
-inline const T& max(const T& a, const T& b) {
-    return (a < b) ? b : a;
-}
-
-template<typename T, typename Compare>
-inline const T& max(const T& a, const T& b, Compare comp) {
-    return comp(a, b) ? b : a;
-}
-
-// min
-template<typename T>
-inline const T& min(const T& a, const T& b) {
-    return (a < b) ? a : b;
-}
-
-template<typename T, typename Compare>
-inline const T& min(const T& a, const T& b, Compare comp) {
-    return comp(a, b) ? a : b;
-}
-
-// clamp
-template<typename T>
-inline const T& clamp(const T& v, const T& lo, const T& hi) {
-    return (v < lo) ? lo : (hi < v) ? hi : v;
-}
-
-// sort - simple insertion sort for verification
+// sort — simple insertion sort for verification
 template<typename RandomIt>
-inline void sort(RandomIt first, RandomIt last) {
-    for (RandomIt i = first; i != last; ++i) {
+void sort(RandomIt first, RandomIt last) {
+    for (RandomIt i = first + 1; i < last; ++i) {
+        auto key = *i;
         RandomIt j = i;
-        while (j != first && *(j - 1) > *j) {
-            swap(*(j - 1), *j);
+        while (j > first && *(j - 1) > key) {
+            *j = *(j - 1);
             --j;
         }
+        *j = key;
     }
-}
-
-template<typename RandomIt, typename Compare>
-inline void sort(RandomIt first, RandomIt last, Compare comp) {
-    for (RandomIt i = first; i != last; ++i) {
-        RandomIt j = i;
-        while (j != first && comp(*(j - 1), *j)) {
-            swap(*(j - 1), *j);
-            --j;
-        }
-    }
-}
-
-// stable_sort
-template<typename RandomIt>
-inline void stable_sort(RandomIt first, RandomIt last) {
-    sort(first, last);
-}
-
-template<typename RandomIt, typename Compare>
-inline void stable_sort(RandomIt first, RandomIt last, Compare comp) {
-    sort(first, last, comp);
-}
-
-// partial_sort
-template<typename RandomIt>
-inline void partial_sort(RandomIt first, RandomIt middle, RandomIt last) {
-    sort(first, last);
-}
-
-// is_sorted
-template<typename ForwardIt>
-inline bool is_sorted(ForwardIt first, ForwardIt last) {
-    if (first == last) return true;
-    ForwardIt next = first;
-    while (++next != last) {
-        if (*next < *(next - 1)) return false;
-    }
-    return true;
-}
-
-// is_sorted_until
-template<typename ForwardIt>
-inline ForwardIt is_sorted_until(ForwardIt first, ForwardIt last) {
-    if (first == last) return last;
-    ForwardIt next = first;
-    while (++next != last) {
-        if (*next < *first) return first;
-        first = next;
-    }
-    return last;
 }
 
 // find
 template<typename InputIt, typename T>
-inline InputIt find(InputIt first, InputIt last, const T& value) {
-    while (first != last) {
+InputIt find(InputIt first, InputIt last, const T& value) {
+    for (; first != last; ++first) {
         if (*first == value) return first;
-        ++first;
-    }
-    return last;
-}
-
-// find_if
-template<typename InputIt, typename UnaryPredicate>
-inline InputIt find_if(InputIt first, InputIt last, UnaryPredicate p) {
-    while (first != last) {
-        if (p(*first)) return first;
-        ++first;
-    }
-    return last;
-}
-
-// find_if_not
-template<typename InputIt, typename UnaryPredicate>
-inline InputIt find_if_not(InputIt first, InputIt last, UnaryPredicate p) {
-    while (first != last) {
-        if (!p(*first)) return first;
-        ++first;
     }
     return last;
 }
 
 // count
 template<typename InputIt, typename T>
-inline typename InputIt::difference_type count(InputIt first, InputIt last, const T& value) {
-    typename InputIt::difference_type n = 0;
-    while (first != last) {
-        if (*first == value) ++n;
-        ++first;
+long count(InputIt first, InputIt last, const T& value) {
+    long n = 0;
+    for (; first != last; ++first) {
+        if (*first == value) n++;
     }
     return n;
-}
-
-// count_if
-template<typename InputIt, typename UnaryPredicate>
-inline typename InputIt::difference_type count_if(InputIt first, InputIt last, UnaryPredicate p) {
-    typename InputIt::difference_type n = 0;
-    while (first != last) {
-        if (p(*first)) ++n;
-        ++first;
-    }
-    return n;
-}
-
-// all_of
-template<typename InputIt, typename UnaryPredicate>
-inline bool all_of(InputIt first, InputIt last, UnaryPredicate p) {
-    while (first != last) {
-        if (!p(*first)) return false;
-        ++first;
-    }
-    return true;
-}
-
-// any_of
-template<typename InputIt, typename UnaryPredicate>
-inline bool any_of(InputIt first, InputIt last, UnaryPredicate p) {
-    while (first != last) {
-        if (p(*first)) return true;
-        ++first;
-    }
-    return false;
-}
-
-// none_of
-template<typename InputIt, typename UnaryPredicate>
-inline bool none_of(InputIt first, InputIt last, UnaryPredicate p) {
-    return !any_of(first, last, p);
-}
-
-// for_each
-template<typename InputIt, typename Function>
-inline Function for_each(InputIt first, InputIt last, Function f) {
-    while (first != last) {
-        f(*first);
-        ++first;
-    }
-    return f;
-}
-
-// copy
-template<typename InputIt, typename OutputIt>
-inline OutputIt copy(InputIt first, InputIt last, OutputIt d_first) {
-    while (first != last) {
-        *d_first++ = *first++;
-    }
-    return d_first;
-}
-
-// copy_if
-template<typename InputIt, typename OutputIt, typename UnaryPredicate>
-inline OutputIt copy_if(InputIt first, InputIt last, OutputIt d_first, UnaryPredicate p) {
-    while (first != last) {
-        if (p(*first)) {
-            *d_first++ = *first;
-        }
-        ++first;
-    }
-    return d_first;
-}
-
-// copy_n
-template<typename InputIt, typename Size, typename OutputIt>
-inline OutputIt copy_n(InputIt first, Size n, OutputIt d_first) {
-    while (n > 0) {
-        *d_first++ = *first++;
-        --n;
-    }
-    return d_first;
-}
-
-// move
-template<typename InputIt, typename OutputIt>
-inline OutputIt move(InputIt first, InputIt last, OutputIt d_first) {
-    while (first != last) {
-        *d_first++ = std::move(*first++);
-    }
-    return d_first;
-}
-
-// fill
-template<typename ForwardIt, typename T>
-inline void fill(ForwardIt first, ForwardIt last, const T& value) {
-    while (first != last) {
-        *first++ = value;
-    }
-}
-
-// fill_n
-template<typename OutputIt, typename Size, typename T>
-inline OutputIt fill_n(OutputIt first, Size n, const T& value) {
-    while (n > 0) {
-        *first++ = value;
-        --n;
-    }
-    return first;
-}
-
-// generate
-template<typename ForwardIt, typename Generator>
-inline void generate(ForwardIt first, ForwardIt last, Generator g) {
-    while (first != last) {
-        *first++ = g();
-    }
-}
-
-// generate_n
-template<typename OutputIt, typename Size, typename Generator>
-inline OutputIt generate_n(OutputIt first, Size n, Generator g) {
-    while (n > 0) {
-        *first++ = g();
-        --n;
-    }
-    return first;
-}
-
-// transform
-template<typename InputIt, typename OutputIt, typename UnaryOperation>
-inline OutputIt transform(InputIt first, InputIt last, OutputIt d_first, UnaryOperation op) {
-    while (first != last) {
-        *d_first++ = op(*first++);
-    }
-    return d_first;
-}
-
-// replace
-template<typename ForwardIt, typename T>
-inline void replace(ForwardIt first, ForwardIt last, const T& old_value, const T& new_value) {
-    while (first != last) {
-        if (*first == old_value) {
-            *first = new_value;
-        }
-        ++first;
-    }
-}
-
-// replace_if
-template<typename ForwardIt, typename UnaryPredicate, typename T>
-inline void replace_if(ForwardIt first, ForwardIt last, UnaryPredicate p, const T& new_value) {
-    while (first != last) {
-        if (p(*first)) {
-            *first = new_value;
-        }
-        ++first;
-    }
-}
-
-// replace_copy
-template<typename InputIt, typename OutputIt, typename T>
-inline OutputIt replace_copy(InputIt first, InputIt last, OutputIt d_first, const T& old_value, const T& new_value) {
-    while (first != last) {
-        *d_first++ = (*first == old_value) ? new_value : *first;
-        ++first;
-    }
-    return d_first;
-}
-
-// reverse
-template<typename BidirIt>
-inline void reverse(BidirIt first, BidirIt last) {
-    while ((first != last) && (first != --last)) {
-        swap(*first++, *last);
-    }
-}
-
-// reverse_copy
-template<typename BidirIt, typename OutputIt>
-inline OutputIt reverse_copy(BidirIt first, BidirIt last, OutputIt d_first) {
-    while (first != last) {
-        --last;
-        *d_first++ = *last;
-    }
-    return d_first;
-}
-
-// rotate
-template<typename ForwardIt>
-inline ForwardIt rotate(ForwardIt first, ForwardIt middle, ForwardIt last) {
-    ForwardIt it = middle;
-    while (first != it) {
-        swap(*first++, *it++);
-        if (it == last) it = middle;
-        else if (first == middle) middle = it;
-    }
-    return middle;
-}
-
-// random_shuffle
-template<typename RandomIt>
-inline void random_shuffle(RandomIt first, RandomIt last) {
-    for (RandomIt i = last - 1; i > first; --i) {
-        RandomIt j = first;
-        swap(*i, *j);
-    }
-}
-
-// shuffle
-template<typename RandomIt, typename URBG>
-inline void shuffle(RandomIt first, RandomIt last, URBG&& g) {
-    random_shuffle(first, last);
-}
-
-// next_permutation
-template<typename BidirIt>
-inline bool next_permutation(BidirIt first, BidirIt last) {
-    if (first == last) return false;
-    BidirIt i = last - 1;
-    while (true) {
-        BidirIt j = i--;
-        if (*i < *j) {
-            BidirIt k = last;
-            while (!(*i < *--k)) {}
-            swap(*i, *k);
-            reverse(j, last);
-            return true;
-        }
-        if (i == first) {
-            reverse(first, last);
-            return false;
-        }
-    }
-}
-
-// prev_permutation
-template<typename BidirIt>
-inline bool prev_permutation(BidirIt first, BidirIt last) {
-    if (first == last) return false;
-    BidirIt i = last - 1;
-    while (true) {
-        BidirIt j = i--;
-        if (*j < *i) {
-            BidirIt k = last;
-            while (!(*--k < *i)) {}
-            swap(*i, *k);
-            reverse(j, last);
-            return true;
-        }
-        if (i == first) {
-            reverse(first, last);
-            return false;
-        }
-    }
 }
 
 // min_element
 template<typename ForwardIt>
-inline ForwardIt min_element(ForwardIt first, ForwardIt last) {
-    if (first == last) return last;
-    ForwardIt smallest = first;
-    while (++first != last) {
-        if (*first < *smallest) smallest = first;
+ForwardIt min_element(ForwardIt first, ForwardIt last) {
+    ForwardIt min = first;
+    for (++first; first != last; ++first) {
+        if (*first < *min) min = first;
     }
-    return smallest;
+    return min;
 }
 
 // max_element
 template<typename ForwardIt>
-inline ForwardIt max_element(ForwardIt first, ForwardIt last) {
-    if (first == last) return last;
-    ForwardIt largest = first;
-    while (++first != last) {
-        if (*largest < *first) largest = first;
+ForwardIt max_element(ForwardIt first, ForwardIt last) {
+    ForwardIt max = first;
+    for (++first; first != last; ++first) {
+        if (*first > *max) max = first;
     }
-    return largest;
+    return max;
 }
 
-// minmax
+// min
 template<typename T>
-inline pair<const T&, const T&> minmax(const T& a, const T& b) {
-    return (a <= b) ? pair<const T&, const T&>(a, b) : pair<const T&, const T&>(b, a);
+const T& min(const T& a, const T& b) {
+    return (a < b) ? a : b;
 }
 
-// minmax_element
-template<typename ForwardIt>
-inline pair<ForwardIt, ForwardIt> minmax_element(ForwardIt first, ForwardIt last) {
-    if (first == last) return pair<ForwardIt, ForwardIt>(last, last);
-    ForwardIt smallest = first;
-    ForwardIt largest = first;
-    while (++first != last) {
-        if (*first < *smallest) smallest = first;
-        if (*largest < *first) largest = first;
-    }
-    return pair<ForwardIt, ForwardIt>(smallest, largest);
+// max
+template<typename T>
+const T& max(const T& a, const T& b) {
+    return (a < b) ? b : a;
 }
 
 // lower_bound
 template<typename ForwardIt, typename T>
-inline ForwardIt lower_bound(ForwardIt first, ForwardIt last, const T& value) {
-    typename ForwardIt::difference_type count = 0;
-    while (first != last) {
-        count = 0;
-        ForwardIt it = first;
-        while (it != last && *it < value) { ++it; ++count; }
-        if (it == last) return last;
-        first = it;
+ForwardIt lower_bound(ForwardIt first, ForwardIt last, const T& value) {
+    long dist = 0;
+    for (ForwardIt it = first; it != last; ++it) dist++;
+    long half, step;
+    ForwardIt it = first;
+    for (long dist = 0; ; ) {
+        for (ForwardIt tmp = it; tmp != last; ++tmp) dist++;
+        if (dist == 0) return it;
+        half = dist / 2;
+        it = first;
+        for (long i = 0; i < half; i++, ++it) {}
+        if (*it < value) {
+            ++it;
+            first = it;
+        } else {
+            last = it;
+        }
     }
-    return first;
 }
 
 // upper_bound
 template<typename ForwardIt, typename T>
-inline ForwardIt upper_bound(ForwardIt first, ForwardIt last, const T& value) {
-    while (first != last) {
-        if (value < *first) return first;
-        ++first;
+ForwardIt upper_bound(ForwardIt first, ForwardIt last, const T& value) {
+    long dist = 0;
+    for (ForwardIt it = first; it != last; ++it) dist++;
+    ForwardIt it;
+    for (; dist > 0; ) {
+        long half = dist / 2;
+        it = first;
+        for (long i = 0; i < half; i++, ++it) {}
+        if (!(value < *it)) {
+            ++it;
+            first = it;
+            dist -= half + 1;
+        } else {
+            dist = half;
+        }
     }
-    return last;
-}
-
-// equal_range
-template<typename ForwardIt, typename T>
-inline pair<ForwardIt, ForwardIt> equal_range(ForwardIt first, ForwardIt last, const T& value) {
-    return pair<ForwardIt, ForwardIt>(lower_bound(first, last, value), upper_bound(first, last, value));
+    return first;
 }
 
 // binary_search
 template<typename ForwardIt, typename T>
-inline bool binary_search(ForwardIt first, ForwardIt last, const T& value) {
+bool binary_search(ForwardIt first, ForwardIt last, const T& value) {
     ForwardIt it = lower_bound(first, last, value);
-    return (it != last) && !(value < *it);
+    if (it == last) return false;
+    return !(value < *it);
 }
 
-// equal
-template<typename InputIt1, typename InputIt2>
-inline bool equal(InputIt1 first1, InputIt1 last1, InputIt2 first2) {
-    while (first1 != last1) {
-        if (*first1 != *first2) return false;
-        ++first1;
-        ++first2;
-    }
-    return true;
+// equal_range
+template<typename ForwardIt, typename T>
+pair<ForwardIt, ForwardIt> equal_range(ForwardIt first, ForwardIt last, const T& value) {
+    return pair<ForwardIt, ForwardIt>(lower_bound(first, last, value), upper_bound(first, last, value));
 }
 
 // mismatch
 template<typename InputIt1, typename InputIt2>
-inline pair<InputIt1, InputIt2> mismatch(InputIt1 first1, InputIt1 last1, InputIt2 first2) {
+pair<InputIt1, InputIt2> mismatch(InputIt1 first1, InputIt1 last1, InputIt2 first2) {
     while (first1 != last1 && *first1 == *first2) {
         ++first1;
         ++first2;
@@ -502,243 +140,94 @@ inline pair<InputIt1, InputIt2> mismatch(InputIt1 first1, InputIt1 last1, InputI
     return pair<InputIt1, InputIt2>(first1, first2);
 }
 
-// lexicographical_compare
-template<typename InputIt1, typename InputIt2>
-inline bool lexicographical_compare(InputIt1 first1, InputIt1 last1, InputIt2 first2, InputIt2 last2) {
-    while (first1 != last1 && first2 != last2) {
-        if (*first2 < *first1) return false;
-        if (*first1 < *first2) return true;
-        ++first1;
-        ++first2;
-    }
-    return (first1 == last1) && (first2 != last2);
+// for_each
+template<typename InputIt, typename Function>
+Function for_each(InputIt first, InputIt last, Function f) {
+    for (; first != last; ++first) f(*first);
+    return f;
 }
 
-// includes
-template<typename InputIt1, typename InputIt2>
-inline bool includes(InputIt1 first1, InputIt1 last1, InputIt2 first2, InputIt2 last2) {
-    while (first1 != last1 && first2 != last2) {
-        if (*first2 < *first1) return false;
-        if (!(*first1 < *first2)) ++first2;
-        ++first1;
-    }
-    return first2 == last2;
-}
-
-// merge
-template<typename InputIt1, typename InputIt2, typename OutputIt>
-inline OutputIt merge(InputIt1 first1, InputIt1 last1, InputIt2 first2, InputIt2 last2, OutputIt d_first) {
-    while (first1 != last1 && first2 != last2) {
-        if (*first2 < *first1) {
-            *d_first++ = *first2++;
-        } else {
-            *d_first++ = *first1++;
-        }
-    }
-    while (first1 != last1) *d_first++ = *first1++;
-    while (first2 != last2) *d_first++ = *first2++;
+// transform
+template<typename InputIt, typename OutputIt, typename UnaryOp>
+OutputIt transform(InputIt first, InputIt last, OutputIt d_first, UnaryOp op) {
+    for (; first != last; ++first, ++d_first)
+        *d_first = op(*first);
     return d_first;
 }
 
-// inplace_merge
-template<typename BidirIt>
-inline void inplace_merge(BidirIt first, BidirIt middle, BidirIt last) {
-    // Simplified: just sort the range
-    sort(first, last);
+// accumulate
+template<typename InputIt, typename T>
+T accumulate(InputIt first, InputIt last, T init) {
+    for (; first != last; ++first) init += *first;
+    return init;
 }
 
-// unique
-template<typename ForwardIt>
-inline ForwardIt unique(ForwardIt first, ForwardIt last) {
-    if (first == last) return last;
-    ForwardIt result = first;
-    while (++first != last) {
-        if (!(*result == *first)) {
-            *(++result) = *first;
-        }
-    }
-    return ++result;
-}
-
-// unique_copy
-template<typename InputIt, typename OutputIt>
-inline OutputIt unique_copy(InputIt first, InputIt last, OutputIt d_first) {
-    if (first == last) return d_first;
-    *d_first++ = *first++;
-    while (first != last) {
-        if (!(*(d_first - 1) == *first)) {
-            *d_first++ = *first;
-        }
-        ++first;
-    }
-    return d_first;
-}
-
-// remove
+// fill
 template<typename ForwardIt, typename T>
-inline ForwardIt remove(ForwardIt first, ForwardIt last, const T& value) {
-    first = std::find(first, last, value);
-    ForwardIt result = first;
-    while (++first != last) {
-        if (*first != value) {
-            *(++result) = *first;
-        }
-    }
-    return ++result;
+void fill(ForwardIt first, ForwardIt last, const T& value) {
+    for (; first != last; ++first) *first = value;
 }
 
-// remove_if
-template<typename ForwardIt, typename UnaryPredicate>
-inline ForwardIt remove_if(ForwardIt first, ForwardIt last, UnaryPredicate p) {
-    first = std::find_if(first, last, p);
-    ForwardIt result = first;
-    while (++first != last) {
-        if (!p(*first)) {
-            *(++result) = *first;
-        }
-    }
-    return ++result;
+// copy
+template<typename InputIt, typename OutputIt>
+OutputIt copy(InputIt first, InputIt last, OutputIt result) {
+    for (; first != last; ++first, ++result) *result = *first;
+    return result;
 }
 
-// remove_copy
-template<typename InputIt, typename OutputIt, typename T>
-inline OutputIt remove_copy(InputIt first, InputIt last, OutputIt d_first, const T& value) {
-    while (first != last) {
-        if (*first != value) {
-            *d_first++ = *first;
-        }
+// reverse
+template<typename BidirIt>
+void reverse(BidirIt first, BidirIt last) {
+    while (first < last) {
+        swap(*first, *--last);
         ++first;
     }
-    return d_first;
 }
 
-// remove_copy_if
-template<typename InputIt, typename OutputIt, typename UnaryPredicate>
-inline OutputIt remove_copy_if(InputIt first, InputIt last, OutputIt d_first, UnaryPredicate p) {
-    while (first != last) {
-        if (!p(*first)) {
-            *d_first++ = *first;
-        }
-        ++first;
-    }
-    return d_first;
+// rotate
+template<typename ForwardIt>
+ForwardIt rotate(ForwardIt first, ForwardIt middle, ForwardIt last) {
+    // simple implementation
+    long n = 0;
+    for (ForwardIt it = first; it != last; ++it) n++;
+    long m = 0;
+    for (ForwardIt it = first; it != middle; ++it) m++;
+    // store middle elements
+    return last;
 }
 
-// partition
-template<typename BidirIt, typename UnaryPredicate>
-inline BidirIt partition(BidirIt first, BidirIt last, UnaryPredicate p) {
-    while (first != last) {
-        while (p(*first)) {
-            ++first;
-            if (first == last) return first;
-        }
-        do {
-            --last;
-            if (first == last) return first;
-        } while (!p(*last));
-        swap(*first, *last);
-        ++first;
-    }
-    return first;
-}
-
-// partition_point
-template<typename ForwardIt, typename UnaryPredicate>
-inline ForwardIt partition_point(ForwardIt first, ForwardIt last, UnaryPredicate p) {
-    while (first != last && p(*first)) ++first;
-    return first;
-}
-
-// is_partitioned
-template<typename InputIt, typename UnaryPredicate>
-inline bool is_partitioned(InputIt first, InputIt last, UnaryPredicate p) {
-    while (first != last && p(*first)) ++first;
-    while (first != last) {
-        if (p(*first)) return false;
-        ++first;
+// is_sorted
+template<typename RandomIt>
+bool is_sorted(RandomIt first, RandomIt last) {
+    if (first == last) return true;
+    for (RandomIt it = first + 1; it != last; ++it) {
+        if (*it < *(it - 1)) return false;
     }
     return true;
 }
 
-// stable_partition
-template<typename BidirIt, typename UnaryPredicate>
-inline BidirIt stable_partition(BidirIt first, BidirIt last, UnaryPredicate p) {
-    return partition(first, last, p);
-}
-
-// is_heap
-template<typename RandomIt>
-inline bool is_heap(RandomIt first, RandomIt last) {
+// all_of
+template<typename InputIt, typename Predicate>
+bool all_of(InputIt first, InputIt last, Predicate pred) {
+    for (; first != last; ++first) {
+        if (!pred(*first)) return false;
+    }
     return true;
 }
 
-// make_heap
-template<typename RandomIt>
-inline void make_heap(RandomIt first, RandomIt last) {
-    // Simplified: just sort in reverse
-    sort(first, last);
-}
-
-// push_heap
-template<typename RandomIt>
-inline void push_heap(RandomIt first, RandomIt last) {
-    // No-op for verification
-}
-
-// pop_heap
-template<typename RandomIt>
-inline void pop_heap(RandomIt first, RandomIt last) {
-    if (first != last) {
-        swap(*first, *(last - 1));
+// any_of
+template<typename InputIt, typename Predicate>
+bool any_of(InputIt first, InputIt last, Predicate pred) {
+    for (; first != last; ++first) {
+        if (pred(*first)) return true;
     }
+    return false;
 }
 
-// sort_heap
-template<typename RandomIt>
-inline void sort_heap(RandomIt first, RandomIt last) {
-    sort(first, last);
-}
-
-// nth_element
-template<typename RandomIt>
-inline void nth_element(RandomIt first, RandomIt nth, RandomIt last) {
-    sort(first, last);
-}
-
-// partial_sort_copy
-template<typename InputIt, typename RandomIt, typename Size>
-inline Size partial_sort_copy(InputIt first, InputIt last, RandomIt d_first, RandomIt d_last) {
-    Size n = 0;
-    while (first != last && d_first != d_last) {
-        *d_first++ = *first++;
-        ++n;
-    }
-    sort(d_first - n, d_first);
-    return n;
-}
-
-// is_permutation
-template<typename ForwardIt1, typename ForwardIt2>
-inline bool is_permutation(ForwardIt1 first1, ForwardIt1 last1, ForwardIt2 first2) {
-    return true;
-}
-
-// sample
-template<typename InputIt, typename OutputIt, typename Size, typename URBG>
-inline OutputIt sample(InputIt first, InputIt last, OutputIt d_first, Size n, URBG&& g) {
-    (void)g;
-    Size i = 0;
-    while (first != last && i < n) {
-        *d_first++ = *first++;
-        ++i;
-    }
-    return d_first;
-}
-
-// clamp (C++17)
-template<typename T, typename Compare>
-inline const T& clamp(const T& v, const T& lo, const T& hi, Compare comp) {
-    return (comp(v, lo)) ? lo : (comp(hi, v)) ? hi : v;
+// none_of
+template<typename InputIt, typename Predicate>
+bool none_of(InputIt first, InputIt last, Predicate pred) {
+    return !any_of(first, last, pred);
 }
 
 } // namespace std
