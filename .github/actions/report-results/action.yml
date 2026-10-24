@@ -46,6 +46,7 @@ runs:
             "llvm-std":    "LLVM (no-ext-std)",
             "llvm-multi":  "LLVM MultiSource (C merge)",
             "llvm-multi-cir": "LLVM MultiSource (CIR merge)",
+            "llvm-om":     "LLVM (operational models)",
             "esbmc":       "esbmc-eval",
             "esbmc-std":   "esbmc-eval (no-ext-std)",
         }
