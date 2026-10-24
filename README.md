@@ -306,7 +306,12 @@ The script makes the output directory if it is not there.
 
 ```
 run-cir2c.sh [OPTIONS] <input-file> <output.c>
+run-cir2c.sh [OPTIONS] --merge c|cir <input1> <input2> [...] <output.c>
 ```
+
+Give the options before the input files. With more than one input file, the
+script merges the translation units into one C program. See
+[5.6 Merge translation units](#56-merge-translation-units).
 
 | Option | Function |
 |---|---|
@@ -316,6 +321,7 @@ run-cir2c.sh [OPTIONS] <input-file> <output.c>
 | `--mlir FILE` | Write the intermediate CIR to `FILE`. Use this option to find problems. |
 | `--flat-mlir FILE` | Write the flat CIR to `FILE`. This option includes `--flatten`. |
 | `--include DIR` | Add the `-I DIR` option to the CIR step. You can give this option more than one time. |
+| `--merge c\|cir` | Set how more than one input file is merged. `c` (the default) merges the C outputs. `cir` merges the CIR modules with `cir-merge`. |
 | `--externalize-std` | Replace the `std::` calls and the library calls with unknown values. This is the default. |
 | `--no-externalize-std` | Keep the bodies of the `std::` functions. **CAUTION: Read [8.2 The standard library](#82-the-standard-library) first.** |
 
@@ -325,6 +331,7 @@ run-cir2c.sh [OPTIONS] <input-file> <output.c>
 | 2 | `clang` failed. The source has an error, or ClangIR cannot process a construction. |
 | 3 | `cir-opt` failed during the `--flatten` step. |
 | 4 | `cir2c` failed. Usually the CIR contains an unsupported operation. |
+| 5 | `cir-merge` rejected the translation units (`--merge cir` only). Its messages give the symbol and the reason. |
 
 Exit code 2 is important. It shows that Clang made no CIR. This is a limit of
 ClangIR and not a limit of cir2c.
@@ -407,6 +414,108 @@ option, because the calculation is slow.
    the work cycle quick.
 5. Try the `--flatten` option and compare the two results. A construction that
    fails in one mode can operate in the other mode.
+
+### 5.6 Merge translation units
+
+A program can have more than one source file. `run-cir2c.sh` accepts more than
+one input file and makes one C file. There are two merge strategies:
+
+| Strategy | Sequence |
+|---|---|
+| `--merge c` | Translate each file to C, then merge the C files with `scripts/merge-c.sh`. |
+| `--merge cir` | Compile each file to CIR, merge the CIR modules with `cir-merge`, then translate the merged module once. |
+
+#### The cir-merge tool
+
+`cir-merge` is a C++ program in `tools/cir-merge/`. The build makes it next to
+the `cir2c` binary. It uses the MLIR parser, the MLIR verifier and the MLIR
+printer of the same LLVM build as `cir2c`. It does not parse CIR text itself.
+
+```
+cir-merge --output merged.cir input-a.cir input-b.cir [...]
+```
+
+| Option | Function |
+|---|---|
+| `--output FILE`, `-o FILE` | Write the merged module to `FILE`. |
+| `--dump-symbols` | Print the symbol inventory (input, kind, definition or declaration, linkage, name). |
+| `--verbose` | Print the decision for each symbol. |
+
+`cir-merge` is conservative. **If an input is outside the supported subset,
+`cir-merge` stops with an error. It does not make an approximate module.** A
+merged module is a module that passes these checks. It is not a proof that the
+C++ program obeys the One Definition Rule.
+
+The steps are:
+
+1. Parse and verify each input in a separate MLIR context. Record the
+   definition of each named record (struct, class, union).
+2. Compare the record definitions of all inputs.
+3. Parse all inputs into one context.
+4. Check the module attributes.
+5. Make the symbol inventory of all inputs.
+6. Make the merge plan for all symbols. The plan is complete before any change,
+   so the result does not depend on the order of the inputs.
+7. Make the merged module. Verify it, check that each symbol reference
+   resolves, print it, and parse the printed text again.
+8. Write the output to a temporary file, then rename it. A failed merge does
+   not leave an output file.
+
+#### The supported subset (phase 1)
+
+Only `cir.func` and `cir.global` operations can be at the top level. Another
+top-level operation is an error, because its meaning across translation units
+is not known.
+
+| Symbols with the same name | Result |
+|---|---|
+| The symbol is in one input only | Keep it |
+| Compatible declarations only | Keep the first declaration |
+| Compatible declarations and one definition | Keep the definition |
+| Two or more definitions | Error. This includes `linkonce_odr` definitions: inline functions, templates and vtables that two translation units both emit. |
+| A function and a global | Error |
+| Different function types, no-prototype flags or calling conventions | Error |
+| Globals with different types, constness, TLS models or address spaces | Error |
+| A symbol with internal or private linkage | Error. Two such symbols are different entities. `cir-merge` does not rename symbols yet. |
+| A definition that is not `external`, `linkonce_odr` or `weak_odr`, or a declaration that is not `external` | Error |
+
+A function is a definition when it has a body or is an alias (`alias(@...)`).
+A global is a definition when it has an initial value, a constructor region, a
+destructor region or an alias.
+
+The module attributes:
+
+| Attribute | Rule |
+|---|---|
+| `cir.triple`, `dlti.dl_spec`, `cir.lang`, `cir.int_type_width`, `cir.size_type_width`, `cir.default_tls_model` | Must be equal in all inputs. Different targets, ABIs or languages are an error. |
+| `cir.module_asm` | Must be empty. |
+| `cir.record_layouts` | Merged. A record in more than one input must have the same layout. |
+| `cir.global_ctors`, `cir.global_dtors` | Concatenated in input order. Each entry must name a function of the merged module. |
+| Another attribute | Error |
+
+**The records.** CIR identifies a named record by its name in an MLIR context.
+If two inputs define the same name differently, the MLIR parser uses the first
+definition for both inputs and gives no error. Thus `cir-merge` compares the
+definitions before the inputs share a context. Two different definitions are
+an error. A record that is incomplete in one input and complete in another
+input is correct.
+
+#### Known limits of phase 1
+
+These usual programs are errors at the moment:
+
+- C++ programs whose translation units include the same inline function,
+  template instance or vtable (`linkonce_odr`).
+- Programs with `static` functions or variables of the same name in two
+  translation units. This includes the string literals (`.str`, `.str.1`, ...)
+  and the C++ static initializers (`__cxx_global_var_init`), which have
+  internal linkage in each translation unit.
+- C programs that use the same struct name for different structs in two files.
+- Declarations whose type is different from the definition, for example
+  `extern int a[];` and `int a[10];`.
+
+The next phases add the rename of translation-unit-local symbols, then
+selected C++ linkage rules.
 
 ---
 
@@ -903,6 +1012,7 @@ higher priority than missing functions. Write this in the title.
 ```
 test/
 ├── run_tests.sh                # The test runner for the three suites
+├── cir-merge/                  # The cir-merge tests (one directory for each case)
 ├── integration/input/          # Small test programs (the default suite)
 ├── sources/llvm-test-suite/    # The LLVM SingleSource corpus (2600 programs)
 ├── benchmark_mapper.py         # The runner for SV-COMP .yml tasks
@@ -916,7 +1026,8 @@ toolchain.
 ### 9.2 Run the tests
 
 ```bash
-ctest --test-dir build --output-on-failure     # The integration suite
+ctest --test-dir build --output-on-failure     # The integration suite and the cir-merge tests
+bash test/cir-merge/run_tests.sh               # The cir-merge tests, directly
 bash test/run_tests.sh                         # The same suite, directly
 RUN_LLVM=1 RUN_INTEGRATION=0 bash test/run_tests.sh
 JOBS=8 bash test/run_tests.sh --json-out /tmp/summary.json
@@ -940,6 +1051,20 @@ to make the results table. The `--externalize-std` option and the
 **Note: A run with no tests is an error.** The runner prints `No tests ran` and
 returns a non-zero exit code. CI counts an empty suite as a problem. Thus an
 incorrect environment cannot show a good result.
+
+**The cir-merge tests.** Each directory in `test/cir-merge/cases/` is one
+merge. The `.c` and `.cpp` files are compiled to CIR with the toolchain clang.
+The `.cir` files are used directly. The `expect` file gives the result:
+
+| Line | Meaning |
+|---|---|
+| `ok` or `error` (first line) | The merge must succeed or must fail |
+| a text (after `error`) | The messages must contain this text |
+| `output-count N TEXT` | The merged CIR must contain `TEXT` `N` times |
+| `run CODE` | Translate the merged CIR, compile it, run it, and expect the exit code `CODE` |
+
+The runner merges each case two times, with the inputs in sorted order and in
+reverse order. A successful merge must also pass `cir-opt`.
 
 ### 9.3 Suite 1: the integration tests
 
