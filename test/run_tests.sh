@@ -95,6 +95,7 @@ ESBMC_EVAL_DIR="${ESBMC_EVAL_DIR:-$SCRIPT_DIR/sources/esbmc-eval/}"
 ESBMC_EVAL_OUTPUT_DIR="$SCRIPT_DIR/esbmc-eval/output"
 RUN_ESBMC=${RUN_ESBMC:-0}
 RUN_LLVM=${RUN_LLVM:-0}
+RUN_LLVM_MULTI=${RUN_LLVM_MULTI:-0}
 RUN_INTEGRATION=${RUN_INTEGRATION:-1}
 
 # ---------------------------------------------------------------------------
@@ -591,6 +592,107 @@ run_llvm_test() {
 # output exists, so we cannot check run behaviour). Linking is attempted but
 # only used to produce a NOTRUN soft-pass, not a failure.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Worker: LLVM MultiSource test (multi-TU, output comparison)
+# ---------------------------------------------------------------------------
+run_llvm_multi_test() {
+    local test_dir="$1"
+    local pipeline_rc=0
+
+    # Collect all .c and .cpp source files in the directory
+    local -a src_files=()
+    while IFS= read -r f; do
+        src_files+=("$f")
+    done < <(find "$test_dir" -maxdepth 1 \( -name '*.c' -o -name '*.cpp' \) -type f | sort)
+
+    [ ${#src_files[@]} -eq 0 ] && return
+
+    # Determine language from the first source file
+    local lang_flag=""
+    case "${src_files[0]}" in
+        *.cpp) lang_flag="" ;;
+        *) lang_flag="--lang c" ;;
+    esac
+
+    # Find the reference output file
+    local ref_file=""
+    for f in "$test_dir"/*.reference_output; do
+        [ -f "$f" ] && { ref_file="$f"; break; }
+    done
+    [ -z "$ref_file" ] && return
+
+    # Test ID from the directory path
+    local rel_path="${test_dir#$LLVM_EVAL_DIR}"
+    local test_id="${rel_path//\//__}"
+    test_id="${test_id#/}"  # strip leading slash
+
+    local output_c_file="$LLVM_EVAL_OUTPUT_DIR/${test_id}_output.c"
+    local pipeline_log="$LLVM_EVAL_OUTPUT_DIR/${test_id}_pipeline_log.txt"
+
+    # Build include flags from the first source file
+    local -a inc=(); local _d
+    while IFS= read -r _d; do [ -n "$_d" ] && inc+=(--include "$_d"); done < <(compute_includes "${src_files[0]}")
+
+    # Run the multi-file pipeline with --merge c
+    # shellcheck disable=SC2086
+    timeout "$TIMEOUT" "$RUNNER" $lang_flag "$EXTERNALIZE_STD_FLAG" \
+        ${inc[@]+"${inc[@]}"} \
+        "${src_files[@]}" --merge c "$output_c_file" >"$pipeline_log" 2>&1 || pipeline_rc=$?
+
+    if [[ $pipeline_rc -eq 124 ]]; then
+        echo "TIMEDOUT|$test_id|"; return
+    fi
+    if [[ $pipeline_rc -eq 2 ]]; then
+        echo "SKIPPED|$test_id|CIR generation failed: $(skip_reason "$pipeline_log")"; return
+    fi
+    if [[ $pipeline_rc -ne 0 ]] || [ ! -f "$output_c_file" ]; then
+        echo "MAPPER_FAILED|$test_id|$(pipeline_stage "$pipeline_rc") failed"; return
+    fi
+
+    # Compile the merged C
+    local obj_file="$LLVM_EVAL_OUTPUT_DIR/${test_id}.o"
+    local gcc_log="$LLVM_EVAL_OUTPUT_DIR/${test_id}_gcc_log.txt"
+    if ! "$GCC" -c "$output_c_file" -o "$obj_file" > "$gcc_log" 2>&1; then
+        echo "COMPILE_FAILED|$test_id|compilation failed"; return
+    fi
+
+    # Link
+    local binary_file="$LLVM_EVAL_OUTPUT_DIR/${test_id}_binary"
+    local link_log="$LLVM_EVAL_OUTPUT_DIR/${test_id}_link_log.txt"
+    if ! "$GCC" "$obj_file" -o "$binary_file" -lm > "$link_log" 2>&1; then
+        echo "NOTRUN|$test_id|valid C, could not link"; return
+    fi
+
+    # Extract expected output and exit code from reference file
+    local expected_exit
+    expected_exit=$(awk 'END{ if (match($0, /exit [0-9]+$/)) print substr($0, RSTART + 5, RLENGTH - 5) + 0; else print 0 }' "$ref_file")
+    local expected_out_file="$LLVM_EVAL_OUTPUT_DIR/${test_id}_expected.txt"
+    awk 'NR==1{prev=$0;next}{print prev;prev=$0}END{sub(/exit [0-9]+$/,"",prev);printf "%s",prev}' \
+        "$ref_file" > "$expected_out_file"
+
+    local actual_out_file="$LLVM_EVAL_OUTPUT_DIR/${test_id}_actual.txt"
+    "$binary_file" > "$actual_out_file" 2>/dev/null
+    local actual_exit=$?
+
+    local mismatch_reason=""
+    if [[ $actual_exit -ne $expected_exit ]]; then
+        mismatch_reason="ran, exit code: expected $expected_exit, got $actual_exit"
+    elif ! diff -q "$expected_out_file" "$actual_out_file" > /dev/null 2>&1; then
+        mismatch_reason="ran, output mismatch"
+    fi
+    if [[ -n "$mismatch_reason" ]]; then
+        echo "MISMATCH|$test_id|$mismatch_reason"; return
+    fi
+
+    echo "PASSED|$test_id|"
+}
+
+# ---------------------------------------------------------------------------
+# Worker: esbmc-eval test
+# Pass condition: the mapper produces a C file that COMPILES (no reference
+# output exists, so we cannot check run behaviour). Linking is attempted but
+# only used to produce a NOTRUN soft-pass, not a failure.
+# ---------------------------------------------------------------------------
 run_esbmc_test() {
     local src_file="$1"
     local pipeline_rc=0
@@ -643,7 +745,7 @@ run_esbmc_test() {
 # Export everything workers need
 export TIMEOUT RUNNER GCC CLANGPP INTEGRATION_OUTPUT_DIR LLVM_EVAL_DIR LLVM_EVAL_OUTPUT_DIR
 export ESBMC_EVAL_DIR ESBMC_EVAL_OUTPUT_DIR EXTERNALIZE_STD_FLAG
-export -f pipeline_stage run_selfchecking run_c_test run_cpp_test run_llvm_test run_esbmc_test
+export -f pipeline_stage run_selfchecking run_c_test run_cpp_test run_llvm_test run_llvm_multi_test run_esbmc_test
 
 # ---------------------------------------------------------------------------
 # Preflight checks
@@ -886,6 +988,95 @@ else
 fi
 
 fi   # end RUN_LLVM
+
+[[ $interrupted -eq 1 ]] && exit 130
+echo ""
+
+# ---------------------------------------------------------------------------
+# LLVM MultiSource Tests (multi-TU, output comparison)
+# ---------------------------------------------------------------------------
+if [[ "${RUN_LLVM_MULTI:-0}" -eq 0 ]]; then
+    echo -e "${YELLOW}Skipping LLVM MultiSource tests (RUN_LLVM_MULTI=0).${NC}"
+else
+echo "======================================"
+echo "  Running LLVM MultiSource Tests"
+echo "======================================"
+echo ""
+
+multi_src_dir="$LLVM_EVAL_DIR/MultiSource"
+if [ ! -d "$multi_src_dir" ]; then
+    echo -e "${YELLOW}SKIPPED: MultiSource directory not found at $multi_src_dir${NC}"
+elif [ ! -f "$CLANGPP" ]; then
+    echo -e "${YELLOW}SKIPPED: clang++ not found at $CLANGPP${NC}"
+else
+    mkdir -p "$LLVM_EVAL_OUTPUT_DIR"
+
+    # Discover multi-TU test directories: those containing a .reference_output
+    # file alongside .c/.cpp source files, within the MultiSource subdirectory.
+    printf "  Scanning test directories..."
+    mapfile -t multi_dirs < <(
+        find "$multi_src_dir" -name '*.reference_output' -print0 | \
+        while IFS= read -r -d '' ref; do
+            dir=$(dirname "$ref")
+            src_count=$(find "$dir" -maxdepth 1 \( -name '*.c' -o -name '*.cpp' \) -type f | wc -l)
+            [ "$src_count" -gt 0 ] && echo "$dir"
+        done | sort -u
+    )
+    printf "\r%-30s\r" ""
+    multi_total=${#multi_dirs[@]}
+    multi_cur=0
+
+    if [[ $multi_total -gt 0 ]]; then
+        bar_draw 0 "$multi_total"
+
+        while IFS='|' read -r result test_id message; do
+            multi_cur=$((multi_cur + 1))
+            TOTAL_TESTS=$((TOTAL_TESTS + 1))
+            bar_draw "$multi_cur" "$multi_total"
+
+            case "$result" in
+                PASSED)
+                    PASSED_TESTS=$((PASSED_TESTS + 1))
+                    ;;
+                NOTRUN)
+                    NOTRUN_TESTS=$((NOTRUN_TESTS + 1))
+                    ;;
+                MISMATCH)
+                    bar_println "$multi_cur" "$multi_total" \
+                        "$(printf "  ${RED}MISMATCH${NC}   %s (%s)" "$test_id" "$message")"
+                    MISMATCH_TESTS=$((MISMATCH_TESTS + 1))
+                    FAILED_TESTS=$((FAILED_TESTS + 1))
+                    ;;
+                TIMEDOUT)
+                    bar_println "$multi_cur" "$multi_total" \
+                        "$(printf "  ${YELLOW}TIMED OUT${NC} %s" "$test_id")"
+                    TIMEDOUT_TESTS=$((TIMEDOUT_TESTS + 1))
+                    ;;
+                SKIPPED)
+                    bar_println "$multi_cur" "$multi_total" \
+                        "$(printf "  ${YELLOW}SKIPPED${NC}  %s (%s)" "$test_id" "$message")"
+                    count_skip "$message"
+                    ;;
+                MAPPER_FAILED)
+                    bar_println "$multi_cur" "$multi_total" \
+                        "$(printf "  ${RED}MAPPER FAIL${NC} %s (%s)" "$test_id" "$message")"
+                    FAILED_TESTS=$((FAILED_TESTS + 1))
+                    MAPPER_FAILED_TESTS=$((MAPPER_FAILED_TESTS + 1))
+                    ;;
+                COMPILE_FAILED)
+                    bar_println "$multi_cur" "$multi_total" \
+                        "$(printf "  ${RED}COMPILE FAIL${NC} %s (%s)" "$test_id" "$message")"
+                    FAILED_TESTS=$((FAILED_TESTS + 1))
+                    COMPILE_FAILED_TESTS=$((COMPILE_FAILED_TESTS + 1))
+                    ;;
+            esac
+        done < <(parallel --will-cite --line-buffer -j "$JOBS" run_llvm_multi_test ::: "${multi_dirs[@]}")
+
+        printf "\n"  # move past the bar line
+    fi
+fi
+
+fi   # end RUN_LLVM_MULTI
 
 # ---------------------------------------------------------------------------
 # ESBMC-eval Tests
