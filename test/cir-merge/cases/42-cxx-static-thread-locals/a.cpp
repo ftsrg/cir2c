@@ -14,5 +14,6 @@
  * limitations under the License.
  */
 
-static int counter = 1;
-int fa(void) { return counter++; }
+int seed();
+static thread_local int t = seed();
+int ta() { return t; }

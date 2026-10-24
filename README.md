@@ -452,16 +452,17 @@ The steps are:
    definition of each named record (struct, class, union).
 2. Compare the record definitions of all inputs.
 3. Parse all inputs into one context.
-4. Check the module attributes.
-5. Make the symbol inventory of all inputs.
-6. Make the merge plan for all symbols. The plan is complete before any change,
+4. Rename the translation-unit-local symbols whose names collide (see below).
+5. Check the module attributes.
+6. Make the symbol inventory of all inputs.
+7. Make the merge plan for all symbols. The plan is complete before any change,
    so the result does not depend on the order of the inputs.
-7. Make the merged module. Verify it, check that each symbol reference
+8. Make the merged module. Verify it, check that each symbol reference
    resolves, print it, and parse the printed text again.
-8. Write the output to a temporary file, then rename it. A failed merge does
+9. Write the output to a temporary file, then rename it. A failed merge does
    not leave an output file.
 
-#### The supported subset (phase 1)
+#### The supported subset
 
 Only `cir.func` and `cir.global` operations can be at the top level. Another
 top-level operation is an error, because its meaning across translation units
@@ -476,7 +477,7 @@ is not known.
 | A function and a global | Error |
 | Different function types, no-prototype flags or calling conventions | Error |
 | Globals with different types, constness, TLS models or address spaces | Error |
-| A symbol with internal or private linkage | Error. Two such symbols are different entities. `cir-merge` does not rename symbols yet. |
+| A symbol with internal or private linkage | Renamed before the merge (see below), so it does not collide |
 | A definition that is not `external`, `linkonce_odr` or `weak_odr`, or a declaration that is not `external` | Error |
 
 A function is a definition when it has a body or is an alias (`alias(@...)`).
@@ -493,6 +494,32 @@ The module attributes:
 | `cir.global_ctors`, `cir.global_dtors` | Concatenated in input order. Each entry must name a function of the merged module. |
 | Another attribute | Error |
 
+**The translation-unit-local symbols.** A symbol with internal or private
+linkage belongs to its translation unit: a `static` function or variable, a
+string literal (`.str`, `.str.1`, ...), a C++ static initializer
+(`__cxx_global_var_init`), a guard variable or a `thread_local` helper. If
+another input uses the same name, `cir-merge` gives the local symbol the new
+name `NAME.tuN`. `N` is the position of the input on the command line. If that
+name is in use, `cir-merge` adds `.1`, `.2`, ... An input uses a name when it
+defines or declares the symbol, or refers to it by a string (see below).
+
+`cir-merge` then changes all references to the symbol in its input. MLIR
+changes the symbol references (`@name`), also inside other attributes such as
+`#cir.global_view`. CIR also refers to symbols with plain strings, which MLIR
+does not see. `cir-merge` changes these too:
+
+| String reference | Where |
+|---|---|
+| `#cir.global_ctor<"fn", priority>`, `#cir.global_dtor<...>` | The `cir.global_ctors` and `cir.global_dtors` module attributes |
+| `static_local_guard<"guard">` | A `cir.global` of a function-local `static` |
+| `tls_refs = <"wrapper", "init">` | A `thread_local` `cir.global` |
+
+After the merge, `cir-merge` checks that each of these names a symbol of the
+correct kind. Only the `thread_local` initializer can be absent: clang refers
+to the initializer of an `extern thread_local` variable weakly. The CUDA
+attributes also name kernels with strings. `cir-merge` does not change them,
+so it rejects an input that has one.
+
 **The records.** CIR identifies a named record by its name in an MLIR context.
 If two inputs define the same name differently, the MLIR parser uses the first
 definition for both inputs and gives no error. Thus `cir-merge` compares the
@@ -500,22 +527,15 @@ definitions before the inputs share a context. Two different definitions are
 an error. A record that is incomplete in one input and complete in another
 input is correct.
 
-#### Known limits of phase 1
+#### Known limits
 
 These usual programs are errors at the moment:
 
 - C++ programs whose translation units include the same inline function,
   template instance or vtable (`linkonce_odr`).
-- Programs with `static` functions or variables of the same name in two
-  translation units. This includes the string literals (`.str`, `.str.1`, ...)
-  and the C++ static initializers (`__cxx_global_var_init`), which have
-  internal linkage in each translation unit.
 - C programs that use the same struct name for different structs in two files.
 - Declarations whose type is different from the definition, for example
   `extern int a[];` and `int a[10];`.
-
-The next phases add the rename of translation-unit-local symbols, then
-selected C++ linkage rules.
 
 ---
 
@@ -1039,6 +1059,7 @@ JOBS=8 bash test/run_tests.sh --json-out /tmp/summary.json
 | `RUN_LLVM` | `0` | Run the LLVM SingleSource tests (large and slow) |
 | `RUN_ESBMC` | `0` | Run the esbmc-eval tests (the corpus is not in this repository) |
 | `JOBS` | `nproc` | The number of parallel jobs |
+| `MULTI_MERGE` | `c` | The merge strategy of the LLVM MultiSource tests: `c` or `cir` (see [5.6](#56-merge-translation-units)) |
 | `LLVM_EVAL_DIR` | `test/sources/llvm-test-suite/` | The LLVM corpus |
 | `ESBMC_EVAL_DIR` | `test/sources/esbmc-eval/` | The esbmc-eval corpus |
 | `CIR2C_LLVM_PREFIX` | Found automatically | The toolchain prefix |

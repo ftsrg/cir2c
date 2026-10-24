@@ -14,5 +14,6 @@
  * limitations under the License.
  */
 
-static int counter = 2;
-int fb(void) { return counter++; }
+int util(void) { return 2; }
+int fa(void);
+int main(void) { return fa() * 10 + util() - 12; }

@@ -96,6 +96,7 @@ ESBMC_EVAL_OUTPUT_DIR="$SCRIPT_DIR/esbmc-eval/output"
 RUN_ESBMC=${RUN_ESBMC:-0}
 RUN_LLVM=${RUN_LLVM:-0}
 RUN_LLVM_MULTI=${RUN_LLVM_MULTI:-0}
+MULTI_MERGE=${MULTI_MERGE:-c}      # MultiSource merge strategy: c or cir
 RUN_INTEGRATION=${RUN_INTEGRATION:-1}
 
 # ---------------------------------------------------------------------------
@@ -633,17 +634,21 @@ run_llvm_multi_test() {
     local -a inc=(); local _d
     while IFS= read -r _d; do [ -n "$_d" ] && inc+=(--include "$_d"); done < <(compute_includes "${src_files[0]}")
 
-    # Run the multi-file pipeline with --merge c
+    # Run the multi-file pipeline with the merge strategy MULTI_MERGE selects
+    # (c: merge the C outputs, cir: merge the CIR modules with cir-merge)
     # shellcheck disable=SC2086
     timeout "$TIMEOUT" "$RUNNER" $lang_flag "$EXTERNALIZE_STD_FLAG" \
-        ${inc[@]+"${inc[@]}"} \
-        "${src_files[@]}" --merge c "$output_c_file" >"$pipeline_log" 2>&1 || pipeline_rc=$?
+        ${inc[@]+"${inc[@]}"} --merge "${MULTI_MERGE:-c}" \
+        "${src_files[@]}" "$output_c_file" >"$pipeline_log" 2>&1 || pipeline_rc=$?
 
     if [[ $pipeline_rc -eq 124 ]]; then
         echo "TIMEDOUT|$test_id|"; return
     fi
     if [[ $pipeline_rc -eq 2 ]]; then
         echo "SKIPPED|$test_id|CIR generation failed: $(skip_reason "$pipeline_log")"; return
+    fi
+    if [[ $pipeline_rc -eq 5 ]]; then
+        echo "SKIPPED|$test_id|cir-merge rejected: $(grep -m1 'cir-merge: error' "$pipeline_log" | sed 's/^cir-merge: error: [^:]*: //')"; return
     fi
     if [[ $pipeline_rc -ne 0 ]] || [ ! -f "$output_c_file" ]; then
         echo "MAPPER_FAILED|$test_id|$(pipeline_stage "$pipeline_rc") failed"; return
@@ -744,7 +749,7 @@ run_esbmc_test() {
 
 # Export everything workers need
 export TIMEOUT RUNNER GCC CLANGPP INTEGRATION_OUTPUT_DIR LLVM_EVAL_DIR LLVM_EVAL_OUTPUT_DIR
-export ESBMC_EVAL_DIR ESBMC_EVAL_OUTPUT_DIR EXTERNALIZE_STD_FLAG
+export ESBMC_EVAL_DIR ESBMC_EVAL_OUTPUT_DIR EXTERNALIZE_STD_FLAG MULTI_MERGE
 export -f pipeline_stage run_selfchecking run_c_test run_cpp_test run_llvm_test run_llvm_multi_test run_esbmc_test
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@
 
 // cir-merge: merge the CIR modules of several translation units into one.
 //
-// Phase 1 of the multi-TU design: a conservative merger. Every input is parsed
+// A conservative merger (phases 1 and 2 of the multi-TU design). Every input is parsed
 // and verified with MLIR's parser, the module attributes are checked for
 // compatibility, a symbol inventory is built, a merge plan is computed for the
 // whole inventory, and only then is the output module built, verified,
@@ -39,6 +39,7 @@
 #include <llvm/ADT/MapVector.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringMap.h>
+#include <llvm/ADT/StringSet.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/InitLLVM.h>
@@ -249,7 +250,7 @@ bool checkRecordDefs(ArrayRef<std::string> paths, ArrayRef<RecordDefs> defs) {
               << "\n";
       note() << paths[it->second] << ": " << firstKey << "\n";
       note() << paths[i] << ": " << key << "\n";
-      note() << "CIR identifies records by name, so Phase 1 cannot merge "
+      note() << "CIR identifies records by name, so cir-merge cannot merge "
              << "translation units that give one name two definitions\n";
       ok = false;
     }
@@ -271,7 +272,7 @@ const char *const kMustMatchAttrs[] = {
     "cir.int_type_width",  "cir.size_type_width",   "cir.default_tls_model",
 };
 
-// Inline assembly at module level. Phase 1 only accepts it when it is empty
+// Inline assembly at module level. cir-merge only accepts it when it is empty
 // everywhere: concatenating asm blocks may duplicate symbol definitions.
 const char *const kModuleAsmAttr = "cir.module_asm";
 
@@ -351,7 +352,7 @@ mergeModuleAttributes(std::vector<Input> &inputs, MLIRContext &context) {
     auto array = dyn_cast<ArrayAttr>(attr);
     if (!array || !array.empty()) {
       error() << in.path << ": module-level inline assembly is not supported\n";
-      note() << "Phase 1 does not merge 'cir.module_asm'\n";
+      note() << "cir-merge does not merge 'cir.module_asm'\n";
       ok = false;
     }
   }
@@ -381,7 +382,7 @@ mergeModuleAttributes(std::vector<Input> &inputs, MLIRContext &context) {
                 << "' has a different layout than in " << it->second.second
                 << "\n";
         note() << "two translation units define the same record name "
-               << "differently; Phase 1 cannot merge them\n";
+               << "differently; cir-merge cannot merge them\n";
         ok = false;
       }
     }
@@ -459,12 +460,175 @@ bool isTranslationUnitLocal(cir::GlobalLinkageKind linkage) {
          linkage == cir::GlobalLinkageKind::PrivateLinkage;
 }
 
+// ---------------------------------------------------------------------------
+// String-named references and the renaming of translation-unit-local symbols
+// ---------------------------------------------------------------------------
+//
+// Most references to a symbol are SymbolRefAttrs. MLIR finds and rewrites
+// those itself, also inside other attributes (the callee of cir.call, the
+// symbol of cir.get_global, #cir.global_view inside #cir.vtable or
+// #cir.typeinfo, the function of #cir.block_addr_info, a personality). CIR also
+// names symbols with plain strings, which MLIR does not see. At the pinned
+// revision these are:
+//
+//   module  cir.global_ctors, cir.global_dtors  #cir.global_ctor<"fn", prio>
+//   global  static_local_guard<"guard">         the guard variable of a
+//                                               function-local static
+//   global  tls_refs = <"wrapper", "init", ...> the thread_local wrapper,
+//                                               initializer and guard
+//
+// cir-merge rewrites these with the symbols they name. The CUDA attributes
+// that name kernels by string are not handled, and inputs carrying them are
+// rejected.
+
+std::optional<cir::GlobalLinkageKind> linkageOf(Operation *op) {
+  if (auto func = dyn_cast<cir::FuncOp>(op))
+    return func.getLinkage();
+  if (auto global = dyn_cast<cir::GlobalOp>(op))
+    return global.getLinkage();
+  return std::nullopt;
+}
+
+// Calls `fn` with every string-named symbol reference of `module`.
+void forEachStringRef(ModuleOp module, llvm::function_ref<void(StringAttr)> fn) {
+  for (const char *attrName : {kGlobalCtorsAttr, kGlobalDtorsAttr})
+    if (auto list = module->getAttrOfType<ArrayAttr>(attrName))
+      for (Attribute entry : list) {
+        if (auto ctor = dyn_cast<cir::GlobalCtorAttr>(entry))
+          fn(ctor.getName());
+        else if (auto dtor = dyn_cast<cir::GlobalDtorAttr>(entry))
+          fn(dtor.getName());
+      }
+  for (auto global : module.getOps<cir::GlobalOp>()) {
+    if (auto guard = global.getStaticLocalGuardAttr())
+      fn(guard.getName());
+    if (auto tls = global.getTlsRefsAttr())
+      for (StringAttr name :
+           {tls.getWrapperName(), tls.getInitName(), tls.getGuardName()})
+        if (name && !name.getValue().empty())
+          fn(name);
+  }
+}
+
+// Rewrites the string-named references of `module` according to `renames`.
+void renameStringRefs(ModuleOp module,
+                      const llvm::StringMap<std::string> &renames) {
+  MLIRContext *context = module.getContext();
+  auto renamed = [&](StringAttr name) -> StringAttr {
+    if (!name)
+      return name;
+    auto it = renames.find(name.getValue());
+    return it == renames.end() ? name : StringAttr::get(context, it->second);
+  };
+  for (const char *attrName : {kGlobalCtorsAttr, kGlobalDtorsAttr}) {
+    auto list = module->getAttrOfType<ArrayAttr>(attrName);
+    if (!list)
+      continue;
+    SmallVector<Attribute> entries;
+    for (Attribute entry : list) {
+      if (auto ctor = dyn_cast<cir::GlobalCtorAttr>(entry))
+        entry = cir::GlobalCtorAttr::get(renamed(ctor.getName()),
+                                         ctor.getPriority());
+      else if (auto dtor = dyn_cast<cir::GlobalDtorAttr>(entry))
+        entry = cir::GlobalDtorAttr::get(renamed(dtor.getName()),
+                                         dtor.getPriority());
+      entries.push_back(entry);
+    }
+    module->setAttr(attrName, ArrayAttr::get(context, entries));
+  }
+  for (auto global : module.getOps<cir::GlobalOp>()) {
+    if (auto guard = global.getStaticLocalGuardAttr())
+      global.setStaticLocalGuardAttr(
+          cir::StaticLocalGuardAttr::get(context, renamed(guard.getName())));
+    if (auto tls = global.getTlsRefsAttr())
+      global.setTlsRefsAttr(cir::ThreadLocalGlobalWrapperInitAttr::get(
+          context, renamed(tls.getWrapperName()), renamed(tls.getInitName()),
+          renamed(tls.getGuardName())));
+  }
+}
+
+// Gives every translation-unit-local symbol (internal or private linkage) whose
+// name another input also uses a new name that no input uses, and rewrites the
+// references to it inside its own input. Two inputs' local symbols are
+// distinct entities, and so is a local symbol and another input's external
+// symbol of the same name; after the renaming they no longer collide.
+//
+// The new name is `<name>.tu<N>`, N being the 1-based position of the input
+// on the command line (with a further `.<k>` if that name is taken). A name is
+// "used" by an input when the input defines or declares it, or names it in a
+// string-named reference.
+bool renameLocalCollisions(std::vector<Input> &inputs) {
+  llvm::StringMap<unsigned> usedBy; // name -> number of inputs using it
+  llvm::StringSet<> taken;
+  for (Input &in : inputs) {
+    llvm::StringSet<> mine;
+    for (Operation &op : in.module->getBody()->getOperations())
+      if (auto name = op.getAttrOfType<StringAttr>("sym_name"))
+        mine.insert(name.getValue());
+    forEachStringRef(*in.module,
+                     [&](StringAttr name) { mine.insert(name.getValue()); });
+    for (auto &entry : mine) {
+      ++usedBy[entry.getKey()];
+      taken.insert(entry.getKey());
+    }
+  }
+
+  bool ok = true;
+  for (unsigned i = 0; i < inputs.size(); ++i) {
+    ModuleOp module = *inputs[i].module;
+    MLIRContext *context = module.getContext();
+    llvm::StringMap<std::string> renames;
+    for (Operation &op : module.getBody()->getOperations()) {
+      std::optional<cir::GlobalLinkageKind> linkage = linkageOf(&op);
+      if (!linkage || !isTranslationUnitLocal(*linkage))
+        continue;
+      StringRef name = op.getAttrOfType<StringAttr>("sym_name").getValue();
+      if (usedBy.lookup(name) < 2)
+        continue;
+      std::string base = (name + ".tu" + Twine(i + 1)).str();
+      std::string fresh = base;
+      for (unsigned k = 1; taken.contains(fresh); ++k)
+        fresh = base + "." + std::to_string(k);
+      taken.insert(fresh);
+      StringAttr freshAttr = StringAttr::get(context, fresh);
+      if (failed(SymbolTable::replaceAllSymbolUses(&op, freshAttr, module))) {
+        error() << inputs[i].path << ": cannot rewrite the uses of @" << name
+                << " to rename it\n";
+        ok = false;
+        continue;
+      }
+      if (verbose)
+        llvm::errs() << "cir-merge: @" << name << " ("
+                     << cir::stringifyGlobalLinkageKind(*linkage) << " in "
+                     << inputs[i].path << ") renamed to @" << fresh << "\n";
+      renames[name] = fresh;
+      SymbolTable::setSymbolName(&op, freshAttr);
+    }
+    if (!renames.empty())
+      renameStringRefs(module, renames);
+  }
+  return ok;
+}
+
 // Collects every top-level operation of every input. Returns false after
 // printing why an operation is outside the supported subset.
 bool buildInventory(std::vector<Input> &inputs, std::vector<Symbol> &symbols) {
   bool ok = true;
   for (unsigned i = 0; i < inputs.size(); ++i) {
     for (Operation &op : inputs[i].module->getBody()->getOperations()) {
+      bool cuda = false;
+      op.getAttrDictionary().walk([&](Attribute attr) {
+        if (isa<cir::CUDAKernelNameAttr, cir::CUDABinaryHandleAttr>(attr))
+          cuda = true;
+      });
+      if (cuda) {
+        error() << inputs[i].path << ": @"
+                << op.getAttrOfType<StringAttr>("sym_name").getValue()
+                << " carries a CUDA attribute that names a symbol by string\n";
+        note() << "cir-merge does not rewrite CUDA kernel references\n";
+        ok = false;
+        continue;
+      }
       if (auto func = dyn_cast<cir::FuncOp>(op)) {
         symbols.push_back({i, &op, SymKind::Function, func.getSymName(),
                            isFunctionDefinition(func), func.getLinkage()});
@@ -484,7 +648,7 @@ bool buildInventory(std::vector<Input> &inputs, std::vector<Symbol> &symbols) {
         llvm::errs() << " defining symbol @" << name.getValue();
       llvm::errs() << "\n";
       note() << "at " << locString(op.getLoc()) << "\n";
-      note() << "Phase 1 merges only 'cir.func' and 'cir.global'\n";
+      note() << "cir-merge merges only 'cir.func' and 'cir.global'\n";
       ok = false;
     }
   }
@@ -512,9 +676,11 @@ void printInventory(const std::vector<Input> &inputs,
 //   only compatible declarations            keep the first declaration
 //   compatible declarations + 1 definition  keep the definition
 //   two or more definitions                 reject (no ODR / COMDAT / weak
-//                                           selection in Phase 1)
+//                                           selection)
 //   function vs global with the same name   reject
-//   internal or private linkage colliding   reject (no renaming in Phase 1)
+//   internal or private linkage colliding   cannot happen: such symbols were
+//                                           renamed (renameLocalCollisions);
+//                                           rejected as an internal error
 //   incompatible types or attributes        reject
 //   unsupported linkage in a collision      reject
 
@@ -628,8 +794,8 @@ bool planMerge(const std::vector<Input> &inputs,
                 << " linkage and its name is also used in "
                 << inputs[other.input].path << "\n";
         note() << "translation-unit-local symbols are distinct entities; "
-               << "merging them by name would be wrong, and Phase 1 does not "
-               << "rename symbols\n";
+               << "merging them by name would be wrong (internal error: they "
+               << "should have been renamed)\n";
         groupOk = false;
         break;
       }
@@ -651,7 +817,7 @@ bool planMerge(const std::vector<Input> &inputs,
           defs[1]->linkage == cir::GlobalLinkageKind::ExternalLinkage)
         note() << "the program defines this symbol in two translation units\n";
       else
-        note() << "Phase 1 does not implement ODR, COMDAT or weak-definition "
+        note() << "cir-merge does not implement ODR, COMDAT or weak-definition "
                << "selection (inline functions, templates and vtables defined "
                << "in several translation units)\n";
       groupOk = false;
@@ -663,7 +829,7 @@ bool planMerge(const std::vector<Input> &inputs,
         !definitionLinkageMergeable(chosen->linkage)) {
       error() << inputs[chosen->input].path << ": definition of @" << name
               << " has " << cir::stringifyGlobalLinkageKind(chosen->linkage)
-              << " linkage, which Phase 1 does not merge with declarations "
+              << " linkage, which cir-merge does not merge with declarations "
               << "from other translation units\n";
       groupOk = false;
     }
@@ -675,7 +841,7 @@ bool planMerge(const std::vector<Input> &inputs,
         if (s->linkage != cir::GlobalLinkageKind::ExternalLinkage) {
           error() << inputs[s->input].path << ": declaration of @" << name
                   << " has " << cir::stringifyGlobalLinkageKind(s->linkage)
-                  << " linkage, which Phase 1 does not merge\n";
+                  << " linkage, which cir-merge does not merge\n";
           groupOk = false;
           break;
         }
@@ -759,6 +925,38 @@ bool checkReferences(ModuleOp merged) {
       error() << "unresolved reference to @" << ref.getRootReference().getValue()
               << " at " << locString(use.getUser()->getLoc()) << "\n";
       ok = false;
+    }
+  }
+  for (auto global : merged.getOps<cir::GlobalOp>()) {
+    auto where = [&] { return locString(global.getLoc()); };
+    if (auto guard = global.getStaticLocalGuardAttr())
+      if (!isa_and_nonnull<cir::GlobalOp>(table.lookup(guard.getName()))) {
+        error() << "the static-local guard @" << guard.getName().getValue()
+                << " of @" << global.getSymName()
+                << " is not a global of the merged module (" << where()
+                << ")\n";
+        ok = false;
+      }
+    if (auto tls = global.getTlsRefsAttr()) {
+      if (!isa_and_nonnull<cir::FuncOp>(table.lookup(tls.getWrapperName()))) {
+        error() << "the thread_local wrapper @"
+                << tls.getWrapperName().getValue() << " of @"
+                << global.getSymName()
+                << " is not a function of the merged module (" << where()
+                << ")\n";
+        ok = false;
+      }
+      // The initializer may be absent: clang references the initializer of
+      // an extern thread_local weakly, and the defining translation unit
+      // only emits it when the variable needs dynamic initialization.
+      if (StringAttr init = tls.getInitName();
+          init && !init.getValue().empty() && table.lookup(init) &&
+          !isa<cir::FuncOp>(table.lookup(init))) {
+        error() << "the thread_local initializer @" << init.getValue()
+                << " of @" << global.getSymName() << " is not a function ("
+                << where() << ")\n";
+        ok = false;
+      }
     }
   }
   for (const char *name : {kGlobalCtorsAttr, kGlobalDtorsAttr}) {
@@ -883,11 +1081,15 @@ int main(int argc, char **argv) {
   if (!ok)
     return 1;
 
-  // 2. Module compatibility.
+  // 2. Give colliding translation-unit-local symbols unique names.
+  if (!renameLocalCollisions(inputs))
+    return 1;
+
+  // 3. Module compatibility.
   std::optional<SmallVector<NamedAttribute>> moduleAttrs =
       mergeModuleAttributes(inputs, context);
 
-  // 3. Symbol inventory.
+  // 4. Symbol inventory.
   std::vector<Symbol> symbols;
   bool inventoryOk = buildInventory(inputs, symbols);
   if (dumpSymbols)
@@ -895,12 +1097,12 @@ int main(int argc, char **argv) {
   if (!moduleAttrs || !inventoryOk)
     return 1;
 
-  // 4. Plan, for the whole inventory, before anything is modified.
+  // 5. Plan, for the whole inventory, before anything is modified.
   Plan plan;
   if (!planMerge(inputs, symbols, plan))
     return 1;
 
-  // 5. Apply, then validate the result.
+  // 6. Apply, then validate the result.
   OwningOpRef<ModuleOp> merged = applyPlan(inputs, plan, *moduleAttrs, context);
   if (failed(verify(*merged))) {
     error() << "the merged module does not verify (see above)\n";

@@ -1,0 +1,5 @@
+ok
+output-count 1 tls_refs = <"_ZTWL1t.tu1", "_ZTHL1t.tu1">
+output-count 1 tls_refs = <"_ZTWL1t.tu2", "_ZTHL1t.tu2">
+output-count 1 @__tls_init.tu1(
+output-count 1 @__tls_init.tu2(

@@ -1,0 +1,6 @@
+ok
+output-count 1 @counter.tu1 =
+output-count 1 @counter.tu2 =
+output-count 1 @helper.tu1() ->
+output-count 1 @helper.tu2() ->
+run 0

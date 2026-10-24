@@ -16,3 +16,5 @@
 
 int seed() { return 41; }
 int second = seed() + 2;
+extern int first;
+int main() { return first + second - 85; }
