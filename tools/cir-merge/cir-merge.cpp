@@ -43,6 +43,7 @@
 #include <llvm/ADT/StringExtras.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringMap.h>
+#include <llvm/ADT/StringSwitch.h>
 #include <llvm/ADT/StringSet.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/FileSystem.h>
@@ -1140,6 +1141,104 @@ struct Adaptation {
   Type keptType; // the type of the kept symbol (function or global type)
 };
 
+// ---------------------------------------------------------------------------
+// Attribute policy
+// ---------------------------------------------------------------------------
+//
+// When a symbol occurs in several inputs, one operation is kept and the
+// others (declarations, or ODR definitions equivalent to the kept one) are
+// dropped with their attributes. Every attribute a dropped operation can carry
+// is classified here; an attribute that is not is rejected. The classes:
+//
+//   checked    compared by the merge rules (types, linkage, constness, ...)
+//   from-kept  a property of the kept definition or a hint for code
+//              generation; the dropped operation's value is not needed
+//   equal      must be equal on both operations when the dropped one has it
+//   alignment  the kept symbol must be at least as aligned as the dropped
+//              declaration promised its users
+//   section    the kept symbol must be in the section the dropped
+//              declaration promised
+
+enum class AttrClass { Checked, FromKept, Equal, Alignment, Section };
+
+std::optional<AttrClass> classifyFunctionAttr(StringRef name) {
+  return llvm::StringSwitch<std::optional<AttrClass>>(name)
+      .Cases({"sym_name", "function_type", "no_proto", "calling_conv",
+              "linkage"},
+             AttrClass::Checked)
+      .Cases({"sym_visibility", "global_visibility", "comdat", "dso_local",
+              "arg_attrs", "res_attrs", "inline_kind", "builtin", "lambda",
+              "personality", "side_effect", "aliasee"},
+             AttrClass::FromKept)
+      // Function attributes clang attaches as discardable attributes. A
+      // declaration's copy only repeats what its own call sites encode.
+      .Cases({"cir.target-cpu", "cir.target-features", "cir.tune-cpu",
+              "nothrow", "nobuiltin", "noreturn", "nocallback", "allocsize"},
+             AttrClass::FromKept)
+      .Cases({"func_info", "coroutine", "global_ctor_priority",
+              "global_dtor_priority", "annotations"},
+             AttrClass::Equal)
+      .Default(std::nullopt);
+}
+
+std::optional<AttrClass> classifyGlobalAttr(StringRef name) {
+  return llvm::StringSwitch<std::optional<AttrClass>>(name)
+      .Cases({"sym_name", "sym_type", "constant", "tls_model", "addr_space",
+              "linkage", "initial_value"},
+             AttrClass::Checked)
+      .Cases({"sym_visibility", "global_visibility", "comdat", "dso_local",
+              "ast", "tls_refs", "static_local_info", "static_local_guard",
+              "aliasee", "init_priority"},
+             AttrClass::FromKept)
+      .Cases({"annotations", "strictfp"}, AttrClass::Equal)
+      .Case("alignment", AttrClass::Alignment)
+      .Case("section", AttrClass::Section)
+      .Default(std::nullopt);
+}
+
+// Returns why `dropped` cannot be dropped in favour of `kept`, or an empty
+// string.
+std::string attributePolicy(Operation *kept, Operation *dropped) {
+  DictionaryAttr keptAttrs = kept->getAttrDictionary();
+  bool isFunc = isa<cir::FuncOp>(dropped);
+  for (NamedAttribute attr : dropped->getAttrDictionary()) {
+    StringRef name = attr.getName().getValue();
+    std::optional<AttrClass> cls =
+        isFunc ? classifyFunctionAttr(name) : classifyGlobalAttr(name);
+    if (!cls)
+      return ("its attribute '" + name +
+              "' is not classified by cir-merge's attribute policy")
+          .str();
+    Attribute keptValue = keptAttrs.get(name);
+    switch (*cls) {
+    case AttrClass::Checked:
+    case AttrClass::FromKept:
+      break;
+    case AttrClass::Equal:
+      if (keptValue != attr.getValue())
+        return ("its attribute '" + name + "' differs").str();
+      break;
+    case AttrClass::Alignment: {
+      auto want = dyn_cast<IntegerAttr>(attr.getValue());
+      auto have = dyn_cast_if_present<IntegerAttr>(keptValue);
+      if (!want || !have || have.getInt() < want.getInt())
+        return ("it promises alignment " +
+                (want ? std::to_string(want.getInt()) : std::string("?")) +
+                " but the kept symbol has " +
+                (have ? std::to_string(have.getInt())
+                      : std::string("none")))
+            ;
+      break;
+    }
+    case AttrClass::Section:
+      if (keptValue != attr.getValue())
+        return "it places the symbol in a different section";
+      break;
+    }
+  }
+  return "";
+}
+
 struct Plan {
   llvm::DenseSet<Operation *> keep;
   std::vector<Adaptation> adaptations;
@@ -1384,13 +1483,27 @@ bool planMerge(std::vector<Input> &inputs, const std::vector<Symbol> &symbols,
             groupOk = false;
             break;
           }
+          std::string policy = attributePolicy(chosen->op, s->op);
+          if (!policy.empty()) {
+            error() << inputs[s->input].path << ": " << kindName(s->kind)
+                    << " @" << name << " cannot be merged with its "
+                    << (chosen->isDefinition ? "definition" : "declaration")
+                    << " in " << inputs[chosen->input].path << ": " << policy
+                    << "\n";
+            groupOk = false;
+            break;
+          }
           plan.adaptations.push_back(
               {s->input, nameAttr, symbolType(chosen->op)});
           continue;
         }
         std::string why = incompatibility(*chosen, *s);
-        if (why.empty())
-          continue;
+        if (why.empty()) {
+          std::string policy = attributePolicy(chosen->op, s->op);
+          if (policy.empty())
+            continue;
+          why = policy;
+        }
         error() << inputs[s->input].path << ": " << kindName(s->kind) << " @"
                 << name << " is incompatible with its "
                 << (chosen->isDefinition ? "definition" : "declaration")

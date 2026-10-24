@@ -488,6 +488,19 @@ A function is a definition when it has a body or is an alias (`alias(@...)`).
 A global is a definition when it has an initial value, a constructor region, a
 destructor region or an alias.
 
+**The attribute policy.** When a symbol is in more than one input,
+`cir-merge` keeps one operation and drops the others with their attributes.
+Each attribute that a dropped operation can have is in one class. An attribute
+that is in no class is an error.
+
+| Class | Function attributes | Global attributes | Rule |
+|---|---|---|---|
+| Checked | `sym_name`, `function_type`, `no_proto`, `calling_conv`, `linkage` | `sym_name`, `sym_type`, `constant`, `tls_model`, `addr_space`, `linkage`, `initial_value` | Compared by the rules above |
+| From the kept operation | `sym_visibility`, `global_visibility`, `comdat`, `dso_local`, `arg_attrs`, `res_attrs`, `inline_kind`, `builtin`, `lambda`, `personality`, `side_effect`, `aliasee`, `cir.target-cpu`, `cir.target-features`, `cir.tune-cpu`, `nothrow`, `nobuiltin`, `noreturn`, `nocallback`, `allocsize` | `sym_visibility`, `global_visibility`, `comdat`, `dso_local`, `ast`, `tls_refs`, `static_local_info`, `static_local_guard`, `aliasee`, `init_priority` | The value of the dropped operation is not necessary. These are properties of the definition, or hints for code generation that the call sites of the dropped declaration already contain. |
+| Equal | `func_info`, `coroutine`, `global_ctor_priority`, `global_dtor_priority`, `annotations` | `annotations`, `strictfp` | Must have the same value on the kept operation |
+| Alignment | | `alignment` | The kept symbol must be aligned at least as much as the dropped declaration says |
+| Section | | `section` | The kept symbol must be in the section that the dropped declaration gives |
+
 The module attributes:
 
 | Attribute | Rule |
