@@ -44,6 +44,7 @@ runs:
             "integration": "Integration",
             "llvm":        "LLVM SingleSource",
             "llvm-std":    "LLVM (no-ext-std)",
+            "llvm-multi":  "LLVM MultiSource",
             "esbmc":       "esbmc-eval",
             "esbmc-std":   "esbmc-eval (no-ext-std)",
         }

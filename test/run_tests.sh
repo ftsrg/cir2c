@@ -1003,21 +1003,22 @@ echo "  Running LLVM MultiSource Tests"
 echo "======================================"
 echo ""
 
-if [ ! -d "$LLVM_EVAL_DIR" ]; then
-    echo -e "${YELLOW}SKIPPED: llvm test suite directory not found at $LLVM_EVAL_DIR${NC}"
+multi_src_dir="$LLVM_EVAL_DIR/MultiSource"
+if [ ! -d "$multi_src_dir" ]; then
+    echo -e "${YELLOW}SKIPPED: MultiSource directory not found at $multi_src_dir${NC}"
 elif [ ! -f "$CLANGPP" ]; then
     echo -e "${YELLOW}SKIPPED: clang++ not found at $CLANGPP${NC}"
 else
     mkdir -p "$LLVM_EVAL_OUTPUT_DIR"
 
     # Discover multi-TU test directories: those containing a .reference_output
-    # file alongside multiple .c/.cpp source files.
+    # file alongside .c/.cpp source files, within the MultiSource subdirectory.
     printf "  Scanning test directories..."
     mapfile -t multi_dirs < <(
-        find "$LLVM_EVAL_DIR" -name '*.reference_output' -print0 | \
+        find "$multi_src_dir" -name '*.reference_output' -print0 | \
         while IFS= read -r -d '' ref; do
             dir=$(dirname "$ref")
-            src_count=$(find "$dir" \( -name '*.c' -o -name '*.cpp' \) -type f | wc -l)
+            src_count=$(find "$dir" -maxdepth 1 \( -name '*.c' -o -name '*.cpp' \) -type f | wc -l)
             [ "$src_count" -gt 0 ] && echo "$dir"
         done | sort -u
     )
