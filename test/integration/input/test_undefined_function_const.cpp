@@ -14,10 +14,9 @@
  * limitations under the License.
  */
 
-// A function that the program declares but does not define gets the const of
-// its declaration in clang's AST (run-cir2c.sh, --c-prototypes): the CIR has
-// no const. __assert_fail is not in cir2c's table of the C library, so its
-// const comes only from the AST.
+// A C library function that the program declares but does not define gets
+// the const of its standard prototype from cir2c's table: the CIR has no const
+// (llvm/llvm-project#217687). __assert_fail of glibc is in the table too.
 // cir2c-test-output-contains: extern void __assert_fail(const char* p0, const char* p1, unsigned int p2, const char* p3);
 // cir2c-test-output-contains: extern unsigned long strlen(const char* p0);
 

@@ -202,14 +202,17 @@ static bool isCLibraryName(const std::string &name) {
 // const (C11 7.1.4 and the prototypes of each header), as a bit mask of the
 // parameter indexes. The CIR has no const, but a declaration of a library
 // function whose type is not compatible with the standard one is undefined
-// (C11 6.2.7p2). This table is only the fallback for a function without a
-// declaration in clang's AST (see readCPrototypes). mbsrtowcs and wcsrtombs are
-// not in the table: their parameter is `const char **`, and a call with a
-// `char **` argument is not valid C.
+// (C11 6.2.7p2). The table also has __assert_fail of glibc (<assert.h>), which
+// each assertion calls. This table is a temporary workaround: the CIR has no
+// const because CIR pointer types have no qualifiers (llvm/llvm-project#217687,
+// cir2c #8). mbsrtowcs and wcsrtombs are not in the table: their parameter is
+// `const char **`, and a call with a `char **` argument is not valid C.
 static unsigned cLibraryConstParams(const std::string &name) {
   static const std::map<std::string, unsigned> masks = {
       // <locale.h>, <wctype.h>
       {"setlocale", 0x2}, {"wctype", 0x1}, {"wctrans", 0x1},
+      // <assert.h> of glibc: __assert_fail(assertion, file, line, function)
+      {"__assert_fail", 0xb},
       // <math.h>
       {"nan", 0x1}, {"nanf", 0x1}, {"nanl", 0x1},
       // <stdio.h>
@@ -850,17 +853,11 @@ void Mapper::buildCPrototype(mlir::Operation *fop, std::string &retType,
   std::string sym = symbolNameAttr(fop).getValue().str();
   outName = getFunctionOutputName(sym);
 
-  // A declaration of a function that the program does not define gets the
-  // const of its declaration back, from clang's AST (run-cir2c.sh,
-  // --c-prototypes); the table of the C library is the fallback when there is
-  // no such declaration. A definition keeps the types of the CIR: there the
-  // program defines the function itself.
+  // A declaration of a C library function gets the const of the standard
+  // prototype back. A definition keeps the types of the CIR: there the program
+  // defines the function itself.
   bool hasBody = fop->getNumRegions() > 0 && !fop->getRegion(0).empty();
-  unsigned constParams = 0;
-  if (!hasBody && sym == outName) {
-    auto known = cPrototypeConstParams_.find(sym);
-    constParams = known != cPrototypeConstParams_.end() ? known->second : cLibraryConstParams(sym);
-  }
+  unsigned constParams = (hasBody || sym != outName) ? 0 : cLibraryConstParams(sym);
 
   // The parameters are named p0, p1, … here, not with the names that mapFunc
   // assigns, so that this does not interfere with those assignments.

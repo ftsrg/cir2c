@@ -314,26 +314,6 @@ table below. Each option changes the CIR, so record them with a result.
 | `-fno-threadsafe-statics` | C++ | A plain flag guards the initialization of a static local variable, for example `static int v = f();`. Without this option, clang calls `__cxa_guard_acquire` and `__cxa_guard_release` of the C++ runtime, which lock the variable against other threads. The output does not contain these functions. For a program with one thread, the two forms have the same behavior: the initializer runs once, and when it throws, the next call runs it again. |
 | `-I`, `-include` of the models | C++, `--no-externalize-std` | See [8.2](#82-the-standard-library). |
 
-**The declarations of undefined functions.** The CIR has no `const`: a CIR
-pointer type has no qualifiers
-([llvm/llvm-project#217687](https://github.com/llvm/llvm-project/issues/217687)).
-The output declares each function that the program uses but does not define,
-for example `strlen` or `__assert_fail`, and a declaration whose type is not
-compatible with the function is undefined behavior (C11 6.2.7p2). Thus, after
-the CIR step, the script runs clang once more for each such function with a C
-name (not `_Z…`), with the same options and
-`-fsyntax-only -Xclang -ast-dump=json -Xclang -ast-dump-filter=<name>`, and
-gives the declarations to cir2c (`--c-prototypes`). A parameter of a
-declaration gets `const` when it points to a const type in clang's
-declaration. Limits: only a pointer of one level gets `const` (`const char *`,
-not `const char **`), because the output writes `const` in front of the whole
-parameter type. In C++, glibc declares `memchr`, `strchr`, `strstr`,
-`wmemchr` and similar functions as two overloads with the C name, one with and
-one without `const`; a parameter gets `const` when it has it in one of them,
-which gives the C prototype. For a function without such a declaration, cir2c
-uses its table of the C library. Each of these clang runs parses the whole
-translation unit again: a C++ program with libc++ takes some seconds longer.
-
 **Programs with threads.** The output of a C++ program has one thread. The
 `-fno-threadsafe-statics` option and the exception state of
 [7.5](#75-the-c-models-of-the-c-constructions) (plain global variables) are not
