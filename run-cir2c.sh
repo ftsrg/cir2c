@@ -22,7 +22,8 @@
 # body for, while libc++ keeps list/map/set/deque fully header-templated. Built
 # by docker/build-llvm.sh alongside clang; there is no flag to opt out.
 #
-# Exit codes: 0 success, 2 clang failed, 3 cir-opt failed, 4 cir2c failed
+# Exit codes: 0 success, 2 clang failed, 3 cir-opt failed, 4 cir2c failed,
+#             5 cir-merge rejected the inputs (--merge cir)
 #
 # Usage:
 #   Single file:  run-cir2c.sh [OPTIONS] <input-file> <output.c>
@@ -127,6 +128,7 @@ fi
 REQUIRE_FLAGS=()
 [[ "$FLATTEN" == true ]] && REQUIRE_FLAGS+=(--cir-opt)
 [[ "$LANG" == "c++" ]] && REQUIRE_FLAGS+=(--libcxx)
+[[ "$NUM_INPUTS" -gt 1 && "$MERGE_STRATEGY" == "cir" ]] && REQUIRE_FLAGS+=(--cir-merge)
 cir_require_toolchain ${REQUIRE_FLAGS[@]+"${REQUIRE_FLAGS[@]}"} || exit 1
 
 # Temp file management
@@ -243,13 +245,18 @@ else
             # CIR-level merge: compile each to CIR, merge MLIR, then run cir2c once
             MLIR_FILES=()
             for input_file in "${INPUT_FILES[@]}"; do
-                tmp_mlir=$(_tmpmlir "")
+                # Name the temporary after its source, so that cir-merge's
+                # diagnostics say which translation unit they are about.
+                tmp_mlir=$(mktemp --suffix="-$(basename "$input_file").cir")
+                _TEMPS+=("$tmp_mlir")
                 compile_to_cir "$input_file" "$tmp_mlir"
                 MLIR_FILES+=("$tmp_mlir")
             done
-            # Merge all MLIR files
+            # Merge all MLIR files. cir-merge is conservative: it rejects
+            # what it cannot merge soundly (see "Merging translation units"
+            # in README.md) instead of producing an approximate module.
             MERGED_MLIR=$(_tmpmlir "")
-            "$SCRIPT_DIR/scripts/merge-cir.sh" "${MLIR_FILES[@]}" "$MERGED_MLIR"
+            "$CIR_MERGE_BIN" --output "$MERGED_MLIR" "${MLIR_FILES[@]}" || exit 5
             # Preprocess the merged MLIR
             PRE_FILE=$(_tmpmlir "")
             sed -e 's/, cleanup_dest_slot\]/\]/g' \
