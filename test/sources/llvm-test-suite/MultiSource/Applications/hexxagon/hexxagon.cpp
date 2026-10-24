@@ -76,7 +76,7 @@ void printCopy()
 	printf("Hexxagon board game.\n");
 	printf("Copyright (C) 2001 Erik Jonsson.\n\n");
 	
-	printf("The pieces was drawn by Stefan Phlson.\n\n");
+	printf("The pieces was drawn by Stefan Påhlson.\n\n");
 
 	printf("This program is free software; you can redistribute it and/or\n");
 	printf("modify it under the terms of the GNU General Public License\n");
