@@ -98,7 +98,7 @@ done
 [[ $# -lt 2 ]] && usage
 OUTPUT_C="${!#}"
 INPUT_FILES=("$@")
-unset 'INPUT_FILES[$#]'
+unset 'INPUT_FILES[$(( $# - 1 ))]'
 
 # Validate all input files exist
 for f in "${INPUT_FILES[@]}"; do
