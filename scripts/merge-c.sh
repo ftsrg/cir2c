@@ -32,7 +32,7 @@ fi
 # Last argument is the output; everything before it is input
 OUTPUT="${!#}"
 INPUTS=("$@")
-unset 'INPUTS[$#]'
+unset 'INPUTS[$(( $# - 1 ))]'
 
 # If only one input, just copy it
 if [[ ${#INPUTS[@]} -eq 1 ]]; then
@@ -103,6 +103,19 @@ def extract_top_level_blocks(lines):
                     block_start = i
                     name = fname
         
+        # Global variable definition: type name = ...; or type name[...]; or type name;
+        elif re.match(r'\s*(?:static|inline|extern|unsigned|signed|const|volatile|long|short|void|int|char|float|double|size_t|uintptr_t|intptr_t|bool|_Bool|__attribute__|\w+)\s+\w+', stripped):
+            # Make sure it's not a function (no paren after name) and not a control flow keyword
+            m3 = re.search(r'\s*(?:static|inline|extern|unsigned|signed|const|volatile|long|short|void|int|char|float|double|size_t|uintptr_t|intptr_t|bool|_Bool|__attribute__|\w+)\s+(\w+)', stripped)
+            if m3:
+                vname = m3.group(1)
+                if vname not in ('if', 'while', 'for', 'switch', 'return', 'else', 'do', 'typedef', 'struct', 'enum', 'union'):
+                    # Check it's not a function declaration (no '(' on this line or next lines until ';')
+                    # Check the name is not immediately followed by '(' (function)
+                    if not re.search(r'\b' + re.escape(vname) + r'\s*\(', stripped):
+                        block_start = i
+                        name = vname
+        
         if block_start is not None:
             # Find the end of this block
             brace_depth = 0
@@ -111,19 +124,28 @@ def extract_top_level_blocks(lines):
             j = block_start
             while j < n:
                 block_lines.append(lines[j])
+                # Count braces, but skip those inside string literals
+                in_string = False
+                in_char = False
                 for ch in lines[j]:
-                    if ch == '{':
-                        brace_depth += 1
-                        found_open = True
-                    elif ch == '}':
-                        brace_depth -= 1
+                    if ch == '"' and not in_char:
+                        in_string = not in_string
+                    elif ch == "'" and not in_string:
+                        in_char = not in_char
+                    elif not in_string and not in_char:
+                        if ch == '{':
+                            brace_depth += 1
+                            found_open = True
+                        elif ch == '}':
+                            brace_depth -= 1
                 j += 1
                 if found_open and brace_depth == 0:
                     break
             
-            # If no braces found, it might be a declaration ending with ;
+            # If no braces found, the brace loop consumed the entire file.
+            # Reset and find the declaration ending with ;
             if not found_open:
-                # Look for semicolon at top level
+                block_lines = []
                 j = block_start
                 while j < n:
                     block_lines.append(lines[j])
@@ -132,8 +154,25 @@ def extract_top_level_blocks(lines):
                         break
                     j += 1
             
+            # For declarations with initializers (like `int x[3] = {1,2,3};`),
+            # the brace loop may stop at `}` before `;`. Always ensure we end at `;`.
+            block_text_so_far = '\n'.join(block_lines)
+            if ';' not in block_text_so_far:
+                # Continue reading until we find ';'
+                while j < n:
+                    block_lines.append(lines[j])
+                    if ';' in lines[j]:
+                        j += 1
+                        break
+                    j += 1
+            
             block_text = '\n'.join(block_lines)
-            blocks.append((name, block_text))
+            # Skip pure declarations/prototypes (no braces) - they'll be handled separately
+            if '{' in block_text:
+                blocks.append((name, block_text))
+            else:
+                # For declarations without braces, use None as key to avoid dedup conflicts
+                blocks.append((None, block_text))
             i = j
         else:
             i += 1
@@ -159,14 +198,23 @@ def extract_prototypes(blocks):
         if not lines:
             continue
         first_line = lines[0].strip()
-        # Check if this looks like a function (has parentheses)
-        if '(' in first_line and '{' in block:
-            # Extract the signature up to the opening brace
-            sig = first_line
-            if '{' in sig:
-                sig = sig[:sig.index('{')].strip()
-            if sig and '(' in sig and not sig.endswith('{'):
-                prototypes.append(sig.rstrip(';') + ';')
+        # Check if this looks like a function (has `name(` pattern, not `name[`)
+        # Skip global variables that have __attribute__ with parens
+        m = re.search(r'\b(\w+)\s*\(', first_line)
+        if m and '{' in block:
+            fname = m.group(1)
+            # Make sure it's a function name, not a keyword or array declaration
+            if fname not in ('if', 'while', 'for', 'switch', 'return', 'else', 'do',
+                             '__attribute__', 'aligned', 'packed', 'unused', 'noinline', 'noreturn',
+                             'format', 'weak', 'visibility', 'section', 'constructor',
+                             'destructor', 'weakref', 'alias', 'import', 'export',
+                             'cold', 'hot', 'const', 'pure', 'warn_unused_result'):
+                # Extract the signature up to the opening brace
+                sig = first_line
+                if '{' in sig:
+                    sig = sig[:sig.index('{')].strip()
+                if sig and '(' in sig and not sig.endswith('{'):
+                    prototypes.append(sig.rstrip(';') + ';')
     return prototypes
 
 
@@ -194,7 +242,10 @@ def merge_c_files(input_files, output_file):
         # Extract top-level blocks
         blocks = extract_top_level_blocks(lines)
         for name, block in blocks:
-            if name and name not in seen_names:
+            if name is None:
+                # Declaration without braces - always include, don't track name
+                all_blocks.append((name, block))
+            elif name not in seen_names:
                 seen_names.add(name)
                 all_blocks.append((name, block))
     
