@@ -449,8 +449,9 @@ C++ program obeys the One Definition Rule.
 The steps are:
 
 1. Parse and verify each input in a separate MLIR context. Record the
-   definition of each named record (struct, class, union).
-2. Compare the record definitions of all inputs.
+   definition of each record (struct, class, union).
+2. Give the anonymous records their names in the merged module, and compare
+   the named record definitions of all inputs.
 3. Parse all inputs into one context.
 4. Rename the translation-unit-local symbols whose names collide (see below).
 5. Check the module attributes.
@@ -549,6 +550,16 @@ definition for both inputs and gives no error. Thus `cir-merge` compares the
 definitions before the inputs share a context. Two different definitions are
 an error. A record that is incomplete in one input and complete in another
 input is correct.
+
+**The anonymous records.** Clang names a record without a name `anon.N`, with
+a counter in each translation unit. Thus `anon.0` of one input and `anon.0` of
+another input are not related. `cir-merge` identifies these records by their
+structure: two anonymous records with the same structure get one name, two
+different ones get different names. The first input keeps its names. An input
+whose names change is rebuilt before it joins the shared context. A record
+cannot change its name in an MLIR context, so the rebuild goes through
+temporary names and a second context. When `cir-merge` compares two named
+records, it compares their anonymous members by structure too.
 
 #### Known limits
 

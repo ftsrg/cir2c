@@ -38,6 +38,8 @@
 #include <mlir/Support/FileUtilities.h>
 
 #include <llvm/ADT/MapVector.h>
+#include <llvm/ADT/SetVector.h>
+#include <llvm/ADT/StringExtras.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringMap.h>
 #include <llvm/ADT/StringSet.h>
@@ -111,13 +113,9 @@ struct Input {
 // Parses and verifies one input into `context`. MLIR's own diagnostics (with
 // the file, line and column of the offending text) are printed by the
 // SourceMgr handler; this only adds which input was being read.
-OwningOpRef<ModuleOp> parseInput(const std::string &path, MLIRContext &context) {
-  std::string errorMessage;
-  auto file = openInputFile(path, &errorMessage);
-  if (!file) {
-    error() << path << ": " << errorMessage << "\n";
-    return nullptr;
-  }
+OwningOpRef<ModuleOp> parseBuffer(std::unique_ptr<llvm::MemoryBuffer> file,
+                                  const std::string &path,
+                                  MLIRContext &context) {
   llvm::SourceMgr sourceMgr;
   sourceMgr.AddNewSourceBuffer(std::move(file), llvm::SMLoc());
   SourceMgrDiagnosticHandler handler(sourceMgr, &context);
@@ -132,6 +130,16 @@ OwningOpRef<ModuleOp> parseInput(const std::string &path, MLIRContext &context) 
   return module;
 }
 
+OwningOpRef<ModuleOp> parseInput(const std::string &path, MLIRContext &context) {
+  std::string errorMessage;
+  auto file = openInputFile(path, &errorMessage);
+  if (!file) {
+    error() << path << ": " << errorMessage << "\n";
+    return nullptr;
+  }
+  return parseBuffer(std::move(file), path, context);
+}
+
 // ---------------------------------------------------------------------------
 // Record definitions
 // ---------------------------------------------------------------------------
@@ -142,31 +150,63 @@ OwningOpRef<ModuleOp> parseInput(const std::string &path, MLIRContext &context) 
 // if it happened to access a member). So each input is first parsed in a
 // context of its own, the definition of every complete named record is
 // fingerprinted there, and the fingerprints are compared across inputs.
+//
+// Records without a source name are the exception: clang names them `anon.N`
+// with a counter per translation unit, so `anon.6` of one input and `anon.6`
+// of another are unrelated. Such a record is identified by its structure
+// instead. Equal structures get one name across all inputs, different ones
+// different names (assignAnonNames), and an input whose names change is
+// rebuilt with the new names before it joins the shared context
+// (renumberAnonRecords).
 
-// A textual fingerprint of `type` in which named records are referred to by
-// name: their bodies are fingerprinted separately, and a record that is
-// incomplete in one input and complete in another must not count as a
-// difference of the types that point to it.
-void typeKey(Type type, llvm::raw_ostream &os) {
+std::string printModule(ModuleOp module);
+void registerDialects(MLIRContext &context);
+
+// `anon` or `anon.<digits>`: the names clang gives records without a name. A
+// source name cannot contain a dot, so these never clash with one.
+bool isAnonName(StringRef name) {
+  if (name == "anon")
+    return true;
+  if (!name.consume_front("anon."))
+    return false;
+  return !name.empty() && llvm::all_of(name, llvm::isDigit);
+}
+
+bool isAnonRecord(cir::RecordType record) {
+  return record.getName() && isAnonName(record.getName().getValue());
+}
+
+void recordBodyKey(cir::RecordType record, llvm::raw_ostream &os,
+                   SmallVectorImpl<cir::RecordType> &stack);
+
+// A textual fingerprint of `type`. Named records are referred to by name:
+// their bodies are fingerprinted separately, and a record that is incomplete
+// in one input and complete in another must not count as a difference of the
+// types that point to it. Anonymous records (literal or `anon.N`) are
+// expanded, since their names mean nothing across inputs; `stack` breaks the
+// cycle of an anonymous record that points to itself.
+void typeKey(Type type, llvm::raw_ostream &os,
+             SmallVectorImpl<cir::RecordType> &stack) {
   if (auto record = dyn_cast<cir::RecordType>(type)) {
-    if (record.getName()) {
+    if (record.getName() && !isAnonRecord(record)) {
       os << "%" << record.getName().getValue();
       return;
     }
-    os << (record.isUnion() ? "union{" : "struct{") << record.getPacked()
-       << record.getPadded() << ":";
-    for (Type member : record.getMembers()) {
-      typeKey(member, os);
-      os << ",";
-    }
-    for (cir::RecordMemberKind kind : record.getMemberKinds())
-      os << static_cast<unsigned>(kind);
+    for (auto [depth, open] : llvm::enumerate(stack))
+      if (open == record) {
+        os << "^" << depth;
+        return;
+      }
+    stack.push_back(record);
+    os << "{";
+    recordBodyKey(record, os, stack);
     os << "}";
+    stack.pop_back();
     return;
   }
   if (auto ptr = dyn_cast<cir::PointerType>(type)) {
     os << "ptr<";
-    typeKey(ptr.getPointee(), os);
+    typeKey(ptr.getPointee(), os, stack);
     if (ptr.getAddrSpace())
       os << "," << ptr.getAddrSpace();
     os << ">";
@@ -174,51 +214,71 @@ void typeKey(Type type, llvm::raw_ostream &os) {
   }
   if (auto array = dyn_cast<cir::ArrayType>(type)) {
     os << "array<";
-    typeKey(array.getElementType(), os);
+    typeKey(array.getElementType(), os, stack);
     os << " x " << array.getSize() << ">";
     return;
   }
   if (auto func = dyn_cast<cir::FuncType>(type)) {
     os << "func<(";
     for (Type input : func.getInputs()) {
-      typeKey(input, os);
+      typeKey(input, os, stack);
       os << ",";
     }
     os << (func.getVarArg() ? "..." : "") << ")->";
-    typeKey(func.getReturnType(), os);
+    typeKey(func.getReturnType(), os, stack);
     os << ">";
     return;
   }
   type.print(os);
 }
 
-// Record name -> fingerprint of its definition, for one input.
-using RecordDefs = std::map<std::string, std::string>;
+void recordBodyKey(cir::RecordType record, llvm::raw_ostream &os,
+                   SmallVectorImpl<cir::RecordType> &stack) {
+  if (record.isIncomplete()) {
+    os << "incomplete";
+    return;
+  }
+  os << (record.isUnion() ? "union" : record.isClass() ? "class" : "struct")
+     << " packed=" << record.getPacked() << " padded=" << record.getPadded();
+  if (auto u = dyn_cast<cir::UnionType>(record); u && u.getPadding()) {
+    os << " padding=";
+    typeKey(u.getPadding(), os, stack);
+  }
+  os << " {";
+  for (auto [i, member] : llvm::enumerate(record.getMembers())) {
+    os << (i ? ", " : "");
+    if (i < record.getMemberKinds().size())
+      os << static_cast<unsigned>(record.getMemberKinds()[i]) << ":";
+    typeKey(member, os, stack);
+  }
+  os << "}";
+}
 
-void collectRecordDefs(ModuleOp module, RecordDefs &defs) {
+std::string recordKey(cir::RecordType record) {
+  std::string key;
+  llvm::raw_string_ostream os(key);
+  SmallVector<cir::RecordType> stack;
+  if (isAnonRecord(record))
+    stack.push_back(record);
+  recordBodyKey(record, os, stack);
+  return key;
+}
+
+// Every named record type `module` uses, in a deterministic order.
+llvm::SetVector<cir::RecordType> collectRecords(ModuleOp module) {
+  llvm::SetVector<cir::RecordType> records;
   llvm::DenseSet<Type> seen;
   std::function<void(Type)> visit = [&](Type type) {
     if (!seen.insert(type).second)
       return;
     if (auto record = dyn_cast<cir::RecordType>(type)) {
-      if (record.getName() && record.isComplete()) {
-        std::string key;
-        llvm::raw_string_ostream os(key);
-        os << (record.isUnion() ? "union" : record.isClass() ? "class" : "struct")
-           << " packed=" << record.getPacked()
-           << " padded=" << record.getPadded() << " {";
-        for (auto [i, member] : llvm::enumerate(record.getMembers())) {
-          os << (i ? ", " : "");
-          if (i < record.getMemberKinds().size())
-            os << static_cast<unsigned>(record.getMemberKinds()[i]) << ":";
-          typeKey(member, os);
-        }
-        os << "}";
-        defs[record.getName().getValue().str()] = key;
-      }
+      if (record.getName())
+        records.insert(record);
       // Identified records do not expose their members as sub-elements.
       for (Type member : record.getMembers())
         member.walk([&](Type t) { visit(t); });
+      if (auto u = dyn_cast<cir::UnionType>(record); u && u.getPadding())
+        u.getPadding().walk([&](Type t) { visit(t); });
     }
   };
   auto visitAll = [&](Type type) { type.walk([&](Type t) { visit(t); }); };
@@ -233,6 +293,60 @@ void collectRecordDefs(ModuleOp module, RecordDefs &defs) {
     if (Attribute props = op->getPropertiesAsAttribute())
       props.walk([&](Type t) { visit(t); });
   });
+  return records;
+}
+
+// Gives every anonymous record of every input its name in the merged module:
+// a structure seen before keeps the name it got then, a new structure keeps
+// its own name if that is still free and gets the next free `anon.N`
+// otherwise. Returns, per input, the renames (old name -> new name).
+std::vector<std::map<std::string, std::string>>
+assignAnonNames(ArrayRef<llvm::SetVector<cir::RecordType>> records) {
+  std::map<std::string, std::string> nameOfKey;
+  llvm::StringSet<> used;
+  unsigned next = 0;
+  for (const auto &input : records)
+    for (cir::RecordType record : input)
+      if (isAnonRecord(record)) {
+        StringRef name = record.getName().getValue();
+        unsigned n;
+        if (name.consume_front("anon.") && !name.getAsInteger(10, n))
+          next = std::max(next, n + 1);
+      }
+
+  std::vector<std::map<std::string, std::string>> renames(records.size());
+  for (size_t i = 0; i < records.size(); ++i)
+    for (cir::RecordType record : records[i]) {
+      if (!isAnonRecord(record))
+        continue;
+      std::string name = record.getName().getValue().str();
+      std::string key = recordKey(record);
+      auto it = nameOfKey.find(key);
+      std::string final;
+      if (it != nameOfKey.end())
+        final = it->second;
+      else if (!used.contains(name))
+        final = name;
+      else
+        final = "anon." + std::to_string(next++);
+      nameOfKey.emplace(key, final);
+      used.insert(final);
+      if (final != name)
+        renames[i][name] = final;
+    }
+  return renames;
+}
+
+// Record name -> fingerprint of its definition, for the named records of one
+// input.
+using RecordDefs = std::map<std::string, std::string>;
+
+RecordDefs namedRecordDefs(const llvm::SetVector<cir::RecordType> &records) {
+  RecordDefs defs;
+  for (cir::RecordType record : records)
+    if (!isAnonRecord(record) && record.isComplete())
+      defs[record.getName().getValue().str()] = recordKey(record);
+  return defs;
 }
 
 // Returns false after printing every record name that two inputs define
@@ -258,6 +372,177 @@ bool checkRecordDefs(ArrayRef<std::string> paths, ArrayRef<RecordDefs> defs) {
       ok = false;
     }
   return ok;
+}
+
+// MLIR's generic sub-element rebuild cannot rebuild a cir::FuncType without a
+// return type (it is stored as a null type), so the replacer rebuilds function
+// types itself.
+void addFuncTypeReplacement(AttrTypeReplacer &replacer) {
+  replacer.addReplacement(
+      [&replacer](cir::FuncType func)
+          -> std::optional<std::pair<Type, WalkResult>> {
+        SmallVector<Type> inputs;
+        for (Type input : func.getInputs())
+          inputs.push_back(replacer.replace(input));
+        Type result = func.getOptionalReturnType();
+        if (result)
+          result = replacer.replace(result);
+        return std::make_pair(
+            cir::FuncType::get(func.getContext(), inputs, result,
+                               func.getVarArg()),
+            WalkResult::skip());
+      });
+}
+
+// Replaces, everywhere in `module`, each record in `newName` by a record of
+// the same body under the new name. Records are immutable once complete, so
+// every record whose body (transitively) contains a replaced record is
+// replaced as well; `newName` must already include those. The new names must
+// be free in the module's context.
+void replaceRecords(ModuleOp module,
+                    const llvm::MapVector<cir::RecordType, std::string> &newName) {
+  MLIRContext *context = module.getContext();
+  // Two records with the same structure can get the same new name; the
+  // first one defines it.
+  llvm::DenseMap<Type, Type> replacement;
+  llvm::StringMap<Type> created;
+  SmallVector<cir::RecordType> definers;
+  for (auto &[record, name] : newName) {
+    auto [it, inserted] = created.try_emplace(name);
+    if (inserted) {
+      StringAttr nameAttr = StringAttr::get(context, name);
+      if (isa<cir::UnionType>(record))
+        it->second = cir::UnionType::get(context, nameAttr);
+      else
+        it->second = cir::StructType::get(context, nameAttr, record.isClass());
+      definers.push_back(record);
+    }
+    replacement[record] = it->second;
+  }
+  AttrTypeReplacer replacer;
+  replacer.addReplacement([&](cir::RecordType record) -> std::optional<Type> {
+    auto it = replacement.find(record);
+    if (it == replacement.end())
+      return std::nullopt;
+    return it->second;
+  });
+  addFuncTypeReplacement(replacer);
+  for (cir::RecordType record : definers) {
+    if (record.isIncomplete())
+      continue;
+    SmallVector<Type> members;
+    for (Type member : record.getMembers())
+      members.push_back(replacer.replace(member));
+    if (auto u = dyn_cast<cir::UnionType>(record)) {
+      Type padding = u.getPadding() ? replacer.replace(u.getPadding()) : Type();
+      cast<cir::UnionType>(replacement[record])
+          .complete(members, u.getPacked(), padding, u.getMemberKinds());
+    } else {
+      cast<cir::StructType>(replacement[record])
+          .complete(members, record.getPacked(), record.getMemberKinds());
+    }
+  }
+  replacer.recursivelyReplaceElementsIn(module, /*replaceAttrs=*/true,
+                                        /*replaceLocs=*/false,
+                                        /*replaceTypes=*/true);
+}
+
+// Rebuilds `module` with the anonymous records renamed by `renames`, and
+// returns its text. The old and the new names can overlap (anon.6 -> anon.9
+// while anon.9 -> anon.10), and a record name cannot be reused in a context,
+// so the records go through temporary names in a second context: the module
+// is rewritten to the temporary names, printed, parsed into a fresh context
+// where the final names are free, and rewritten to them there.
+std::optional<std::string>
+renumberAnonRecords(ModuleOp module, const std::string &path,
+                    const llvm::SetVector<cir::RecordType> &records,
+                    const std::map<std::string, std::string> &renames) {
+  const std::string tempPrefix = "cir-merge.renumber.";
+
+  // Every record that contains a renamed one, directly or through a pointer,
+  // array or function type, must be rebuilt too.
+  llvm::DenseSet<Type> affected;
+  for (cir::RecordType record : records)
+    if (isAnonRecord(record) &&
+        renames.count(record.getName().getValue().str()))
+      affected.insert(record);
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (cir::RecordType record : records) {
+      if (affected.contains(record))
+        continue;
+      bool reaches = false;
+      for (Type member : record.getMembers())
+        member.walk([&](Type t) {
+          if (affected.contains(t))
+            reaches = true;
+        });
+      if (reaches) {
+        affected.insert(record);
+        changed = true;
+      }
+    }
+  }
+
+  llvm::MapVector<cir::RecordType, std::string> toTemp;
+  for (cir::RecordType record : records)
+    if (affected.contains(record)) {
+      std::string name = record.getName().getValue().str();
+      auto it = renames.find(name);
+      toTemp[record] = tempPrefix + (it != renames.end() ? it->second : name);
+    }
+  replaceRecords(module, toTemp);
+
+  MLIRContext fresh;
+  registerDialects(fresh);
+  llvm::SourceMgr sourceMgr;
+  sourceMgr.AddNewSourceBuffer(
+      llvm::MemoryBuffer::getMemBufferCopy(printModule(module),
+                                           path + " (records renumbered)"),
+      llvm::SMLoc());
+  SourceMgrDiagnosticHandler handler(sourceMgr, &fresh);
+  ParserConfig config(&fresh, /*verifyAfterParse=*/true);
+  OwningOpRef<ModuleOp> rebuilt = parseSourceFile<ModuleOp>(sourceMgr, config);
+  if (!rebuilt) {
+    error() << path << ": the module with renumbered records does not parse\n";
+    return std::nullopt;
+  }
+
+  llvm::StringSet<> replacedNames;
+  for (auto &entry : toTemp)
+    replacedNames.insert(entry.first.getName().getValue());
+  llvm::MapVector<cir::RecordType, std::string> toFinal;
+  for (cir::RecordType record : collectRecords(*rebuilt)) {
+    StringRef name = record.getName().getValue();
+    if (name.consume_front(tempPrefix)) {
+      toFinal[record] = name.str();
+    } else if (replacedNames.contains(name)) {
+      error() << path << ": record '" << name
+              << "' is still used after renumbering (internal error)\n";
+      return std::nullopt;
+    }
+  }
+  replaceRecords(*rebuilt, toFinal);
+
+  // cir.record_layouts is keyed by record name.
+  if (auto layouts = (*rebuilt)->getAttrOfType<DictionaryAttr>(
+          "cir.record_layouts")) {
+    llvm::MapVector<StringAttr, Attribute> renamed;
+    for (NamedAttribute entry : layouts) {
+      auto it = renames.find(entry.getName().getValue().str());
+      StringAttr name = it == renames.end()
+                            ? entry.getName()
+                            : StringAttr::get(&fresh, it->second);
+      renamed.insert({name, entry.getValue()});
+    }
+    SmallVector<NamedAttribute> entries;
+    for (auto &[name, value] : renamed)
+      entries.push_back(NamedAttribute(name, value));
+    (*rebuilt)->setAttr("cir.record_layouts",
+                        DictionaryAttr::get(&fresh, entries));
+  }
+  return printModule(*rebuilt);
 }
 
 // ---------------------------------------------------------------------------
@@ -1189,28 +1474,55 @@ int main(int argc, char **argv) {
       "Conservative: inputs outside the supported subset are rejected with a\n"
       "diagnostic instead of being merged approximately.\n");
 
-  // 1. Parse and verify every input on its own, and compare the record
-  //    definitions before the inputs share a context (see checkRecordDefs).
-  std::vector<RecordDefs> recordDefs;
+  // 1. Parse and verify every input in a context of its own. Give the
+  //    anonymous records their names in the merged module, and compare the
+  //    named records, before the inputs share a context (see "Record
+  //    definitions").
+  std::vector<std::unique_ptr<MLIRContext>> ownContexts;
+  std::vector<OwningOpRef<ModuleOp>> ownModules;
+  std::vector<llvm::SetVector<cir::RecordType>> records;
   bool ok = true;
   for (const std::string &path : inputPaths) {
-    MLIRContext own;
-    registerDialects(own);
-    OwningOpRef<ModuleOp> module = parseInput(path, own);
+    auto own = std::make_unique<MLIRContext>();
+    registerDialects(*own);
+    OwningOpRef<ModuleOp> module = parseInput(path, *own);
     if (!module) {
       ok = false;
       continue;
     }
-    collectRecordDefs(*module, recordDefs.emplace_back());
+    records.push_back(collectRecords(*module));
+    ownModules.push_back(std::move(module));
+    ownContexts.push_back(std::move(own));
   }
-  if (!ok || !checkRecordDefs(inputPaths, recordDefs))
+  if (!ok)
+    return 1;
+  std::vector<std::map<std::string, std::string>> anonRenames =
+      assignAnonNames(records);
+  std::vector<RecordDefs> recordDefs;
+  for (const auto &input : records)
+    recordDefs.push_back(namedRecordDefs(input));
+  if (!checkRecordDefs(inputPaths, recordDefs))
     return 1;
 
   MLIRContext context;
   registerDialects(context);
   std::vector<Input> inputs;
-  for (const std::string &path : inputPaths) {
-    OwningOpRef<ModuleOp> module = parseInput(path, context);
+  for (size_t i = 0; i < inputPaths.size(); ++i) {
+    const std::string &path = inputPaths[i];
+    OwningOpRef<ModuleOp> module;
+    if (anonRenames[i].empty()) {
+      module = parseInput(path, context);
+    } else {
+      if (verbose)
+        for (auto &[from, to] : anonRenames[i])
+          llvm::errs() << "cir-merge: record '" << from << "' (in " << path
+                       << ") renamed to '" << to << "'\n";
+      std::optional<std::string> text = renumberAnonRecords(
+          *ownModules[i], path, records[i], anonRenames[i]);
+      if (text)
+        module = parseBuffer(llvm::MemoryBuffer::getMemBufferCopy(*text, path),
+                             path, context);
+    }
     if (!module) {
       ok = false;
       continue;
@@ -1219,6 +1531,8 @@ int main(int argc, char **argv) {
   }
   if (!ok)
     return 1;
+  ownModules.clear();
+  ownContexts.clear();
 
   // 2. Give colliding translation-unit-local symbols unique names.
   if (!renameLocalCollisions(inputs))
