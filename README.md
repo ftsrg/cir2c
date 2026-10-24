@@ -472,15 +472,17 @@ is not known.
 | Symbols with the same name | Result |
 |---|---|
 | The symbol is in one input only | Keep it |
-| Compatible declarations only | Keep the first declaration |
+| Compatible declarations only | Keep the first declaration with a complete type |
 | Compatible declarations and one definition | Keep the definition |
 | Two or more equivalent definitions with `linkonce_odr`, `weak_odr` or `available_externally` linkage | Keep one (see below) |
+| C tentative definitions with `common` linkage (`-fcommon`), and at most one regular definition | Keep the regular definition, else one common definition |
 | Two or more definitions with another linkage, or ODR definitions that differ | Error |
+| A declaration with a less complete type: `extern T a[];` against `T a[N]`, or a C declaration without a prototype (`int f();`) against a prototype with the same return type | Adapt the declaration's uses (see below) |
 | A function and a global | Error |
 | Different function types, no-prototype flags or calling conventions | Error |
 | Globals with different types, constness, TLS models or address spaces | Error |
 | A symbol with internal or private linkage | Renamed before the merge (see below), so it does not collide |
-| A definition that is not `external`, `linkonce_odr`, `weak_odr` or `available_externally`, or a declaration that is not `external` | Error |
+| A definition that is not `external`, `common`, `linkonce_odr`, `weak_odr` or `available_externally`, or a declaration that is not `external` | Error |
 
 A function is a definition when it has a body or is an alias (`alias(@...)`).
 A global is a definition when it has an initial value, a constructor region, a
@@ -521,6 +523,18 @@ correct kind. Only the `thread_local` initializer can be absent: clang refers
 to the initializer of an `extern thread_local` variable weakly. The CUDA
 attributes also name kernels with strings. `cir-merge` does not change them,
 so it rejects an input that has one.
+
+**The declarations with a less complete type.** An input that declares
+`extern int a[];` or `int f();` refers to the symbol only with
+`cir.get_global` and with `#cir.global_view` initializers. `cir-merge` gives
+each `cir.get_global` of the declaration the type of the kept symbol and adds a
+`bitcast` to the type that the input expects. The C compiler and the linker do
+the same. The `#cir.global_view` initializers do not change. Another use of
+such a declaration is an error.
+
+Two tentative definitions (`int x;` in two files) are an error without
+`-fcommon`, as they are for the linker. With `-fcommon`, clang gives them
+`common` linkage, and `cir-merge` merges them.
 
 **The ODR definitions.** In C++, each translation unit that uses an inline
 function, a template instance, a vtable or a typeinfo object emits its own

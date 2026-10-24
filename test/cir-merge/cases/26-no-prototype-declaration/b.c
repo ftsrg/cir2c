@@ -16,4 +16,5 @@
 
 // cir-merge-cflags: -std=c17
 int f();
-int g(void) { return f(1); }
+int (*fp)() = f;
+int main(void) { return f(1, 2L) + fp(3, 4L) - 10; }

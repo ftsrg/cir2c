@@ -14,4 +14,5 @@
  * limitations under the License.
  */
 
-int arr[10] = {1};
+// cir-merge-cflags: -std=c17
+long f(int x) { return x; }

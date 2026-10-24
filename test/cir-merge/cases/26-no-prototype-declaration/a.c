@@ -15,4 +15,4 @@
  */
 
 // cir-merge-cflags: -std=c17
-int f(int x) { return x; }
+int f(int x, long y) { return x + (int)y; }

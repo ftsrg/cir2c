@@ -28,6 +28,7 @@
 #include <mlir/Dialect/DLTI/DLTI.h>
 #include <mlir/Dialect/LLVMIR/LLVMDialect.h>
 #include <mlir/IR/AttrTypeSubElements.h>
+#include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/DialectRegistry.h>
 #include <mlir/IR/MLIRContext.h>
@@ -981,6 +982,7 @@ bool definitionLinkageMergeable(cir::GlobalLinkageKind linkage) {
   case cir::GlobalLinkageKind::LinkOnceODRLinkage:
   case cir::GlobalLinkageKind::WeakODRLinkage:
   case cir::GlobalLinkageKind::AvailableExternallyLinkage:
+  case cir::GlobalLinkageKind::CommonLinkage:
     return true;
   default:
     return false;
@@ -1123,9 +1125,75 @@ bool isOdrLinkage(cir::GlobalLinkageKind linkage) {
          linkage == cir::GlobalLinkageKind::AvailableExternallyLinkage;
 }
 
+// A declaration whose type is less complete than the kept symbol's:
+// `extern T a[];` (cir.array<T x 0>) against `T a[N];`, or a C function
+// declared without a prototype (`int f();`, no_proto) against one with a
+// prototype and the same return type. Its input reaches the symbol only
+// through cir.get_global (and #cir.global_view initializers, whose meaning
+// does not depend on the symbol's type), so each cir.get_global of it is given
+// the kept symbol's type and followed by a bitcast to the type the input
+// expects. This is what the C compiler and the linker do with these
+// declarations.
+struct Adaptation {
+  unsigned input;
+  StringAttr name;
+  Type keptType; // the type of the kept symbol (function or global type)
+};
+
 struct Plan {
   llvm::DenseSet<Operation *> keep;
+  std::vector<Adaptation> adaptations;
 };
+
+Type symbolType(Operation *op) {
+  if (auto func = dyn_cast<cir::FuncOp>(op))
+    return func.getFunctionType();
+  return cast<cir::GlobalOp>(op).getSymType();
+}
+
+// Whether `s` is a declaration of a less complete type (see Adaptation).
+bool isIncompleteDeclaration(const Symbol &s) {
+  if (s.isDefinition)
+    return false;
+  if (auto func = dyn_cast<cir::FuncOp>(s.op))
+    return func.getNoProto();
+  auto array = dyn_cast<cir::ArrayType>(cast<cir::GlobalOp>(s.op).getSymType());
+  return array && array.getSize() == 0;
+}
+
+// Whether the incomplete declaration `decl` can refer to `kept`.
+bool adaptable(const Symbol &kept, const Symbol &decl) {
+  if (!isIncompleteDeclaration(decl) || isIncompleteDeclaration(kept))
+    return false;
+  if (auto keptFunc = dyn_cast<cir::FuncOp>(kept.op)) {
+    auto declFunc = cast<cir::FuncOp>(decl.op);
+    return !keptFunc.getNoProto() &&
+           keptFunc.getFunctionType().getOptionalReturnType() ==
+               declFunc.getFunctionType().getOptionalReturnType() &&
+           keptFunc.getCallingConv() == declFunc.getCallingConv();
+  }
+  auto keptGlobal = cast<cir::GlobalOp>(kept.op);
+  auto declGlobal = cast<cir::GlobalOp>(decl.op);
+  auto keptArray = dyn_cast<cir::ArrayType>(keptGlobal.getSymType());
+  auto declArray = cast<cir::ArrayType>(declGlobal.getSymType());
+  return keptArray &&
+         keptArray.getElementType() == declArray.getElementType() &&
+         keptGlobal.getConstant() == declGlobal.getConstant() &&
+         keptGlobal.getTlsModelAttr() == declGlobal.getTlsModelAttr() &&
+         keptGlobal.getAddrSpaceAttr() == declGlobal.getAddrSpaceAttr();
+}
+
+// Returns the operation in `module` that uses @name other than through
+// cir.get_global or a cir.global initializer, if any.
+Operation *unadaptableUse(ModuleOp module, StringAttr name) {
+  auto uses = SymbolTable::getSymbolUses(name, &module.getBodyRegion());
+  if (!uses)
+    return module;
+  for (const SymbolTable::SymbolUse &use : *uses)
+    if (!isa<cir::GetGlobalOp, cir::GlobalOp>(use.getUser()))
+      return use.getUser();
+  return nullptr;
+}
 
 void explain(const std::vector<Input> &inputs, const Symbol &s,
              StringRef what) {
@@ -1200,8 +1268,35 @@ bool planMerge(std::vector<Input> &inputs, const std::vector<Symbol> &symbols,
           defs.push_back(s);
 
     const Symbol *chosen = defs.empty() ? &first : defs.front();
+    if (defs.empty())
+      for (const Symbol *s : group)
+        if (!isIncompleteDeclaration(*s)) {
+          chosen = s;
+          break;
+        }
 
-    bool allOdr = llvm::all_of(
+    // C tentative definitions with -fcommon: the linker merges common
+    // symbols, and a regular definition overrides them.
+    auto isCommon = [](const Symbol *d) {
+      return d->linkage == cir::GlobalLinkageKind::CommonLinkage;
+    };
+    size_t numCommon = llvm::count_if(defs, isCommon);
+    bool commonMerge =
+        defs.size() > 1 && numCommon >= defs.size() - 1 &&
+        llvm::all_of(defs, [&](const Symbol *d) {
+          return isCommon(d) ||
+                 d->linkage == cir::GlobalLinkageKind::ExternalLinkage;
+        });
+    if (groupOk && commonMerge) {
+      for (const Symbol *d : defs)
+        if (!isCommon(d))
+          chosen = d;
+      explain(inputs, *chosen,
+              std::to_string(numCommon) +
+                  " common definition(s) merged, this one kept");
+    }
+
+    bool allOdr = !commonMerge && llvm::all_of(
         defs, [](const Symbol *d) { return isOdrLinkage(d->linkage); });
     if (groupOk && defs.size() > 1 && allOdr) {
       for (size_t j = 1; j < defs.size(); ++j) {
@@ -1234,7 +1329,7 @@ bool planMerge(std::vector<Input> &inputs, const std::vector<Symbol> &symbols,
         explain(inputs, *chosen,
                 std::to_string(defs.size()) +
                     " equivalent ODR definitions, this one kept");
-    } else if (groupOk && defs.size() > 1) {
+    } else if (groupOk && defs.size() > 1 && !commonMerge) {
       error() << inputs[defs[1]->input].path << ": duplicate definition of "
               << kindName(defs[1]->kind) << " @" << name << " ("
               << cir::stringifyGlobalLinkageKind(defs[1]->linkage)
@@ -1275,6 +1370,24 @@ bool planMerge(std::vector<Input> &inputs, const std::vector<Symbol> &symbols,
       for (const Symbol *s : group) {
         if (s == chosen)
           continue;
+        if (adaptable(*chosen, *s)) {
+          ModuleOp module = *inputs[s->input].module;
+          StringAttr nameAttr = StringAttr::get(module.getContext(), name);
+          if (Operation *user = unadaptableUse(module, nameAttr)) {
+            error() << inputs[s->input].path << ": @" << name
+                    << " is declared with a less complete type than in "
+                    << inputs[chosen->input].path << ", and '"
+                    << user->getName() << "' uses it\n";
+            note() << "at " << locString(user->getLoc()) << "\n";
+            note() << "cir-merge adapts only cir.get_global uses of such a "
+                   << "declaration\n";
+            groupOk = false;
+            break;
+          }
+          plan.adaptations.push_back(
+              {s->input, nameAttr, symbolType(chosen->op)});
+          continue;
+        }
         std::string why = incompatibility(*chosen, *s);
         if (why.empty())
           continue;
@@ -1312,6 +1425,24 @@ OwningOpRef<ModuleOp> applyPlan(std::vector<Input> &inputs, const Plan &plan,
   OwningOpRef<ModuleOp> merged = ModuleOp::create(UnknownLoc::get(&context));
   for (NamedAttribute attr : moduleAttrs)
     merged.get()->setAttr(attr.getName(), attr.getValue());
+  for (const Adaptation &a : plan.adaptations) {
+    ModuleOp module = *inputs[a.input].module;
+    SmallVector<cir::GetGlobalOp> uses;
+    module.walk([&](cir::GetGlobalOp get) {
+      if (get.getName() == a.name.getValue())
+        uses.push_back(get);
+    });
+    for (cir::GetGlobalOp get : uses) {
+      auto oldType = cast<cir::PointerType>(get.getAddr().getType());
+      Value addr = get.getAddr();
+      addr.setType(cir::PointerType::get(a.keptType, oldType.getAddrSpace()));
+      OpBuilder builder(get->getContext());
+      builder.setInsertionPointAfter(get);
+      auto cast = cir::CastOp::create(builder, get.getLoc(), oldType,
+                                      cir::CastKind::bitcast, addr);
+      addr.replaceAllUsesExcept(cast.getResult(), cast);
+    }
+  }
   Block *body = merged->getBody();
   // Moving keeps attributes, regions and locations exactly as parsed; the
   // inputs are not used again.
