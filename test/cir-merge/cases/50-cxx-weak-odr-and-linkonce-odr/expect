@@ -1,0 +1,4 @@
+ok
+output-count 1 weak_odr dso_local @_Z2mxIiET_S0_S0_(
+output-count 0 linkonce_odr dso_local @_Z2mxIiET_S0_S0_(
+run 0

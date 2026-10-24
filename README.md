@@ -306,7 +306,12 @@ The script makes the output directory if it is not there.
 
 ```
 run-cir2c.sh [OPTIONS] <input-file> <output.c>
+run-cir2c.sh [OPTIONS] --merge c|cir <input1> <input2> [...] <output.c>
 ```
+
+Give the options before the input files. With more than one input file, the
+script merges the translation units into one C program. See
+[5.6 Merge translation units](#56-merge-translation-units).
 
 | Option | Function |
 |---|---|
@@ -316,6 +321,8 @@ run-cir2c.sh [OPTIONS] <input-file> <output.c>
 | `--mlir FILE` | Write the intermediate CIR to `FILE`. Use this option to find problems. |
 | `--flat-mlir FILE` | Write the flat CIR to `FILE`. This option includes `--flatten`. |
 | `--include DIR` | Add the `-I DIR` option to the CIR step. You can give this option more than one time. |
+| `--cflag FLAG` | Add `FLAG` to the CIR step, for example `-DNAME=VALUE`. You can give this option more than one time. The script adds no such flag itself. |
+| `--merge c\|cir` | Set how more than one input file is merged. `c` (the default) merges the C outputs. `cir` merges the CIR modules with `cir-merge`. |
 | `--externalize-std` | Replace the `std::` calls and the library calls with unknown values. This is the default. |
 | `--no-externalize-std` | Keep the bodies of the `std::` functions. **CAUTION: Read [8.2 The standard library](#82-the-standard-library) first.** |
 
@@ -325,6 +332,7 @@ run-cir2c.sh [OPTIONS] <input-file> <output.c>
 | 2 | `clang` failed. The source has an error, or ClangIR cannot process a construction. |
 | 3 | `cir-opt` failed during the `--flatten` step. |
 | 4 | `cir2c` failed. Usually the CIR contains an unsupported operation. |
+| 5 | `cir-merge` rejected the translation units (`--merge cir` only). Its messages give the symbol and the reason. |
 
 Exit code 2 is important. It shows that Clang made no CIR. This is a limit of
 ClangIR and not a limit of cir2c.
@@ -407,6 +415,187 @@ option, because the calculation is slow.
    the work cycle quick.
 5. Try the `--flatten` option and compare the two results. A construction that
    fails in one mode can operate in the other mode.
+
+### 5.6 Merge translation units
+
+A program can have more than one source file. `run-cir2c.sh` accepts more than
+one input file and makes one C file. There are two merge strategies:
+
+| Strategy | Sequence |
+|---|---|
+| `--merge c` | Translate each file to C, then merge the C files with `scripts/merge-c.sh`. |
+| `--merge cir` | Compile each file to CIR, merge the CIR modules with `cir-merge`, then translate the merged module once. |
+
+#### The cir-merge tool
+
+`cir-merge` is a C++ program in `tools/cir-merge/`. The build makes it next to
+the `cir2c` binary. It uses the MLIR parser, the MLIR verifier and the MLIR
+printer of the same LLVM build as `cir2c`. It does not parse CIR text itself.
+
+```
+cir-merge --output merged.cir input-a.cir input-b.cir [...]
+```
+
+| Option | Function |
+|---|---|
+| `--output FILE`, `-o FILE` | Write the merged module to `FILE`. |
+| `--dump-symbols` | Print the symbol inventory (input, kind, definition or declaration, linkage, name). |
+| `--verbose` | Print the decision for each symbol. |
+
+`cir-merge` is conservative. **If an input is outside the supported subset,
+`cir-merge` stops with an error. It does not make an approximate module.** A
+merged module is a module that passes these checks. It is not a proof that the
+C++ program obeys the One Definition Rule.
+
+The steps are:
+
+1. Parse and verify each input in a separate MLIR context. Record the
+   definition of each record (struct, class, union).
+2. Give the anonymous records their names in the merged module, and compare
+   the named record definitions of all inputs.
+3. Parse all inputs into one context.
+4. Rename the translation-unit-local symbols whose names collide (see below).
+5. Check the module attributes.
+6. Make the symbol inventory of all inputs.
+7. Make the merge plan for all symbols. The plan is complete before any change,
+   so the result does not depend on the order of the inputs.
+8. Make the merged module. Verify it, check that each symbol reference
+   resolves, print it, and parse the printed text again.
+9. Write the output to a temporary file, then rename it. A failed merge does
+   not leave an output file.
+
+#### The supported subset
+
+Only `cir.func` and `cir.global` operations can be at the top level. Another
+top-level operation is an error, because its meaning across translation units
+is not known.
+
+| Symbols with the same name | Result |
+|---|---|
+| The symbol is in one input only | Keep it |
+| Compatible declarations only | Keep the first declaration with a complete type |
+| Compatible declarations and one definition | Keep the definition |
+| Two or more equivalent definitions with `linkonce_odr`, `weak_odr` or `available_externally` linkage | Keep one (see below) |
+| C tentative definitions with `common` linkage (`-fcommon`), and at most one regular definition | Keep the regular definition, else one common definition |
+| Two or more definitions with another linkage, or ODR definitions that differ | Error |
+| A declaration with a less complete type: `extern T a[];` against `T a[N]`, or a C declaration without a prototype (`int f();`) against a prototype with the same return type | Adapt the declaration's uses (see below) |
+| A function and a global | Error |
+| Different function types, no-prototype flags or calling conventions | Error |
+| Globals with different types, constness, TLS models or address spaces | Error |
+| A symbol with internal or private linkage | Renamed before the merge (see below), so it does not collide |
+| A definition that is not `external`, `common`, `linkonce_odr`, `weak_odr` or `available_externally`, or a declaration that is not `external` | Error |
+
+A function is a definition when it has a body or is an alias (`alias(@...)`).
+A global is a definition when it has an initial value, a constructor region, a
+destructor region or an alias.
+
+**The attribute policy.** When a symbol is in more than one input,
+`cir-merge` keeps one operation and drops the others with their attributes.
+Each attribute that a dropped operation can have is in one class. An attribute
+that is in no class is an error.
+
+| Class | Function attributes | Global attributes | Rule |
+|---|---|---|---|
+| Checked | `sym_name`, `function_type`, `no_proto`, `calling_conv`, `linkage` | `sym_name`, `sym_type`, `constant`, `tls_model`, `addr_space`, `linkage`, `initial_value` | Compared by the rules above |
+| From the kept operation | `sym_visibility`, `global_visibility`, `comdat`, `dso_local`, `arg_attrs`, `res_attrs`, `inline_kind`, `builtin`, `lambda`, `personality`, `side_effect`, `aliasee`, `cir.target-cpu`, `cir.target-features`, `cir.tune-cpu`, `nothrow`, `nobuiltin`, `noreturn`, `nocallback`, `allocsize` | `sym_visibility`, `global_visibility`, `comdat`, `dso_local`, `ast`, `tls_refs`, `static_local_info`, `static_local_guard`, `aliasee`, `init_priority` | The value of the dropped operation is not necessary. These are properties of the definition, or hints for code generation that the call sites of the dropped declaration already contain. |
+| Equal | `func_info`, `coroutine`, `global_ctor_priority`, `global_dtor_priority`, `annotations` | `annotations`, `strictfp` | Must have the same value on the kept operation |
+| Alignment | | `alignment` | The kept symbol must be aligned at least as much as the dropped declaration says |
+| Section | | `section` | The kept symbol must be in the section that the dropped declaration gives |
+
+The module attributes:
+
+| Attribute | Rule |
+|---|---|
+| `cir.triple`, `dlti.dl_spec`, `cir.lang`, `cir.int_type_width`, `cir.size_type_width`, `cir.default_tls_model` | Must be equal in all inputs. Different targets, ABIs or languages are an error. |
+| `cir.module_asm` | Must be empty. |
+| `cir.record_layouts` | Merged. A record in more than one input must have the same layout. |
+| `cir.global_ctors`, `cir.global_dtors` | Concatenated in input order. Each entry must name a function of the merged module. |
+| Another attribute | Error |
+
+**The translation-unit-local symbols.** A symbol with internal or private
+linkage belongs to its translation unit: a `static` function or variable, a
+string literal (`.str`, `.str.1`, ...), a C++ static initializer
+(`__cxx_global_var_init`), a guard variable or a `thread_local` helper. If
+another input uses the same name, `cir-merge` gives the local symbol the new
+name `NAME.tuN`. `N` is the position of the input on the command line. If that
+name is in use, `cir-merge` adds `.1`, `.2`, ... An input uses a name when it
+defines or declares the symbol, or refers to it by a string (see below).
+
+`cir-merge` then changes all references to the symbol in its input. MLIR
+changes the symbol references (`@name`), also inside other attributes such as
+`#cir.global_view`. CIR also refers to symbols with plain strings, which MLIR
+does not see. `cir-merge` changes these too:
+
+| String reference | Where |
+|---|---|
+| `#cir.global_ctor<"fn", priority>`, `#cir.global_dtor<...>` | The `cir.global_ctors` and `cir.global_dtors` module attributes |
+| `static_local_guard<"guard">` | A `cir.global` of a function-local `static` |
+| `tls_refs = <"wrapper", "init">` | A `thread_local` `cir.global` |
+
+After the merge, `cir-merge` checks that each of these names a symbol of the
+correct kind. Only the `thread_local` initializer can be absent: clang refers
+to the initializer of an `extern thread_local` variable weakly. The CUDA
+attributes also name kernels with strings. `cir-merge` does not change them,
+so it rejects an input that has one.
+
+**The declarations with a less complete type.** An input that declares
+`extern int a[];` or `int f();` refers to the symbol only with
+`cir.get_global` and with `#cir.global_view` initializers. `cir-merge` gives
+each `cir.get_global` of the declaration the type of the kept symbol and adds a
+`bitcast` to the type that the input expects. The C compiler and the linker do
+the same. The `#cir.global_view` initializers do not change. Another use of
+such a declaration is an error.
+
+Two tentative definitions (`int x;` in two files) are an error without
+`-fcommon`, as they are for the linker. With `-fcommon`, clang gives them
+`common` linkage, and `cir-merge` merges them.
+
+**The ODR definitions.** In C++, each translation unit that uses an inline
+function, a template instance, a vtable or a typeinfo object emits its own
+definition, with `linkonce_odr` linkage (`weak_odr` for an explicit
+instantiation, `available_externally` for an `extern template` such as the
+members of `std::string`). The One Definition Rule says that all of them are
+the same, and the linker keeps one. `cir-merge` keeps one only if it can see
+that they are the same:
+
+- The definitions must be equal, operation by operation. The source locations,
+  the linkage, the COMDAT flag and the `dso_local` flag do not count.
+- A reference to a translation-unit-local symbol matches a reference to a local
+  symbol of the other input if the two local symbols are equivalent in turn.
+  Thus an inline function that returns `"hello"` matches in two translation
+  units, also if the literal is `.str.1` in one unit and `.str` in the other.
+  Mutually recursive local functions are compared coinductively.
+- If the definitions differ, `cir-merge` stops with an error. The program
+  breaks the ODR, or the translation units were compiled with different
+  options.
+
+`cir-merge` keeps a `weak_odr` definition if there is one, else a
+`linkonce_odr` definition, else an `available_externally` definition.
+
+**The records.** CIR identifies a named record by its name in an MLIR context.
+If two inputs define the same name differently, the MLIR parser uses the first
+definition for both inputs and gives no error. Thus `cir-merge` compares the
+definitions before the inputs share a context. Two different definitions are
+an error. A record that is incomplete in one input and complete in another
+input is correct.
+
+**The anonymous records.** Clang names a record without a name `anon.N`, with
+a counter in each translation unit. Thus `anon.0` of one input and `anon.0` of
+another input are not related. `cir-merge` identifies these records by their
+structure: two anonymous records with the same structure get one name, two
+different ones get different names. The first input keeps its names. An input
+whose names change is rebuilt before it joins the shared context. A record
+cannot change its name in an MLIR context, so the rebuild goes through
+temporary names and a second context. When `cir-merge` compares two named
+records, it compares their anonymous members by structure too.
+
+#### Known limits
+
+These usual programs are errors at the moment:
+
+- C programs that use the same struct name for different structs in two files.
+- Declarations whose type is different from the definition, for example
+  `extern int a[];` and `int a[10];`.
 
 ---
 
@@ -903,6 +1092,7 @@ higher priority than missing functions. Write this in the title.
 ```
 test/
 ├── run_tests.sh                # The test runner for the three suites
+├── cir-merge/                  # The cir-merge tests (one directory for each case)
 ├── integration/input/          # Small test programs (the default suite)
 ├── sources/llvm-test-suite/    # The LLVM SingleSource corpus (2600 programs)
 ├── benchmark_mapper.py         # The runner for SV-COMP .yml tasks
@@ -916,7 +1106,8 @@ toolchain.
 ### 9.2 Run the tests
 
 ```bash
-ctest --test-dir build --output-on-failure     # The integration suite
+ctest --test-dir build --output-on-failure     # The integration suite and the cir-merge tests
+bash test/cir-merge/run_tests.sh               # The cir-merge tests, directly
 bash test/run_tests.sh                         # The same suite, directly
 RUN_LLVM=1 RUN_INTEGRATION=0 bash test/run_tests.sh
 JOBS=8 bash test/run_tests.sh --json-out /tmp/summary.json
@@ -926,8 +1117,10 @@ JOBS=8 bash test/run_tests.sh --json-out /tmp/summary.json
 |---|---|---|
 | `RUN_INTEGRATION` | `1` | Run the integration tests |
 | `RUN_LLVM` | `0` | Run the LLVM SingleSource tests (large and slow) |
+| `RUN_LLVM_MULTI` | `0` | Run the LLVM MultiSource tests |
 | `RUN_ESBMC` | `0` | Run the esbmc-eval tests (the corpus is not in this repository) |
 | `JOBS` | `nproc` | The number of parallel jobs |
+| `MULTI_MERGE` | `c` | The merge strategy of the LLVM MultiSource tests: `c` or `cir` (see [5.6](#56-merge-translation-units)) |
 | `LLVM_EVAL_DIR` | `test/sources/llvm-test-suite/` | The LLVM corpus |
 | `ESBMC_EVAL_DIR` | `test/sources/esbmc-eval/` | The esbmc-eval corpus |
 | `CIR2C_LLVM_PREFIX` | Found automatically | The toolchain prefix |
@@ -940,6 +1133,31 @@ to make the results table. The `--externalize-std` option and the
 **Note: A run with no tests is an error.** The runner prints `No tests ran` and
 returns a non-zero exit code. CI counts an empty suite as a problem. Thus an
 incorrect environment cannot show a good result.
+
+**The cir-merge tests.** Each directory in `test/cir-merge/cases/` is one
+merge. The `.c` and `.cpp` files are compiled to CIR with the toolchain clang.
+The `.cir` files are used directly. The `expect` file gives the result:
+
+| Line | Meaning |
+|---|---|
+| `ok` or `error` (first line) | The merge must succeed or must fail |
+| a text (after `error`) | The messages must contain this text |
+| `output-count N TEXT` | The merged CIR must contain `TEXT` `N` times |
+| `run CODE` | Translate the merged CIR, compile it, run it, and expect the exit code `CODE` |
+| `reference FILE` | Like `run`, but compare the output and the exit code with an LLVM test-suite reference file |
+
+A `sources` file in a case directory lists the inputs by their path in the
+repository. The cases use it for programs of the LLVM MultiSource corpus. A
+`// cir-merge-cflags: FLAGS` line in a source adds compiler flags for that
+source. A `cflags` file in the case directory adds compiler flags for all its
+sources.
+
+The result must not depend on the order of the inputs. Thus the runner merges a
+case with up to three inputs in all orders, and a larger case in sorted order
+and in reverse order. A successful merge must also pass `cir-opt`. After the
+cases, the runner checks the command line (a missing input, an old output that
+a failed merge must not change, `--dump-symbols`, `--verbose`) and
+`run-cir2c.sh --merge cir` (a successful merge and exit code 5).
 
 ### 9.3 Suite 1: the integration tests
 
@@ -984,6 +1202,28 @@ input.
 
 The `generate-reference-outputs.py` script makes the missing `.reference_output`
 files. The script compiles and runs each program with the system compiler.
+
+The SingleSource suite does not include the `MultiSource/` directory.
+
+**The LLVM MultiSource tests** (`RUN_LLVM_MULTI=1`) use the programs in
+`sources/llvm-test-suite/MultiSource/`. Each program has more than one source
+file. The runner translates all files of a program into one C file, with the
+merge strategy that `MULTI_MERGE` selects (`c` or `cir`, see
+[5.6](#56-merge-translation-units)). Then it compiles, links and runs the
+program, and compares the output and the exit code with the reference. CI runs
+the suite two times, one time with each strategy.
+
+The reference outputs come from the LLVM test-suite, which builds and runs each
+program with its own settings. `test/llvm-multisource-options.sh` contains
+these settings, taken from the `CMakeLists.txt` file of each program: the
+language standard, the `-D` flags, the program arguments, the file for stdin
+and the numeric tolerance. The runner runs each program in its directory,
+where the input files are. It compares stdout and stderr together, as the
+reference outputs contain both. With a tolerance, `test/fpcmp.py` compares the
+numbers like the `fpcmp -r` tool of the LLVM test-suite.
+
+The vendored sources and input files are the same as in the LLVM test-suite,
+except for the license header.
 
 ### 9.5 Suite 3: the esbmc-eval tests
 

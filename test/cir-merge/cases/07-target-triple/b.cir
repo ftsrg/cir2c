@@ -1,0 +1,5 @@
+module attributes {cir.triple = "aarch64-unknown-linux-gnu"} {
+  cir.func @g() {
+    cir.return
+  }
+}

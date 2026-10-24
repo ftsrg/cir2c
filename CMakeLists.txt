@@ -173,13 +173,26 @@ target_include_directories(cir2c PRIVATE
 )
 add_definitions(${LLVM_DEFINITIONS})
 
+# cir-merge merges the CIR modules of several translation units (see the
+# "Merging translation units" section of README.md). It parses CIR exactly like
+# cir2c, so it is built against the same libraries.
+add_executable(cir-merge tools/cir-merge/cir-merge.cpp)
+target_include_directories(cir-merge PRIVATE ${CIR2C_INCLUDE_DIRS})
+# llvm::cl options are polymorphic classes; their typeinfo exists only when LLVM
+# itself was built with RTTI.
+if(NOT LLVM_ENABLE_RTTI)
+  target_compile_options(cir-merge PRIVATE -fno-rtti)
+endif()
+
 # Link to core MLIR libraries; additional dialect libs can be appended when needed.
-target_link_libraries(cir2c PRIVATE
-  MLIRIR
-  MLIRParser
-  MLIRSupport
-  LLVMSupport
-)
+foreach(tool cir2c cir-merge)
+  target_link_libraries(${tool} PRIVATE
+    MLIRIR
+    MLIRParser
+    MLIRSupport
+    LLVMSupport
+  )
+endforeach()
 
 # cir2c parses CIR assembly rather than building it, so it needs the dialect
 # registered at parse time but none of ClangIR's CodeGen. Link libMLIRCIR by
@@ -192,7 +205,9 @@ file(GLOB MLIRCIR_STATIC_LIBS CONFIGURE_DEPENDS "${LLVM_LIB_DIR}/libMLIRCIR.a")
 
 if(MLIRCIR_SHARED_LIBS)
   message(STATUS "Found MLIRCIR shared libs: ${MLIRCIR_SHARED_LIBS}")
-  target_link_libraries(cir2c PRIVATE ${MLIRCIR_SHARED_LIBS})
+  foreach(tool cir2c cir-merge)
+    target_link_libraries(${tool} PRIVATE ${MLIRCIR_SHARED_LIBS})
+  endforeach()
 elseif(MLIRCIR_STATIC_LIBS)
   message(STATUS "Found MLIRCIR static libs: ${MLIRCIR_STATIC_LIBS}")
 
@@ -225,14 +240,18 @@ elseif(MLIRCIR_STATIC_LIBS)
   message(STATUS "Linking ${NUM_STATIC_LIBS} static libraries from ${LLVM_LIB_DIR}")
 
   if(NUM_STATIC_LIBS GREATER 0)
-    target_link_libraries(cir2c PRIVATE
-      -Wl,--start-group
-      ${ALL_STATIC_LIBS}
-      -Wl,--end-group
-    )
+    foreach(tool cir2c cir-merge)
+      target_link_libraries(${tool} PRIVATE
+        -Wl,--start-group
+        ${ALL_STATIC_LIBS}
+        -Wl,--end-group
+      )
+    endforeach()
   else()
     message(WARNING "No static libraries found in ${LLVM_LIB_DIR}, linking may fail")
-    target_link_libraries(cir2c PRIVATE ${MLIRCIR_STATIC_LIBS})
+    foreach(tool cir2c cir-merge)
+      target_link_libraries(${tool} PRIVATE ${MLIRCIR_STATIC_LIBS})
+    endforeach()
   endif()
 else()
   message(FATAL_ERROR
@@ -241,7 +260,7 @@ else()
     "LLVM built with -DCLANG_ENABLE_CIR=ON (see the Build section of README.md).")
 endif()
 
-install(TARGETS cir2c RUNTIME DESTINATION bin)
+install(TARGETS cir2c cir-merge RUNTIME DESTINATION bin)
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -253,6 +272,15 @@ enable_testing()
 
 add_test(NAME version
   COMMAND $<TARGET_FILE:cir2c> --version
+)
+
+add_test(NAME cir-merge
+  COMMAND bash ${CMAKE_SOURCE_DIR}/test/cir-merge/run_tests.sh
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(cir-merge PROPERTIES
+  ENVIRONMENT "CIR2C_BUILD_DIR=${CMAKE_BINARY_DIR}"
+  TIMEOUT 600
 )
 
 add_test(NAME integration

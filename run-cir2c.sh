@@ -22,15 +22,21 @@
 # body for, while libc++ keeps list/map/set/deque fully header-templated. Built
 # by docker/build-llvm.sh alongside clang; there is no flag to opt out.
 #
-# Exit codes: 0 success, 2 clang failed, 3 cir-opt failed, 4 cir2c failed
+# Exit codes: 0 success, 2 clang failed, 3 cir-opt failed, 4 cir2c failed,
+#             5 cir-merge rejected the inputs (--merge cir)
 #
-# Usage: run-cir2c.sh [OPTIONS] <input-file> <output.c>
+# Usage:
+#   Single file:  run-cir2c.sh [OPTIONS] <input-file> <output.c>
+#   Multi file:   run-cir2c.sh [OPTIONS] <input1> [input2 ...] --merge c|cir <output.c>
+#
 # Options:
 #   --lang c|c++              Language (default: infer from file extension)
 #   --std STD                 Standard (default: c23 or c++23)
 #   --flatten                 Run cir-opt -cir-flatten-cfg before cir2c
+#   --merge c|cir             Merge strategy for multi-file (default: c)
 #   --mlir FILE               Save intermediate CIR MLIR to FILE (default: temp)
 #   --flat-mlir FILE          Save flattened MLIR to FILE (implies --flatten)
+#   --cflag FLAG              Add FLAG to the CIR generation step (repeatable)
 #   --[no-]externalize-std    Externalize (default) or keep std:: calls
 
 set -euo pipefail
@@ -57,16 +63,20 @@ LIBCXX_INCLUDE="$CIR_LIBCXX"
 LANG=""
 STD=""
 FLATTEN=false
+MERGE_STRATEGY="c"
 MLIR_OUT=""
 FLAT_MLIR_OUT=""
 INCLUDE_FLAGS=()   # -I dirs for CIR generation, supplied by the caller
+EXTRA_CFLAGS=()    # further flags for CIR generation (--cflag), e.g. -D
 EXTERNALIZE_STD=true
 
 usage() {
-    echo "Usage: $0 [OPTIONS] <input-file> <output.c>" >&2
+    echo "Usage: $0 [OPTIONS] <input-file(s)> <output.c>" >&2
     echo "  --lang c|c++, --std STD, --flatten" >&2
+    echo "  --merge c|cir   merge strategy for multi-file (default: c)" >&2
     echo "  --mlir FILE, --flat-mlir FILE" >&2
     echo "  --include DIR   add -I DIR to CIR generation (repeatable)" >&2
+    echo "  --cflag FLAG    add FLAG to CIR generation (repeatable)" >&2
     echo "  --[no-]externalize-std" >&2
     exit 1
 }
@@ -76,9 +86,11 @@ while [[ $# -gt 0 ]]; do
         --lang)               LANG="$2"; shift 2 ;;
         --std)                STD="$2"; shift 2 ;;
         --flatten)            FLATTEN=true; shift ;;
+        --merge)              MERGE_STRATEGY="$2"; shift 2 ;;
         --mlir)               MLIR_OUT="$2"; shift 2 ;;
         --flat-mlir)          FLAT_MLIR_OUT="$2"; FLATTEN=true; shift 2 ;;
         --include)            INCLUDE_FLAGS+=(-I "$2"); shift 2 ;;
+        --cflag)              EXTRA_CFLAGS+=("$2"); shift 2 ;;
         --externalize-std)    EXTERNALIZE_STD=true; shift ;;
         --no-externalize-std) EXTERNALIZE_STD=false; shift ;;
         --) shift; break ;;
@@ -87,14 +99,22 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ $# -ne 2 ]] && usage
-INPUT_FILE="$1"
-OUTPUT_C="$2"
-[[ -f "$INPUT_FILE" ]] || { echo "Error: input file not found: $INPUT_FILE" >&2; exit 1; }
+# Parse positional arguments: last is output, all others are inputs
+[[ $# -lt 2 ]] && usage
+OUTPUT_C="${!#}"
+INPUT_FILES=("$@")
+unset 'INPUT_FILES[$(( $# - 1 ))]'
 
-# Infer language from extension
+# Validate all input files exist
+for f in "${INPUT_FILES[@]}"; do
+    [[ -f "$f" ]] || { echo "Error: input file not found: $f" >&2; exit 1; }
+done
+
+NUM_INPUTS=${#INPUT_FILES[@]}
+
+# Infer language from extension (use first input file)
 if [[ -z "$LANG" ]]; then
-    case "${INPUT_FILE##*.}" in
+    case "${INPUT_FILES[0]##*.}" in
         cpp|cxx|cc|C) LANG="c++" ;;
         *) LANG="c" ;;
     esac
@@ -112,6 +132,7 @@ fi
 REQUIRE_FLAGS=()
 [[ "$FLATTEN" == true ]] && REQUIRE_FLAGS+=(--cir-opt)
 [[ "$LANG" == "c++" ]] && REQUIRE_FLAGS+=(--libcxx)
+[[ "$NUM_INPUTS" -gt 1 && "$MERGE_STRATEGY" == "cir" ]] && REQUIRE_FLAGS+=(--cir-merge)
 cir_require_toolchain ${REQUIRE_FLAGS[@]+"${REQUIRE_FLAGS[@]}"} || exit 1
 
 # Temp file management
@@ -124,37 +145,147 @@ _tmpmlir() {
     local t; t=$(mktemp --suffix=.mlir); _TEMPS+=("$t"); echo "$t"
 }
 
+_tmpc() {
+    local t; t=$(mktemp --suffix=.c); _TEMPS+=("$t"); echo "$t"
+}
+
 mkdir -p "$(dirname "$OUTPUT_C")"
 
-# Step 1: Generate CIR.
-# Include dirs (-I) come from the caller via --include (see run_tests.sh, which
-# knows the test-suite layout for shared utility headers).
-CIR_FILE=$(_tmpmlir "$MLIR_OUT")
-"$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$INPUT_FILE" -o "$CIR_FILE" \
-    ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
-    ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} || exit 2
+# Helper: run the full cir2c pipeline on a single file
+# Args: input_file output_c
+run_single_pipeline() {
+    local input="$1"
+    local output="$2"
 
-# Step 2: Preprocess — strip alloca qualifiers that ClangIR's AllocaOp parser
-# used to reject: ", cleanup_dest_slot" (C++ EH slot) and ", const"
-# (const-qualified catch variable). LLVM >= 23 spells these without commas and
-# parses them fine, so this is a no-op there; it is kept for CIR text produced
-# by an older toolchain. Safe either way — the C emitter ignores both flags.
-PRE_FILE=$(_tmpmlir "")
-sed -e 's/, cleanup_dest_slot\]/\]/g' \
-    -e 's/, const\]/\]/g' \
-    "$CIR_FILE" > "$PRE_FILE"
+    # Step 1: Generate CIR
+    local cir_file
+    cir_file=$(_tmpmlir "")
+    "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$input" -o "$cir_file" \
+        ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
+        ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
+        ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
 
-# Step 3: Flatten (optional)
-if [[ "$FLATTEN" == true ]]; then
-    FLAT_FILE=$(_tmpmlir "$FLAT_MLIR_OUT")
-    "$CIR_OPT" "$PRE_FILE" -cir-flatten-cfg -o "$FLAT_FILE" || exit 3
-    MAPPER_INPUT="$FLAT_FILE"
+    # Step 2: Preprocess
+    local pre_file
+    pre_file=$(_tmpmlir "")
+    sed -e 's/, cleanup_dest_slot\]/\]/g' \
+        -e 's/, const\]/\]/g' \
+        "$cir_file" > "$pre_file"
+
+    # Step 3: Flatten (optional)
+    local mapper_input
+    if [[ "$FLATTEN" == true ]]; then
+        local flat_file
+        flat_file=$(_tmpmlir "")
+        "$CIR_OPT" "$pre_file" -cir-flatten-cfg -o "$flat_file" || exit 3
+        mapper_input="$flat_file"
+    else
+        mapper_input="$pre_file"
+    fi
+
+    # Step 4: cir2c
+    local mapper_cmd=("$CIR2C")
+    [[ "$EXTERNALIZE_STD" == true ]] && mapper_cmd+=(--externalize-std) || mapper_cmd+=(--no-externalize-std)
+    mapper_cmd+=("$mapper_input" "$output")
+    "${mapper_cmd[@]}" || exit 4
+}
+
+# Helper: compile a single file to CIR MLIR
+# Args: input_file output_mlir
+compile_to_cir() {
+    local input="$1"
+    local output="$2"
+
+    "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$input" -o "$output" \
+        ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
+        ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
+        ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
+}
+
+if [[ "$NUM_INPUTS" -eq 1 ]]; then
+    # Single-file path: backward compatible
+    INPUT_FILE="${INPUT_FILES[0]}"
+
+    # Step 1: Generate CIR
+    CIR_FILE=$(_tmpmlir "$MLIR_OUT")
+    "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$INPUT_FILE" -o "$CIR_FILE" \
+        ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
+        ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
+        ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
+
+    # Step 2: Preprocess
+    PRE_FILE=$(_tmpmlir "")
+    sed -e 's/, cleanup_dest_slot\]/\]/g' \
+        -e 's/, const\]/\]/g' \
+        "$CIR_FILE" > "$PRE_FILE"
+
+    # Step 3: Flatten (optional)
+    if [[ "$FLATTEN" == true ]]; then
+        FLAT_FILE=$(_tmpmlir "$FLAT_MLIR_OUT")
+        "$CIR_OPT" "$PRE_FILE" -cir-flatten-cfg -o "$FLAT_FILE" || exit 3
+        MAPPER_INPUT="$FLAT_FILE"
+    else
+        MAPPER_INPUT="$PRE_FILE"
+    fi
+
+    # Step 4: cir2c
+    MAPPER_CMD=("$CIR2C")
+    [[ "$EXTERNALIZE_STD" == true ]] && MAPPER_CMD+=(--externalize-std) || MAPPER_CMD+=(--no-externalize-std)
+    MAPPER_CMD+=("$MAPPER_INPUT" "$OUTPUT_C")
+    "${MAPPER_CMD[@]}" || exit 4
+
 else
-    MAPPER_INPUT="$PRE_FILE"
+    # Multi-file path
+    case "$MERGE_STRATEGY" in
+        c)
+            # C-level merge: run pipeline on each file, then merge the C outputs
+            C_FILES=()
+            for input_file in "${INPUT_FILES[@]}"; do
+                tmp_c=$(_tmpc)
+                run_single_pipeline "$input_file" "$tmp_c"
+                C_FILES+=("$tmp_c")
+            done
+            # Merge all C files into the final output
+            "$SCRIPT_DIR/scripts/merge-c.sh" "${C_FILES[@]}" "$OUTPUT_C"
+            ;;
+        cir)
+            # CIR-level merge: compile each to CIR, merge MLIR, then run cir2c once
+            MLIR_FILES=()
+            for input_file in "${INPUT_FILES[@]}"; do
+                # Name the temporary after its source, so that cir-merge's
+                # diagnostics say which translation unit they are about.
+                tmp_mlir=$(mktemp --suffix="-$(basename "$input_file").cir")
+                _TEMPS+=("$tmp_mlir")
+                compile_to_cir "$input_file" "$tmp_mlir"
+                MLIR_FILES+=("$tmp_mlir")
+            done
+            # Merge all MLIR files. cir-merge is conservative: it rejects
+            # what it cannot merge soundly (see "Merging translation units"
+            # in README.md) instead of producing an approximate module.
+            MERGED_MLIR=$(_tmpmlir "")
+            "$CIR_MERGE_BIN" --output "$MERGED_MLIR" "${MLIR_FILES[@]}" || exit 5
+            # Preprocess the merged MLIR
+            PRE_FILE=$(_tmpmlir "")
+            sed -e 's/, cleanup_dest_slot\]/\]/g' \
+                -e 's/, const\]/\]/g' \
+                "$MERGED_MLIR" > "$PRE_FILE"
+            # Flatten (optional)
+            if [[ "$FLATTEN" == true ]]; then
+                FLAT_FILE=$(_tmpmlir "$FLAT_MLIR_OUT")
+                "$CIR_OPT" "$PRE_FILE" -cir-flatten-cfg -o "$FLAT_FILE" || exit 3
+                MAPPER_INPUT="$FLAT_FILE"
+            else
+                MAPPER_INPUT="$PRE_FILE"
+            fi
+            # cir2c
+            MAPPER_CMD=("$CIR2C")
+            [[ "$EXTERNALIZE_STD" == true ]] && MAPPER_CMD+=(--externalize-std) || MAPPER_CMD+=(--no-externalize-std)
+            MAPPER_CMD+=("$MAPPER_INPUT" "$OUTPUT_C")
+            "${MAPPER_CMD[@]}" || exit 4
+            ;;
+        *)
+            echo "Error: unknown merge strategy: $MERGE_STRATEGY (use 'c' or 'cir')" >&2
+            exit 1
+            ;;
+    esac
 fi
-
-# Step 4: cir2c
-MAPPER_CMD=("$CIR2C")
-[[ "$EXTERNALIZE_STD" == true ]] && MAPPER_CMD+=(--externalize-std) || MAPPER_CMD+=(--no-externalize-std)
-MAPPER_CMD+=("$MAPPER_INPUT" "$OUTPUT_C")
-"${MAPPER_CMD[@]}" || exit 4
