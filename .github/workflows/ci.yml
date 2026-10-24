@@ -219,7 +219,10 @@ jobs:
             bash test/run_tests.sh ${{ matrix.extra_flags }} \
               --json-out /tmp/${{ matrix.slug }}.json \
             || true
-          cat /tmp/${{ matrix.slug }}.json
+          # Ensure the JSON file exists for the upload step, even if the runner
+          # crashed before writing it.
+          touch /tmp/${{ matrix.slug }}.json
+          cat /tmp/${{ matrix.slug }}.json || true
 
       - name: Upload results
         if: always()
