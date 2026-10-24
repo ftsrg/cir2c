@@ -1,403 +1,64 @@
 // Operational Model: <iostream>
-// Simplified C++ header for I/O streams
+// Minimal I/O for verification — all operations are no-ops
 
 #ifndef _LIBCXX_OM_IOSTREAM
 #define _LIBCXX_OM_IOSTREAM
 
 namespace std {
 
-// ios_base - base class for streams
-class ios_base {
+typedef unsigned long streamsize;
+
+// Minimal stream — all operations are no-ops for verification
+class ostream {
 public:
-    enum seekdir {
-        beg = 0,
-        cur = 1,
-        end = 2
-    };
-
-    class failure {};
-
-    typedef int openmode;
-    static const openmode in = 1;
-    static const openmode out = 2;
-    static const openmode ate = 4;
-    static const openmode app = 8;
-    static const openmode trunc = 16;
-    static const openmode binary = 32;
-
-    typedef int fmtflags;
-    static const fmtflags skipws = 1;
-    static const fmtflags left = 2;
-    static const fmtflags right = 4;
-    static const fmtflags internal = 8;
-    static const fmtflags dec = 16;
-    static const fmtflags hex = 32;
-    static const fmtflags oct = 64;
-
-    typedef int iostate;
-    static const iostate goodbit = 0;
-    static const iostate badbit = 1;
-    static const iostate failbit = 2;
-    static const iostate eofbit = 4;
-
-    typedef int streamoff;
-    typedef int streampos;
-
-    ios_base() {}
-    virtual ~ios_base() {}
-
-    fmtflags flags() const { return fmt_flags_; }
-    fmtflags flags(fmtflags f) { fmt_flags_ = f; return f; }
-    fmtflags setf(fmtflags f) { fmt_flags_ |= f; return fmt_flags_; }
-    void unsetf(fmtflags f) { fmt_flags_ &= ~f; }
-
-    int precision() const { return precision_; }
-    int precision(int p) { precision_ = p; return p; }
-
-    int width() const { return width_; }
-    int width(int w) { width_ = w; return w; }
-
-    streampos seekoff(streamoff off, seekdir way, int = 0) {
-        (void)off;
-        (void)way;
-        return streampos(0);
-    }
-
-    streampos seekpos(streampos sp, int = 0) {
-        (void)sp;
-        return sp;
-    }
-
-protected:
-    fmtflags fmt_flags_;
-    int precision_;
-    int width_;
+    ostream& operator<<(int) { return *this; }
+    ostream& operator<<(double) { return *this; }
+    ostream& operator<<(char) { return *this; }
+    ostream& operator<<(const char*) { return *this; }
+    ostream& operator<<(const void*) { return *this; }
+    ostream& operator<<(bool) { return *this; }
+    ostream& operator<<(unsigned int) { return *this; }
+    ostream& operator<<(long) { return *this; }
+    ostream& operator<<(unsigned long) { return *this; }
+    ostream& operator<<(long long) { return *this; }
+    ostream& operator<<(unsigned long long) { return *this; }
+    ostream& operator<<(long double) { return *this; }
+    ostream& operator<<(ostream& (*)(ostream&)) { return *this; }
+    ostream& flush() { return *this; }
+    ostream& put(char) { return *this; }
+    ostream& write(const char*, streamsize) { return *this; }
 };
 
-// streambuf - abstract buffer
-class streambuf {
+class istream {
 public:
-    virtual ~streambuf() {}
-    virtual int_type underflow() { return traits_type::eof(); }
-    virtual int_type overflow(int_type c) { return c; }
-
-    typedef char char_type;
-    typedef int int_type;
-    typedef int traits_type;
+    istream& operator>>(int&) { return *this; }
+    istream& operator>>(double&) { return *this; }
+    istream& operator>>(char&) { return *this; }
+    istream& operator>>(bool&) { return *this; }
+    istream& getline(char*, streamsize) { return *this; }
+    istream& get(char&) { return *this; }
+    istream& ignore() { return *this; }
+    istream& read(char*, streamsize) { return *this; }
+    streamsize gcount() const { return 0; }
+    istream& operator>>(istream& (*)(istream&)) { return *this; }
 };
 
-// basic_ostream - output stream
-template<typename CharT, typename Traits = char_traits<CharT>>
-class basic_ostream {
-public:
-    typedef CharT char_type;
-    typedef Traits traits_type;
-    typedef typename Traits::int_type int_type;
-    typedef typename Traits::pos_type pos_type;
-    typedef ios_base::seekdir seekdir;
+// Manipulators — all no-ops
+inline ostream& endl(ostream& os) { return os; }
+inline ostream& ends(ostream& os) { return os; }
+inline ostream& flush(ostream& os) { return os; }
+inline istream& ws(istream& is) { return is; }
 
-    basic_ostream() {}
-    virtual ~basic_ostream() {}
-
-    basic_ostream& operator<<(int n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_ostream& operator<<(long n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_ostream& operator<<(long long n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_ostream& operator<<(unsigned int n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_ostream& operator<<(unsigned long n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_ostream& operator<<(unsigned long long n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_ostream& operator<<(double n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_ostream& operator<<(float n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_ostream& operator<<(const char* s) {
-        (void)s;
-        return *this;
-    }
-
-    basic_ostream& operator<<(char c) {
-        (void)c;
-        return *this;
-    }
-
-    basic_ostream& operator<<(const void* p) {
-        (void)p;
-        return *this;
-    }
-
-    basic_ostream& operator<<(bool b) {
-        (void)b;
-        return *this;
-    }
-
-    basic_ostream& operator<<(basic_ostream& (*func)(basic_ostream&)) {
-        return func(*this);
-    }
-
-    basic_ostream& operator<<(ios_base& (*func)(ios_base&)) {
-        return *this;
-    }
-
-    basic_ostream& flush() { return *this; }
-
-    pos_type tellp() { return pos_type(0); }
-    basic_ostream& seekp(pos_type p) { (void)p; return *this; }
-    basic_ostream& seekp(ios_base::streamoff off, ios_base::seekdir way) {
-        (void)off;
-        (void)way;
-        return *this;
-    }
-
-    void swap(basic_ostream& other) { (void)other; }
-};
-
-// basic_istream - input stream
-template<typename CharT, typename Traits = char_traits<CharT>>
-class basic_istream {
-public:
-    typedef CharT char_type;
-    typedef Traits traits_type;
-    typedef typename Traits::int_type int_type;
-    typedef typename Traits::pos_type pos_type;
-    typedef ios_base::seekdir seekdir;
-
-    basic_istream() {}
-    virtual ~basic_istream() {}
-
-    basic_istream& operator>>(int& n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_istream& operator>>(long& n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_istream& operator>>(long long& n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_istream& operator>>(unsigned int& n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_istream& operator>>(unsigned long& n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_istream& operator>>(double& n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_istream& operator>>(float& n) {
-        (void)n;
-        return *this;
-    }
-
-    basic_istream& operator>>(char& c) {
-        (void)c;
-        return *this;
-    }
-
-    basic_istream& operator>>(bool& b) {
-        (void)b;
-        return *this;
-    }
-
-    basic_istream& operator>>(basic_istream& (*func)(basic_istream&)) {
-        return func(*this);
-    }
-
-    basic_istream& get(char& c) {
-        (void)c;
-        return *this;
-    }
-
-    basic_istream& getline(char* s, std::streamsize n, char delim = '\n') {
-        (void)s;
-        (void)n;
-        (void)delim;
-        return *this;
-    }
-
-    pos_type tellg() { return pos_type(0); }
-    basic_istream& seekg(pos_type p) { (void)p; return *this; }
-    basic_istream& seekg(ios_base::streamoff off, ios_base::seekdir way) {
-        (void)off;
-        (void)way;
-        return *this;
-    }
-
-    void swap(basic_istream& other) { (void)other; }
-};
-
-// basic_iostream - combined input/output stream
-template<typename CharT, typename Traits = char_traits<CharT>>
-class basic_iostream : public basic_istream<CharT, Traits>, public basic_ostream<CharT, Traits> {
-public:
-    basic_iostream() {}
-    virtual ~basic_iostream() {}
-
-    void swap(basic_iostream& other) {
-        basic_istream<CharT, Traits>::swap(other);
-        basic_ostream<CharT, Traits>::swap(other);
-    }
-};
-
-// char_traits - character traits
-template<typename CharT>
-struct char_traits {
-    typedef CharT char_type;
-    typedef int int_type;
-    typedef int pos_type;
-
-    static void assign(char_type& c1, const char_type& c2) { c1 = c2; }
-    static bool eq(const char_type& c1, const char_type& c2) { return c1 == c2; }
-    static bool lt(const char_type& c1, const char_type& c2) { return c1 < c2; }
-    static int_type eof() { return -1; }
-};
-
-// Stream manipulators
-inline basic_ostream<char>& endl(basic_ostream<char>& os) {
-    return os;
-}
-
-inline basic_ostream<char>& ends(basic_ostream<char>& os) {
-    return os;
-}
-
-inline basic_ostream<char>& flush(basic_ostream<char>& os) {
-    return os;
-}
-
-inline ios_base& dec(ios_base& ios) {
-    return ios;
-}
-
-inline ios_base& hex(ios_base& ios) {
-    return ios;
-}
-
-inline ios_base& oct(ios_base& ios) {
-    return ios;
-}
-
-inline ios_base& fixed(ios_base& ios) {
-    return ios;
-}
-
-inline ios_base& scientific(ios_base& ios) {
-    return ios;
-}
-
-inline ios_base& left(ios_base& ios) {
-    return ios;
-}
-
-inline ios_base& right(ios_base& ios) {
-    return ios;
-}
-
-inline ios_base& internal(ios_base& ios) {
-    return ios;
-}
-
-inline ios_base& boolalpha(ios_base& ios) {
-    return ios;
-}
-
-inline ios_base& showbase(ios_base& ios) {
-    return ios;
-}
-
-inline ios_base& showpoint(ios_base& ios) {
-    return ios;
-}
-
-inline ios_base& showpos(ios_base& ios) {
-    return ios;
-}
-
-inline ios_base& skipws(ios_base& ios) {
-    return ios;
-}
-
-inline ios_base& unitbuf(ios_base& ios) {
-    return ios;
-}
-
-inline ios_base& uppercase(ios_base& ios) {
-    return ios;
-}
-
-// Type aliases
-typedef basic_ostream<char> ostream;
-typedef basic_istream<char> istream;
-typedef basic_iostream<char> iostream;
-
-typedef basic_ostream<wchar_t> wostream;
-typedef basic_istream<wchar_t> wistream;
-typedef basic_iostream<wchar_t> wiostream;
-
-// Global stream objects - no-ops for verification
+// Global objects
 extern ostream cout;
+extern istream cin;
 extern ostream cerr;
 extern ostream clog;
-extern istream cin;
-extern iostream ios;
 
-extern wostream wcout;
-extern wostream wcerr;
-extern wostream wclog;
-extern wistream wcin;
-extern wiostream wios;
-
-// Global stream instances
 ostream cout;
+istream cin;
 ostream cerr;
 ostream clog;
-istream cin;
-iostream ios;
-
-wostream wcout;
-wostream wcerr;
-wostream wclog;
-wistream wcin;
-wiostream wios;
 
 } // namespace std
 

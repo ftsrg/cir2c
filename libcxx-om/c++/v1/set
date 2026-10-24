@@ -1,132 +1,94 @@
 // Operational Model: <set>
-// Simplified C++ header for std::set
+// Minimal std::set for verification
 
 #ifndef _LIBCXX_OM_SET
 #define _LIBCXX_OM_SET
 
-#include <stddef.h>
+#include <utility>
 
 namespace std {
 
-// set - simplified ordered set container
-template<typename Key, typename Compare = less<Key>, typename Allocator = allocator<Key>>
+template<typename T>
+struct less {
+    bool operator()(const T& a, const T& b) const { return a < b; }
+};
+
+template<typename Key, typename Compare = less<Key>>
 class set {
 public:
     typedef Key key_type;
     typedef Key value_type;
     typedef Compare key_compare;
-    typedef Allocator allocator_type;
-    typedef size_t size_type;
-    typedef ptrdiff_t difference_type;
-    typedef const value_type& reference;
-    typedef const value_type& const_reference;
-    typedef const value_type* pointer;
-    typedef const value_type* const_pointer;
+    typedef unsigned long size_type;
+    typedef Key* iterator;
+    typedef const Key* const_iterator;
 
-    struct iterator {
-        const value_type* ptr;
-        iterator(const value_type* p = nullptr) : ptr(p) {}
-        const value_type& operator*() const { return *ptr; }
-        const value_type* operator->() const { return ptr; }
-        iterator& operator++() { ptr++; return *this; }
-        iterator& operator--() { ptr--; return *this; }
-        bool operator==(const iterator& other) const { return ptr == other.ptr; }
-        bool operator!=(const iterator& other) const { return ptr != other.ptr; }
-    };
+    static constexpr size_type MAX_SIZE = 64;
 
-    typedef iterator const_iterator;
+    set() : size_(0) {}
 
-    static constexpr size_t MAX_SIZE = 64;
-
-    set() : data_(nullptr), size_(0) {}
-
-    set(const set& other) : data_(nullptr), size_(0) {
-        for (size_type i = 0; i < other.size_; i++) {
-            insert(other.data_[i]);
-        }
+    set(const set& other) : size_(other.size_) {
+        for (size_type i = 0; i < size_; i++) keys_[i] = other.keys_[i];
     }
 
-    set(set&& other) noexcept : data_(other.data_), size_(other.size_) {
-        other.data_ = nullptr;
+    set(set&& other) : size_(other.size_) {
+        for (size_type i = 0; i < size_; i++) keys_[i] = other.keys_[i];
         other.size_ = 0;
-    }
-
-    ~set() {
-        if (data_) delete[] data_;
     }
 
     set& operator=(const set& other) {
         if (this != &other) {
-            clear();
-            for (size_type i = 0; i < other.size_; i++) {
-                insert(other.data_[i]);
-            }
-        }
-        return *this;
-    }
-
-    set& operator=(set&& other) noexcept {
-        if (this != &other) {
-            if (data_) delete[] data_;
-            data_ = other.data_;
             size_ = other.size_;
-            other.data_ = nullptr;
-            other.size_ = 0;
+            for (size_type i = 0; i < size_; i++) keys_[i] = other.keys_[i];
         }
         return *this;
     }
 
-    iterator begin() noexcept { return iterator(data_); }
-    iterator end() noexcept { return iterator(data_ + size_); }
-    const_iterator begin() const noexcept { return const_iterator(data_); }
-    const_iterator end() const noexcept { return const_iterator(data_ + size_); }
-    const_iterator cbegin() const noexcept { return const_iterator(data_); }
-    const_iterator cend() const noexcept { return const_iterator(data_ + size_); }
+    iterator begin() { return keys_; }
+    const_iterator begin() const { return keys_; }
+    iterator end() { return keys_ + size_; }
+    const_iterator end() const { return keys_ + size_; }
+    const_iterator cbegin() const { return keys_; }
+    const_iterator cend() const { return keys_ + size_; }
 
-    size_type size() const noexcept { return size_; }
-    size_type max_size() const noexcept { return MAX_SIZE; }
-    bool empty() const noexcept { return size_ == 0; }
+    size_type size() const { return size_; }
+    bool empty() const { return size_ == 0; }
 
-    pair<iterator, bool> insert(const value_type& value) {
+    void clear() { size_ = 0; }
+
+    pair<iterator, bool> insert(const Key& key) {
         for (size_type i = 0; i < size_; i++) {
-            if (data_[i] == value) return pair<iterator, bool>(iterator(data_ + i), false);
+            if (keys_[i] == key) return pair<iterator, bool>(keys_ + i, false);
         }
-        if (size_ < MAX_SIZE) {
-            value_type* new_data = new value_type[size_ + 1];
-            if (data_) {
-                for (size_type i = 0; i < size_; i++) new_data[i] = data_[i];
-                delete[] data_;
-            }
-            new_data[size_] = value;
-            data_ = new_data;
-            size_++;
-            return pair<iterator, bool>(iterator(data_ + size_ - 1), true);
-        }
-        __VERIFIER_error();
-        return pair<iterator, bool>(iterator(data_), false);
+        keys_[size_] = key;
+        return pair<iterator, bool>(keys_ + size_++, true);
     }
 
-    void insert(initializer_list<value_type> il) {
-        for (auto it = il.begin(); it != il.end(); ++it) {
-            insert(*it);
-        }
-    }
-
-    iterator erase(iterator pos) {
-        size_type idx = pos.ptr - data_;
-        for (size_type i = idx; i < size_ - 1; i++) {
-            data_[i] = data_[i + 1];
-        }
-        size_--;
-        return iterator(data_ + idx);
-    }
-
-    size_type erase(const value_type& value) {
+    iterator find(const Key& key) {
         for (size_type i = 0; i < size_; i++) {
-            if (data_[i] == value) {
-                for (size_type j = i; j < size_ - 1; j++) {
-                    data_[j] = data_[j + 1];
-                }
+            if (keys_[i] == key) return keys_ + i;
+        }
+        return keys_ + size_;
+    }
+
+    const_iterator find(const Key& key) const {
+        for (size_type i = 0; i < size_; i++) {
+            if (keys_[i] == key) return keys_ + i;
+        }
+        return keys_ + size_;
+    }
+
+    size_type count(const Key& key) const {
+        for (size_type i = 0; i < size_; i++) {
+            if (keys_[i] == key) return 1;
+        }
+        return 0;
+    }
+
+    size_type erase(const Key& key) {
+        for (size_type i = 0; i < size_; i++) {
+            if (keys_[i] == key) {
+                for (size_type j = i; j < size_ - 1; j++) keys_[j] = keys_[j + 1];
                 size_--;
                 return 1;
             }
@@ -134,68 +96,30 @@ public:
         return 0;
     }
 
-    void clear() noexcept {
-        if (data_) delete[] data_;
-        data_ = nullptr;
-        size_ = 0;
-    }
-
-    void swap(set& other) noexcept {
-        value_type* tmp_data = data_;
-        size_type tmp_size = size_;
-        data_ = other.data_;
-        size_ = other.size_;
-        other.data_ = tmp_data;
-        other.size_ = tmp_size;
-    }
-
-    size_type count(const Key& key) const {
-        for (size_type i = 0; i < size_; i++) {
-            if (data_[i] == key) return 1;
+    void swap(set& other) {
+        size_type ts = size_;
+        for (size_type i = 0; i < MAX_SIZE; i++) {
+            Key tk = keys_[i]; keys_[i] = other.keys_[i]; other.keys_[i] = tk;
         }
-        return 0;
+        size_ = other.size_; other.size_ = ts;
     }
-
-    iterator find(const Key& key) {
-        for (size_type i = 0; i < size_; i++) {
-            if (data_[i] == key) return iterator(data_ + i);
-        }
-        return end();
-    }
-
-    const_iterator find(const Key& key) const {
-        for (size_type i = 0; i < size_; i++) {
-            if (data_[i] == key) return const_iterator(data_ + i);
-        }
-        return end();
-    }
-
-    key_compare key_comp() const { return key_compare(); }
-    allocator_type get_allocator() const { return allocator_type(); }
 
     bool operator==(const set& other) const {
         if (size_ != other.size_) return false;
         for (size_type i = 0; i < size_; i++) {
-            if (data_[i] != other.data_[i]) return false;
+            if (keys_[i] != other.keys_[i]) return false;
         }
         return true;
     }
-
     bool operator!=(const set& other) const { return !(*this == other); }
-    bool operator<(const set& other) const { return lexicographical_compare(begin(), end(), other.begin(), other.end()); }
-    bool operator>(const set& other) const { return other < *this; }
-    bool operator<=(const set& other) const { return !(other < *this); }
-    bool operator>=(const set& other) const { return !(*this < other); }
 
 private:
-    value_type* data_;
+    Key keys_[MAX_SIZE];
     size_type size_;
 };
 
-template<typename Key, typename Compare, typename Allocator>
-void swap(set<Key, Compare, Allocator>& x, set<Key, Compare, Allocator>& y) noexcept {
-    x.swap(y);
-}
+template<typename Key, typename Compare>
+void swap(set<Key, Compare>& x, set<Key, Compare>& y) { x.swap(y); }
 
 } // namespace std
 

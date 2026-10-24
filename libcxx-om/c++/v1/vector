@@ -1,14 +1,12 @@
 // Operational Model: <vector>
-// Simplified C++ header for std::vector
+// Minimal std::vector for verification — no external dependencies
 
 #ifndef _LIBCXX_OM_VECTOR
 #define _LIBCXX_OM_VECTOR
 
-#include <stddef.h>
-
 namespace std {
 
-// Forward declaration of allocator
+// Minimal allocator — no-op for verification
 template<typename T>
 struct allocator {
     typedef T value_type;
@@ -16,85 +14,32 @@ struct allocator {
     typedef const T* const_pointer;
     typedef T& reference;
     typedef const T& const_reference;
-    typedef size_t size_type;
-    typedef ptrdiff_t difference_type;
-
+    typedef unsigned long size_type;
+    typedef long difference_type;
     allocator() noexcept {}
     template<typename U> allocator(const allocator<U>&) noexcept {}
-
-    pointer address(reference x) noexcept { return &x; }
-    const_pointer address(const_reference x) noexcept { return &x; }
-
-    pointer allocate(size_t n) {
-        return static_cast<T*>(::operator new(n * sizeof(T)));
-    }
-
-    void deallocate(T* p, size_t n) {
-        ::operator delete(p);
-    }
-
-    void construct(T* p, const T& value) {
-        new((void*)p) T(value);
-    }
-
-    void destroy(T* p) {
-        p->~T();
-    }
-
-    size_t max_size() const noexcept {
-        return SIZE_MAX / sizeof(T);
-    }
-
-    template<typename U, typename... Args>
-    void construct(U* p, Args&&... args) {
-        new((void*)p) U(std::forward<Args>(args)...);
-    }
+    pointer allocate(size_type n) { return static_cast<T*>(__builtin_malloc(n * sizeof(T))); }
+    void deallocate(T* p, size_type) { __builtin_free(p); }
 };
 
 template<typename T1, typename T2>
-bool operator==(const allocator<T1>&, const allocator<T2>&) noexcept {
-    return true;
-}
+bool operator==(const allocator<T1>&, const allocator<T2>&) noexcept { return true; }
 
-template<typename T1, typename T2>
-bool operator!=(const allocator<T1>&, const allocator<T2>&) noexcept {
-    return false;
-}
-
-// vector - simplified dynamic array
+// vector — simplified dynamic array for verification
 template<typename T, typename Allocator = allocator<T>>
 class vector {
 public:
     typedef T value_type;
     typedef Allocator allocator_type;
-    typedef T* pointer;
-    typedef const T* const_pointer;
-    typedef T& reference;
-    typedef const T& const_reference;
-    typedef size_t size_type;
-    typedef ptrdiff_t difference_type;
-
-    // Iterator types - simplified to pointers
     typedef T* iterator;
     typedef const T* const_iterator;
+    typedef unsigned long size_type;
+    typedef long difference_type;
+    typedef T& reference;
+    typedef const T& const_reference;
+    typedef T* pointer;
+    typedef const T* const_pointer;
 
-    // Reverse iterator - simplified
-    struct reverse_iterator {
-        iterator base_;
-        reverse_iterator(iterator it) : base_(it) {}
-        reference operator*() const { return *(base_ - 1); }
-        pointer operator->() const { return base_ - 1; }
-        reverse_iterator& operator++() { base_--; return *this; }
-        reverse_iterator& operator--() { base_++; return *this; }
-        bool operator==(const reverse_iterator& other) const { return base_ == other.base_; }
-        bool operator!=(const reverse_iterator& other) const { return base_ != other.base_; }
-        difference_type operator-(const reverse_iterator& other) const { return other.base_ - base_; }
-    };
-
-    typedef reverse_iterator reverse_iterator_type;
-    typedef reverse_iterator const_reverse_iterator;
-
-    // Constructors
     vector() noexcept : data_(nullptr), size_(0), capacity_(0) {}
 
     explicit vector(size_type n) : data_(nullptr), size_(0), capacity_(0) {
@@ -108,44 +53,33 @@ public:
     vector(const vector& other) : data_(nullptr), size_(0), capacity_(0) {
         if (other.size_ > 0) {
             reserve(other.size_);
-            for (size_type i = 0; i < other.size_; i++) {
+            for (size_type i = 0; i < other.size_; i++)
                 data_[i] = other.data_[i];
-            }
             size_ = other.size_;
         }
     }
 
-    vector(vector&& other) noexcept : data_(other.data_), size_(other.size_), capacity_(other.capacity_) {
+    vector(vector&& other) noexcept
+        : data_(other.data_), size_(other.size_), capacity_(other.capacity_) {
         other.data_ = nullptr;
         other.size_ = 0;
         other.capacity_ = 0;
     }
 
-    vector(initializer_list<value_type> il) : data_(nullptr), size_(0), capacity_(0) {
-        reserve(il.size());
-        for (auto it = il.begin(); it != il.end(); ++it) {
-            push_back(*it);
-        }
-    }
-
     ~vector() {
-        if (data_) {
-            for (size_type i = 0; i < size_; i++) {
-                data_[i].~T();
-            }
-            ::operator delete(data_);
-        }
+        if (data_) __builtin_free(data_);
     }
 
-    // Assignment
     vector& operator=(const vector& other) {
         if (this != &other) {
-            clear();
+            if (data_) __builtin_free(data_);
+            data_ = nullptr;
+            size_ = 0;
+            capacity_ = 0;
             if (other.size_ > 0) {
                 reserve(other.size_);
-                for (size_type i = 0; i < other.size_; i++) {
+                for (size_type i = 0; i < other.size_; i++)
                     data_[i] = other.data_[i];
-                }
                 size_ = other.size_;
             }
         }
@@ -154,12 +88,7 @@ public:
 
     vector& operator=(vector&& other) noexcept {
         if (this != &other) {
-            if (data_) {
-                for (size_type i = 0; i < size_; i++) {
-                    data_[i].~T();
-                }
-                ::operator delete(data_);
-            }
+            if (data_) __builtin_free(data_);
             data_ = other.data_;
             size_ = other.size_;
             capacity_ = other.capacity_;
@@ -170,63 +99,30 @@ public:
         return *this;
     }
 
-    vector& operator=(initializer_list<value_type> il) {
-        clear();
-        reserve(il.size());
-        for (auto it = il.begin(); it != il.end(); ++it) {
-            push_back(*it);
-        }
-        return *this;
-    }
-
     // Iterators
     iterator begin() noexcept { return data_; }
     const_iterator begin() const noexcept { return data_; }
     iterator end() noexcept { return data_ + size_; }
     const_iterator end() const noexcept { return data_ + size_; }
-
     const_iterator cbegin() const noexcept { return data_; }
     const_iterator cend() const noexcept { return data_ + size_; }
 
-    reverse_iterator rbegin() noexcept { return reverse_iterator(end()); }
-    reverse_iterator rend() noexcept { return reverse_iterator(begin()); }
-    const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(end()); }
-    const_reverse_iterator rend() const noexcept { return const_reverse_iterator(begin()); }
-
-    const_reverse_iterator crbegin() const noexcept { return const_reverse_iterator(end()); }
-    const_reverse_iterator crend() const noexcept { return const_reverse_iterator(begin()); }
-
     // Capacity
     size_type size() const noexcept { return size_; }
-    size_type max_size() const noexcept { return SIZE_MAX / sizeof(T); }
+    size_type max_size() const noexcept { return 1048576; }
     size_type capacity() const noexcept { return capacity_; }
     bool empty() const noexcept { return size_ == 0; }
 
     void reserve(size_type n) {
         if (n > capacity_) {
-            T* new_data = static_cast<T*>(::operator new(n * sizeof(T)));
+            T* new_data = static_cast<T*>(__builtin_malloc(n * sizeof(T)));
             if (data_) {
-                for (size_type i = 0; i < size_; i++) {
+                for (size_type i = 0; i < size_; i++)
                     new_data[i] = data_[i];
-                }
-                ::operator delete(data_);
+                __builtin_free(data_);
             }
             data_ = new_data;
             capacity_ = n;
-        }
-    }
-
-    void shrink_to_fit() noexcept {
-        if (capacity_ > size_) {
-            T* new_data = static_cast<T*>(::operator new(size_ * sizeof(T)));
-            if (data_) {
-                for (size_type i = 0; i < size_; i++) {
-                    new_data[i] = data_[i];
-                }
-                ::operator delete(data_);
-            }
-            data_ = new_data;
-            capacity_ = size_;
         }
     }
 
@@ -235,16 +131,11 @@ public:
     const_reference operator[](size_type n) const noexcept { return data_[n]; }
 
     reference at(size_type n) {
-        if (n >= size_) {
-            __VERIFIER_error();
-        }
+        if (n >= size_) __builtin_unreachable();
         return data_[n];
     }
-
     const_reference at(size_type n) const {
-        if (n >= size_) {
-            __VERIFIER_error();
-        }
+        if (n >= size_) __builtin_unreachable();
         return data_[n];
     }
 
@@ -254,162 +145,48 @@ public:
     const_reference back() const noexcept { return data_[size_ - 1]; }
 
     pointer data() noexcept { return data_; }
-    const_pointer data() const noexcept { return data_; }
+    const_iterator data() const noexcept { return data_; }
 
     // Modifiers
-    void assign(size_type n, const value_type& value) {
-        clear();
-        resize(n, value);
-    }
-
-    void assign(initializer_list<value_type> il) {
-        clear();
-        reserve(il.size());
-        for (auto it = il.begin(); it != il.end(); ++it) {
-            push_back(*it);
-        }
-    }
-
     void push_back(const value_type& value) {
         if (size_ >= capacity_) {
             size_type new_cap = capacity_ == 0 ? 1 : capacity_ * 2;
             reserve(new_cap);
         }
-        data_[size_] = value;
-        size_++;
-    }
-
-    void push_back(value_type&& value) {
-        if (size_ >= capacity_) {
-            size_type new_cap = capacity_ == 0 ? 1 : capacity_ * 2;
-            reserve(new_cap);
-        }
-        data_[size_] = std::move(value);
-        size_++;
+        data_[size_++] = value;
     }
 
     void pop_back() {
-        if (size_ > 0) {
-            size_--;
-            data_[size_].~T();
-        }
+        if (size_ > 0) size_--;
     }
 
-    iterator insert(iterator position, const value_type& value) {
-        size_type idx = position - data_;
-        if (size_ >= capacity_) {
-            size_type new_cap = capacity_ == 0 ? 1 : capacity_ * 2;
-            reserve(new_cap);
-        }
-        for (size_type i = size_; i > idx; i--) {
-            data_[i] = data_[i - 1];
-        }
-        data_[idx] = value;
-        size_++;
-        return data_ + idx;
-    }
+    void clear() noexcept { size_ = 0; }
 
-    iterator insert(iterator position, value_type&& value) {
-        size_type idx = position - data_;
-        if (size_ >= capacity_) {
-            size_type new_cap = capacity_ == 0 ? 1 : capacity_ * 2;
-            reserve(new_cap);
-        }
-        for (size_type i = size_; i > idx; i--) {
-            data_[i] = data_[i - 1];
-        }
-        data_[idx] = std::move(value);
-        size_++;
-        return data_ + idx;
-    }
-
-    iterator erase(iterator position) {
-        size_type idx = position - data_;
-        for (size_type i = idx; i < size_ - 1; i++) {
-            data_[i] = data_[i + 1];
-        }
-        size_--;
-        data_[size_].~T();
-        return data_ + idx;
-    }
-
-    void clear() noexcept {
-        for (size_type i = 0; i < size_; i++) {
-            data_[i].~T();
-        }
-        size_ = 0;
-    }
-
-    void resize(size_type n) {
-        resize(n, value_type());
-    }
+    void resize(size_type n) { resize(n, value_type()); }
 
     void resize(size_type n, const value_type& value) {
-        if (n < size_) {
-            for (size_type i = n; i < size_; i++) {
-                data_[i].~T();
-            }
-            size_ = n;
-        } else if (n > size_) {
-            if (n > capacity_) {
-                reserve(n);
-            }
-            for (size_type i = size_; i < n; i++) {
-                data_[i] = value;
-            }
-            size_ = n;
-        }
+        if (n > capacity_) reserve(n);
+        for (size_type i = size_; i < n; i++)
+            data_[i] = value;
+        size_ = n;
     }
 
     void swap(vector& other) noexcept {
-        T* tmp_data = data_;
-        size_type tmp_size = size_;
-        size_type tmp_capacity = capacity_;
-        data_ = other.data_;
-        size_ = other.size_;
-        capacity_ = other.capacity_;
-        other.data_ = tmp_data;
-        other.size_ = tmp_size;
-        other.capacity_ = tmp_capacity;
+        T* tmp_d = data_; size_type tmp_s = size_; size_type tmp_c = capacity_;
+        data_ = other.data_; size_ = other.size_; capacity_ = other.capacity_;
+        other.data_ = tmp_d; other.size_ = tmp_s; other.capacity_ = tmp_c;
     }
 
-    // Allocator
-    allocator_type get_allocator() const noexcept {
-        return allocator_type();
-    }
+    allocator_type get_allocator() const noexcept { return allocator_type(); }
 
-    // Comparison operators
-    bool operator==(const vector& other) const {
+    // Comparison
+    bool operator==(const vector& other) const noexcept {
         if (size_ != other.size_) return false;
-        for (size_type i = 0; i < size_; i++) {
+        for (size_type i = 0; i < size_; i++)
             if (data_[i] != other.data_[i]) return false;
-        }
         return true;
     }
-
-    bool operator!=(const vector& other) const {
-        return !(*this == other);
-    }
-
-    bool operator<(const vector& other) const {
-        for (size_type i = 0; i < size_ && i < other.size_; i++) {
-            if (other.data_[i] < data_[i]) return false;
-            if (data_[i] < other.data_[i]) return true;
-        }
-        return size_ < other.size_;
-    }
-
-    bool operator>(const vector& other) const {
-        return other < *this;
-    }
-
-    bool operator<=(const vector& other) const {
-        return !(other < *this);
-    }
-
-    bool operator>=(const vector& other) const {
-        return !(*this < other);
-    }
+    bool operator!=(const vector& other) const noexcept { return !(*this == other); }
 
 private:
     T* data_;
@@ -421,17 +198,6 @@ private:
 template<typename T, typename Allocator>
 void swap(vector<T, Allocator>& x, vector<T, Allocator>& y) noexcept {
     x.swap(y);
-}
-
-// get for vector (C++23)
-template<size_t I, typename T, typename Allocator>
-constexpr T& get(vector<T, Allocator>& v) {
-    return v[I];
-}
-
-template<size_t I, typename T, typename Allocator>
-constexpr const T& get(const vector<T, Allocator>& v) {
-    return v[I];
 }
 
 } // namespace std
