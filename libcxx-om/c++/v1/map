@@ -1,0 +1,336 @@
+// Operational Model: <map>
+// Simplified C++ header for std::map and std::multimap
+
+#ifndef _LIBCXX_OM_MAP
+#define _LIBCXX_OM_MAP
+
+#include <stddef.h>
+
+namespace std {
+
+// map - simplified ordered associative container
+template<typename Key, typename T, typename Compare = less<Key>, typename Allocator = allocator<pair<const Key, T>>>
+class map {
+public:
+    typedef Key key_type;
+    typedef T mapped_type;
+    typedef pair<const Key, T> value_type;
+    typedef Compare key_compare;
+    typedef Allocator allocator_type;
+    typedef size_t size_type;
+    typedef ptrdiff_t difference_type;
+    typedef value_type& reference;
+    typedef const value_type& const_reference;
+    typedef value_type* pointer;
+    typedef const value_type* const_pointer;
+
+    // Iterator - simplified
+    struct iterator {
+        value_type* ptr;
+        iterator(value_type* p = nullptr) : ptr(p) {}
+        value_type& operator*() const { return *ptr; }
+        value_type* operator->() const { return ptr; }
+        iterator& operator++() { ptr++; return *this; }
+        iterator& operator--() { ptr--; return *this; }
+        bool operator==(const iterator& other) const { return ptr == other.ptr; }
+        bool operator!=(const iterator& other) const { return ptr != other.ptr; }
+    };
+
+    struct const_iterator {
+        const value_type* ptr;
+        const_iterator(const value_type* p = nullptr) : ptr(p) {}
+        const_iterator(iterator it) : ptr(it.ptr) {}
+        const value_type& operator*() const { return *ptr; }
+        const value_type* operator->() const { return ptr; }
+        const_iterator& operator++() { ptr++; return *this; }
+        const_iterator& operator--() { ptr--; return *this; }
+        bool operator==(const const_iterator& other) const { return ptr == other.ptr; }
+        bool operator!=(const const_iterator& other) const { return ptr != other.ptr; }
+    };
+
+    static constexpr size_t MAX_SIZE = 64;
+
+    // Constructors
+    map() : data_(nullptr), size_(0) {}
+
+    map(const map& other) : data_(nullptr), size_(0) {
+        for (size_type i = 0; i < other.size_; i++) {
+            insert(other.data_[i]);
+        }
+    }
+
+    map(map&& other) noexcept : data_(other.data_), size_(other.size_) {
+        other.data_ = nullptr;
+        other.size_ = 0;
+    }
+
+    ~map() {
+        if (data_) delete[] data_;
+    }
+
+    // Assignment
+    map& operator=(const map& other) {
+        if (this != &other) {
+            clear();
+            for (size_type i = 0; i < other.size_; i++) {
+                insert(other.data_[i]);
+            }
+        }
+        return *this;
+    }
+
+    map& operator=(map&& other) noexcept {
+        if (this != &other) {
+            if (data_) delete[] data_;
+            data_ = other.data_;
+            size_ = other.size_;
+            other.data_ = nullptr;
+            other.size_ = 0;
+        }
+        return *this;
+    }
+
+    // Iterators
+    iterator begin() noexcept { return iterator(data_); }
+    iterator end() noexcept { return iterator(data_ + size_); }
+    const_iterator begin() const noexcept { return const_iterator(data_); }
+    const_iterator end() const noexcept { return const_iterator(data_ + size_); }
+    const_iterator cbegin() const noexcept { return const_iterator(data_); }
+    const_iterator cend() const noexcept { return const_iterator(data_ + size_); }
+
+    // Capacity
+    size_type size() const noexcept { return size_; }
+    size_type max_size() const noexcept { return MAX_SIZE; }
+    bool empty() const noexcept { return size_ == 0; }
+
+    // Element access
+    T& operator[](const Key& key) {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == key) return data_[i].second;
+        }
+        // Insert new element
+        if (size_ < MAX_SIZE) {
+            value_type* new_data = new value_type[size_ + 1];
+            if (data_) {
+                for (size_type i = 0; i < size_; i++) new_data[i] = data_[i];
+                delete[] data_;
+            }
+            new_data[size_] = value_type(key, T());
+            data_ = new_data;
+            size_++;
+            return data_[size_ - 1].second;
+        }
+        __VERIFIER_error();
+        return data_[0].second;
+    }
+
+    const T& at(const Key& key) const {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == key) return data_[i].second;
+        }
+        __VERIFIER_error();
+        return data_[0].second;
+    }
+
+    T& at(const Key& key) {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == key) return data_[i].second;
+        }
+        __VERIFIER_error();
+        return data_[0].second;
+    }
+
+    // Modifiers
+    pair<iterator, bool> insert(const value_type& value) {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == value.first) return pair<iterator, bool>(iterator(data_ + i), false);
+        }
+        if (size_ < MAX_SIZE) {
+            value_type* new_data = new value_type[size_ + 1];
+            if (data_) {
+                for (size_type i = 0; i < size_; i++) new_data[i] = data_[i];
+                delete[] data_;
+            }
+            new_data[size_] = value;
+            data_ = new_data;
+            size_++;
+            return pair<iterator, bool>(iterator(data_ + size_ - 1), true);
+        }
+        __VERIFIER_error();
+        return pair<iterator, bool>(iterator(data_), false);
+    }
+
+    iterator insert(iterator hint, const value_type& value) {
+        (void)hint;
+        return insert(value).first;
+    }
+
+    pair<iterator, bool> insert(value_type&& value) {
+        return insert(value_type(value));
+    }
+
+    void insert(initializer_list<value_type> il) {
+        for (auto it = il.begin(); it != il.end(); ++it) {
+            insert(*it);
+        }
+    }
+
+    iterator erase(iterator pos) {
+        size_type idx = pos.ptr - data_;
+        for (size_type i = idx; i < size_ - 1; i++) {
+            data_[i] = data_[i + 1];
+        }
+        size_--;
+        return iterator(data_ + idx);
+    }
+
+    size_type erase(const Key& key) {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == key) {
+                for (size_type j = i; j < size_ - 1; j++) {
+                    data_[j] = data_[j + 1];
+                }
+                size_--;
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    void clear() noexcept {
+        if (data_) delete[] data_;
+        data_ = nullptr;
+        size_ = 0;
+    }
+
+    void swap(map& other) noexcept {
+        value_type* tmp_data = data_;
+        size_type tmp_size = size_;
+        data_ = other.data_;
+        size_ = other.size_;
+        other.data_ = tmp_data;
+        other.size_ = tmp_size;
+    }
+
+    // Lookup
+    size_type count(const Key& key) const {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == key) return 1;
+        }
+        return 0;
+    }
+
+    iterator find(const Key& key) {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == key) return iterator(data_ + i);
+        }
+        return end();
+    }
+
+    const_iterator find(const Key& key) const {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == key) return const_iterator(data_ + i);
+        }
+        return end();
+    }
+
+    pair<iterator, iterator> equal_range(const Key& key) {
+        iterator it = find(key);
+        if (it == end()) {
+            return pair<iterator, iterator>(it, it);
+        }
+        return pair<iterator, iterator>(it, iterator(it.ptr + 1));
+    }
+
+    pair<const_iterator, const_iterator> equal_range(const Key& key) const {
+        const_iterator it = find(key);
+        if (it == end()) {
+            return pair<const_iterator, const_iterator>(it, it);
+        }
+        return pair<const_iterator, const_iterator>(it, const_iterator(it.ptr + 1));
+    }
+
+    iterator lower_bound(const Key& key) {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first >= key) return iterator(data_ + i);
+        }
+        return end();
+    }
+
+    iterator upper_bound(const Key& key) {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first > key) return iterator(data_ + i);
+        }
+        return end();
+    }
+
+    // Observers
+    key_compare key_comp() const { return key_compare(); }
+    key_compare value_comp() const { return key_compare(); }
+    allocator_type get_allocator() const { return allocator_type(); }
+
+    // Comparison
+    bool operator==(const map& other) const {
+        if (size_ != other.size_) return false;
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i] != other.data_[i]) return false;
+        }
+        return true;
+    }
+
+    bool operator!=(const map& other) const { return !(*this == other); }
+    bool operator<(const map& other) const { return lexicographical_compare(begin(), end(), other.begin(), other.end()); }
+    bool operator>(const map& other) const { return other < *this; }
+    bool operator<=(const map& other) const { return !(other < *this); }
+    bool operator>=(const map& other) const { return !(*this < other); }
+
+private:
+    value_type* data_;
+    size_type size_;
+};
+
+// Non-member swap
+template<typename Key, typename T, typename Compare, typename Allocator>
+void swap(map<Key, T, Compare, Allocator>& x, map<Key, T, Compare, Allocator>& y) noexcept {
+    x.swap(y);
+}
+
+// less - default comparator
+template<typename T>
+struct less {
+    bool operator()(const T& x, const T& y) const { return x < y; }
+};
+
+// greater
+template<typename T>
+struct greater {
+    bool operator()(const T& x, const T& y) const { return x > y; }
+};
+
+// equal_to
+template<typename T>
+struct equal_to {
+    bool operator()(const T& x, const T& y) const { return x == y; }
+};
+
+// not_equal_to
+template<typename T>
+struct not_equal_to {
+    bool operator()(const T& x, const T& y) const { return x != y; }
+};
+
+// less_equal
+template<typename T>
+struct less_equal {
+    bool operator()(const T& x, const T& y) const { return x <= y; }
+};
+
+// greater_equal
+template<typename T>
+struct greater_equal {
+    bool operator()(const T& x, const T& y) const { return x >= y; }
+};
+
+} // namespace std
+
+#endif // _LIBCXX_OM_MAP
