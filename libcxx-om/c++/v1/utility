@@ -1,0 +1,646 @@
+// Operational Model: <utility>
+// Simplified C++ header for utility types and functions
+
+#ifndef _LIBCXX_OM_UTILITY
+#define _LIBCXX_OM_UTILITY
+
+namespace std {
+
+// pair - simple key-value pair
+template<typename T1, typename T2>
+struct pair {
+    T1 first;
+    T2 second;
+
+    pair() : first(), second() {}
+    pair(const T1& a, const T2& b) : first(a), second(b) {}
+
+    bool operator==(const pair& other) const {
+        return first == other.first && second == other.second;
+    }
+
+    bool operator!=(const pair& other) const {
+        return !(*this == other);
+    }
+
+    bool operator<(const pair& other) const {
+        if (first < other.first) return true;
+        if (other.first < first) return false;
+        return second < other.second;
+    }
+
+    bool operator>(const pair& other) const {
+        return other < *this;
+    }
+
+    bool operator<=(const pair& other) const {
+        return !(other < *this);
+    }
+
+    bool operator>=(const pair& other) const {
+        return !(*this < other);
+    }
+};
+
+template<typename T1, typename T2>
+pair<T1, T2> make_pair(const T1& a, const T2& b) {
+    return pair<T1, T2>(a, b);
+}
+
+// swap - exchange two values
+template<typename T>
+inline void swap(T& a, T& b) {
+    T tmp = a;
+    a = b;
+    b = tmp;
+}
+
+// move - cast to rvalue reference (simplified)
+template<typename T>
+inline T&& move(T& a) {
+    return (T&&)a;
+}
+
+// forward - perfect forwarding (simplified)
+template<typename T>
+inline T&& forward(typename std::remove_reference<T>::type& a) {
+    return (T&&)a;
+}
+
+// reference_wrapper - simplified
+template<typename T>
+struct reference_wrapper {
+    T* ptr;
+
+    reference_wrapper(T& val) : ptr(&val) {}
+
+    operator T&() const { return *ptr; }
+    T& get() const { return *ptr; }
+    T& operator()() const { return *ptr; }
+};
+
+// remove_reference - type trait
+template<typename T>
+struct remove_reference {
+    typedef T type;
+};
+
+template<typename T>
+struct remove_reference<T&> {
+    typedef T type;
+};
+
+template<typename T>
+struct remove_reference<T&&> {
+    typedef T type;
+};
+
+// add_lvalue_reference
+template<typename T>
+struct add_lvalue_reference {
+    typedef T& type;
+};
+
+// add_rvalue_reference
+template<typename T>
+struct add_rvalue_reference {
+    typedef T&& type;
+};
+
+// is_same - type trait
+template<typename T, typename U>
+struct is_same {
+    static constexpr bool value = false;
+};
+
+template<typename T>
+struct is_same<T, T> {
+    static constexpr bool value = true;
+};
+
+// is_reference
+template<typename T>
+struct is_reference {
+    static constexpr bool value = false;
+};
+
+template<typename T>
+struct is_reference<T&> {
+    static constexpr bool value = true;
+};
+
+template<typename T>
+struct is_reference<T&&> {
+    static constexpr bool value = true;
+};
+
+// is_const
+template<typename T>
+struct is_const {
+    static constexpr bool value = false;
+};
+
+template<typename T>
+struct is_const<const T> {
+    static constexpr bool value = true;
+};
+
+// is_volatile
+template<typename T>
+struct is_volatile {
+    static constexpr bool value = false;
+};
+
+template<typename T>
+struct is_volatile<volatile T> {
+    static constexpr bool value = true;
+};
+
+// is_pointer
+template<typename T>
+struct is_pointer {
+    static constexpr bool value = false;
+};
+
+template<typename T>
+struct is_pointer<T*> {
+    static constexpr bool value = true;
+};
+
+// is_integral
+template<typename T>
+struct is_integral {
+    static constexpr bool value = false;
+};
+
+template<> struct is_integral<bool> { static constexpr bool value = true; };
+template<> struct is_integral<char> { static constexpr bool value = true; };
+template<> struct is_integral<signed char> { static constexpr bool value = true; };
+template<> struct is_integral<unsigned char> { static constexpr bool value = true; };
+template<> struct is_integral<short> { static constexpr bool value = true; };
+template<> struct is_integral<unsigned short> { static constexpr bool value = true; };
+template<> struct is_integral<int> { static constexpr bool value = true; };
+template<> struct is_integral<unsigned int> { static constexpr bool value = true; };
+template<> struct is_integral<long> { static constexpr bool value = true; };
+template<> struct is_integral<unsigned long> { static constexpr bool value = true; };
+template<> struct is_integral<long long> { static constexpr bool value = true; };
+template<> struct is_integral<unsigned long long> { static constexpr bool value = true; };
+
+// is_floating_point
+template<typename T>
+struct is_floating_point {
+    static constexpr bool value = false;
+};
+
+template<> struct is_floating_point<float> { static constexpr bool value = true; };
+template<> struct is_floating_point<double> { static constexpr bool value = true; };
+template<> struct is_floating_point<long double> { static constexpr bool value = true; };
+
+// is_arithmetic
+template<typename T>
+struct is_arithmetic {
+    static constexpr bool value = is_integral<T>::value || is_floating_point<T>::value;
+};
+
+// is_class
+template<typename T>
+struct is_class {
+    static constexpr bool value = false;
+};
+
+// is_enum
+template<typename T>
+struct is_enum {
+    static constexpr bool value = false;
+};
+
+// is_void
+template<typename T>
+struct is_void {
+    static constexpr bool value = false;
+};
+
+template<> struct is_void<void> { static constexpr bool value = true; };
+
+// is_null_pointer
+template<typename T>
+struct is_null_pointer {
+    static constexpr bool value = false;
+};
+
+// is_array
+template<typename T>
+struct is_array {
+    static constexpr bool value = false;
+};
+
+template<typename T, std::size_t N>
+struct is_array<T[N]> {
+    static constexpr bool value = true;
+};
+
+// is_reference_wrapper
+template<typename T>
+struct is_reference_wrapper {
+    static constexpr bool value = false;
+};
+
+template<typename T>
+struct is_reference_wrapper<reference_wrapper<T>> {
+    static constexpr bool value = true;
+};
+
+// is_nothrow_default_constructible
+template<typename T>
+struct is_nothrow_default_constructible {
+    static constexpr bool value = true;
+};
+
+// is_nothrow_copy_constructible
+template<typename T>
+struct is_nothrow_copy_constructible {
+    static constexpr bool value = true;
+};
+
+// is_nothrow_move_constructible
+template<typename T>
+struct is_nothrow_move_constructible {
+    static constexpr bool value = true;
+};
+
+// is_copy_assignable
+template<typename T>
+struct is_copy_assignable {
+    static constexpr bool value = true;
+};
+
+// is_move_assignable
+template<typename T>
+struct is_move_assignable {
+    static constexpr bool value = true;
+};
+
+// is_destructible
+template<typename T>
+struct is_destructible {
+    static constexpr bool value = true;
+};
+
+// is_constructible
+template<typename T, typename... Args>
+struct is_constructible {
+    static constexpr bool value = true;
+};
+
+// is_assignable
+template<typename T, typename U>
+struct is_assignable {
+    static constexpr bool value = true;
+};
+
+// is_convertible
+template<typename From, typename To>
+struct is_convertible {
+    static constexpr bool value = true;
+};
+
+// is_base_of
+template<typename Base, typename Derived>
+struct is_base_of {
+    static constexpr bool value = false;
+};
+
+// is_pod
+template<typename T>
+struct is_pod {
+    static constexpr bool value = is_trivial<T>::value && is_standard_layout<T>::value;
+};
+
+// is_trivial
+template<typename T>
+struct is_trivial {
+    static constexpr bool value = true;
+};
+
+// is_standard_layout
+template<typename T>
+struct is_standard_layout {
+    static constexpr bool value = true;
+};
+
+// is_trivially_copyable
+template<typename T>
+struct is_trivially_copyable {
+    static constexpr bool value = true;
+};
+
+// is_trivially_default_constructible
+template<typename T>
+struct is_trivially_default_constructible {
+    static constexpr bool value = true;
+};
+
+// is_trivially_copy_constructible
+template<typename T>
+struct is_trivially_copy_constructible {
+    static constexpr bool value = true;
+};
+
+// is_trivially_move_constructible
+template<typename T>
+struct is_trivially_move_constructible {
+    static constexpr bool value = true;
+};
+
+// is_empty
+template<typename T>
+struct is_empty {
+    static constexpr bool value = false;
+};
+
+// is_polymorphic
+template<typename T>
+struct is_polymorphic {
+    static constexpr bool value = false;
+};
+
+// is_final
+template<typename T>
+struct is_final {
+    static constexpr bool value = false;
+};
+
+// is_signed
+template<typename T>
+struct is_signed {
+    static constexpr bool value = false;
+};
+
+template<> struct is_signed<signed char> { static constexpr bool value = true; };
+template<> struct is_signed<short> { static constexpr bool value = true; };
+template<> struct is_signed<int> { static constexpr bool value = true; };
+template<> struct is_signed<long> { static constexpr bool value = true; };
+template<> struct is_signed<long long> { static constexpr bool value = true; };
+template<> struct is_signed<float> { static constexpr bool value = true; };
+template<> struct is_signed<double> { static constexpr bool value = true; };
+template<> struct is_signed<long double> { static constexpr bool value = true; };
+
+// is_unsigned
+template<typename T>
+struct is_unsigned {
+    static constexpr bool value = false;
+};
+
+template<> struct is_unsigned<bool> { static constexpr bool value = true; };
+template<> struct is_unsigned<unsigned char> { static constexpr bool value = true; };
+template<> struct is_unsigned<unsigned short> { static constexpr bool value = true; };
+template<> struct is_unsigned<unsigned int> { static constexpr bool value = true; };
+template<> struct is_unsigned<unsigned long> { static constexpr bool value = true; };
+template<> struct is_unsigned<unsigned long long> { static constexpr bool value = true; };
+
+// enable_if
+template<bool B, class T = void>
+struct enable_if {};
+
+template<class T>
+struct enable_if<true, T> {
+    typedef T type;
+};
+
+// conditional
+template<bool B, class T, class F>
+struct conditional {
+    typedef T type;
+};
+
+template<class T, class F>
+struct conditional<false, T, F> {
+    typedef F type;
+};
+
+// integral_constant
+template<class T, T v>
+struct integral_constant {
+    static constexpr T value = v;
+    typedef T value_type;
+    typedef integral_constant<T, v> type;
+    constexpr operator value_type() const { return value; }
+    constexpr value_type operator()() const { return value; }
+};
+
+typedef integral_constant<bool, true> true_type;
+typedef integral_constant<bool, false> false_type;
+
+// declval
+template<typename T>
+T&& declval() noexcept;
+
+// result_of (simplified)
+template<typename Sig>
+struct result_of;
+
+// invoke_result (simplified)
+template<typename Sig>
+struct invoke_result;
+
+// void_t (C++17)
+template<typename...>
+using void_t = void;
+
+// underlying_type
+template<typename T>
+struct underlying_type {};
+
+// alignment_of
+template<typename T>
+struct alignment_of {
+    static constexpr std::size_t value = alignof(T);
+};
+
+// rank
+template<typename T>
+struct rank {
+    static constexpr std::size_t value = 0;
+};
+
+template<typename T, std::size_t N>
+struct rank<T[N]> {
+    static constexpr std::size_t value = 1 + rank<T>::value;
+};
+
+// extent
+template<typename T, std::size_t I = 0>
+struct extent {
+    static constexpr std::size_t value = 0;
+};
+
+template<typename T, std::size_t N, std::size_t I>
+struct extent<T[N], I> {
+    static constexpr std::size_t value = extent<T, I - 1>::value;
+};
+
+template<typename T, std::size_t N>
+struct extent<T[N], 0> {
+    static constexpr std::size_t value = N;
+};
+
+// remove_cv
+template<typename T>
+struct remove_cv { typedef T type; };
+template<typename T>
+struct remove_cv<const T> { typedef T type; };
+template<typename T>
+struct remove_cv<volatile T> { typedef T type; };
+template<typename T>
+struct remove_cv<const volatile T> { typedef T type; };
+
+// remove_const
+template<typename T>
+struct remove_const { typedef T type; };
+template<typename T>
+struct remove_const<const T> { typedef T type; };
+
+// remove_volatile
+template<typename T>
+struct remove_volatile { typedef T type; };
+template<typename T>
+struct remove_volatile<volatile T> { typedef T type; };
+
+// remove_pointer
+template<typename T>
+struct remove_pointer { typedef T type; };
+template<typename T>
+struct remove_pointer<T*> { typedef T type; };
+template<typename T>
+struct remove_pointer<T* const> { typedef T type; };
+template<typename T>
+struct remove_pointer<T* volatile> { typedef T type; };
+template<typename T>
+struct remove_pointer<T* const volatile> { typedef T type; };
+
+// remove_extent
+template<typename T>
+struct remove_extent { typedef T type; };
+template<typename T, std::size_t N>
+struct remove_extent<T[N]> { typedef T type; };
+
+// remove_all_extents
+template<typename T>
+struct remove_all_extents { typedef T type; };
+template<typename T, std::size_t N>
+struct remove_all_extents<T[N]> { typedef typename remove_all_extents<T>::type type; };
+
+// add_pointer
+template<typename T>
+struct add_pointer { typedef T* type; };
+template<typename T>
+struct add_pointer<T&> { typedef T* type; };
+template<typename T>
+struct add_pointer<T&&> { typedef T* type; };
+
+// add_const
+template<typename T>
+struct add_const { typedef const T type; };
+template<typename T>
+struct add_const<const T> { typedef const T type; };
+
+// add_volatile
+template<typename T>
+struct add_volatile { typedef volatile T type; };
+template<typename T>
+struct add_volatile<volatile T> { typedef volatile T type; };
+
+// add_cv
+template<typename T>
+struct add_cv { typedef const volatile T type; };
+template<typename T>
+struct add_cv<const T> { typedef const volatile T type; };
+template<typename T>
+struct add_cv<volatile T> { typedef const volatile T type; };
+template<typename T>
+struct add_cv<const volatile T> { typedef const volatile T type; };
+
+// add_rvalue_reference
+template<typename T>
+struct add_rvalue_reference { typedef T&& type; };
+template<typename T>
+struct add_rvalue_reference<T&> { typedef T&& type; };
+
+// add_lvalue_reference
+template<typename T>
+struct add_lvalue_reference { typedef T& type; };
+template<typename T>
+struct add_lvalue_reference<T&> { typedef T& type; };
+
+// type_identity
+template<typename T>
+struct type_identity { typedef T type; };
+
+// underlying_type (for enums)
+template<typename T>
+struct underlying_type { typedef int type; };
+
+// alignment_of
+template<typename... T>
+struct alignment_of {
+    static constexpr std::size_t value = 8;
+};
+
+// aligned_union
+template<std::size_t Len, typename... T>
+struct aligned_union {
+    static constexpr std::size_t alignment_value = 8;
+    struct type {
+        unsigned char __data[Len];
+    };
+};
+
+// aligned_storage
+template<std::size_t Len, std::size_t Align = alignof(max_align_t)>
+struct aligned_storage {
+    struct type {
+        alignas(Align) unsigned char __data[Len];
+    };
+};
+
+// max_align_t
+struct max_align_t {
+    double __data;
+};
+
+// common_type
+template<typename... T>
+struct common_type { typedef int type; };
+
+template<typename T>
+struct common_type<T> { typedef T type; };
+
+template<typename T, typename U>
+struct common_type<T, U> {
+    typedef decltype(true ? std::declval<T>() : std::declval<U>()) type;
+};
+
+// result_of (simplified)
+template<typename Sig>
+struct result_of {
+    typedef void type;
+};
+
+// decay
+template<typename T>
+struct decay {
+    typedef typename std::remove_reference<T>::type tmp;
+    typedef typename std::remove_cv<typename std::remove_reference<T>::type>::type type;
+};
+
+// swap for arrays
+template<typename T, std::size_t N>
+inline void swap(T (&a)[N], T (&b)[N]) {
+    for (std::size_t i = 0; i < N; i++) {
+        swap(a[i], b[i]);
+    }
+}
+
+} // namespace std
+
+#endif // _LIBCXX_OM_UTILITY

@@ -1,0 +1,27 @@
+// Operational Model: <cassert>
+// Simplified C++ header for assertion support in verification
+
+#ifndef _LIBCXX_OM_CASSERT
+#define _LIBCXX_OM_CASSERT
+
+namespace std {
+
+// Theta verification intrinsics
+__attribute__((noreturn)) inline void __VERIFIER_error() {
+    __builtin_unreachable();
+}
+
+// assert implementation - calls __VERIFIER_error on failure
+inline void om_assert_impl(int condition) {
+    if (!condition) {
+        __VERIFIER_error();
+    }
+}
+
+} // namespace std
+
+// Provide the assert macro
+#undef assert
+#define assert(expr) std::om_assert_impl((expr))
+
+#endif // _LIBCXX_OM_CASSERT
