@@ -1,0 +1,98 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <ctime>
+// Simplified time functions for verification
+
+#ifndef _LIBCXX_OM_CTIME
+#define _LIBCXX_OM_CTIME
+
+#include <time.h>
+
+namespace std {
+
+// Time types — aliases for C types
+typedef ::time_t time_t;
+typedef ::clock_t clock_t;
+
+// time() — returns current time (nondeterministic for verification)
+inline time_t time(time_t* timer) {
+    time_t t = (time_t)__VERIFIER_nondet_int();
+    if (timer) *timer = t;
+    return t;
+}
+
+// clock() — returns processor time (nondeterministic for verification)
+inline clock_t clock(void) {
+    return (clock_t)__VERIFIER_nondet_int();
+}
+
+// ctime() — converts time to string (simplified)
+inline char* ctime(const time_t* timer) {
+    static char buf[26] = "Thu Jan  1 00:00:00 1970\n";
+    (void)timer;
+    return buf;
+}
+
+// gmtime() — converts time to UTC (simplified)
+inline tm* gmtime(const time_t* timer) {
+    static tm tm_val = {};
+    (void)timer;
+    return &tm_val;
+}
+
+// localtime() — converts time to local time (simplified)
+inline tm* localtime(const time_t* timer) {
+    static tm tm_val = {};
+    (void)timer;
+    return &tm_val;
+}
+
+// mktime() — converts tm to time_t (simplified)
+inline time_t mktime(tm* tm_val) {
+    (void)tm_val;
+    return (time_t)__VERIFIER_nondet_int();
+}
+
+// difftime() — computes time difference
+inline double difftime(time_t time1, time_t time0) {
+    return (double)(time1 - time0);
+}
+
+// strftime() — formats time into string (simplified)
+inline size_t strftime(char* s, size_t maxsize, const char* format, const tm* tm) {
+    (void)s; (void)maxsize; (void)format; (void)tm;
+    return 0;
+}
+
+// time_get and time_put facets (simplified — no default template args to avoid streambuf dependency)
+template<typename CharT, typename InputIt>
+class time_get {
+public:
+    time_get(size_t refs = 0) : refs_(refs) {}
+    size_t refs_ = 0;
+};
+
+template<typename CharT, typename OutputIt>
+class time_put {
+public:
+    time_put(size_t refs = 0) : refs_(refs) {}
+    size_t refs_ = 0;
+};
+
+} // namespace std
+
+#endif // _LIBCXX_OM_CTIME

@@ -1,0 +1,468 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <limits>
+// Simplified std::numeric_limits for verification — covers common types
+
+#ifndef _LIBCXX_OM_LIMITS
+#define _LIBCXX_OM_LIMITS
+
+namespace std {
+
+// Floating-point style enums used by numeric_limits
+enum float_denorm_style {
+    denorm_indeterminate = -1,
+    denorm_absent = 0,
+    denorm_present = 1
+};
+
+enum float_round_style {
+    round_indeterminate = -1,
+    round_toward_zero = 0,
+    round_to_nearest = 1,
+    round_toward_infinity = 2,
+    round_toward_neg_infinity = 3
+};
+
+// Primary template — all specializations are below
+template<typename T>
+struct numeric_limits {
+    static constexpr bool is_specialized = false;
+    static constexpr bool is_integer = false;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_exact = false;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_denorm = false;
+    static constexpr int digits = 0;
+    static constexpr int digits10 = 0;
+    static constexpr int max_digits10 = 0;
+    static constexpr int decimal_digits = 0;
+    static constexpr int min_exponent = 0;
+    static constexpr int min_exponent10 = 0;
+    static constexpr int max_exponent = 0;
+    static constexpr int max_exponent10 = 0;
+    static constexpr bool is_bounded = false;
+    static constexpr bool is_modulo = false;
+    static constexpr bool traps = false;
+    static constexpr bool tinyness_before = false;
+    static constexpr float_denorm_style has_denorm_loss = float_denorm_style::denorm_absent;
+    static T lowest() { return T(); }
+    static T min() { return T(); }
+    static T max() { return T(); }
+    static T epsilon() { return T(); }
+    static T round_error() { return T(); }
+    static T infinity() { return T(); }
+    static T quiet_NaN() { return T(); }
+    static T signal_NaN() { return T(); }
+    static T denorm_min() { return T(); }
+    static constexpr int radix = 0;
+    static constexpr float_round_style round_style = float_round_style();
+};
+
+// bool specialization
+template<>
+struct numeric_limits<bool> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = true;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_exact = true;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_denorm = false;
+    static constexpr int digits = 1;
+    static constexpr int digits10 = 0;
+    static constexpr int max_digits10 = 0;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = false;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static bool min() noexcept { return false; }
+    static bool max() noexcept { return true; }
+    static bool lowest() noexcept { return false; }
+};
+
+// char specialization
+template<>
+struct numeric_limits<char> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = true;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_exact = true;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_denorm = false;
+    static constexpr int digits = 8;
+    static constexpr int digits10 = 2;
+    static constexpr int max_digits10 = 0;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = true;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static char min() noexcept { return 0; }
+    static char max() noexcept { return static_cast<char>(255); }
+    static char lowest() noexcept { return 0; }
+};
+
+// signed char specialization
+template<>
+struct numeric_limits<signed char> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = true;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_exact = true;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_denorm = false;
+    static constexpr int digits = 7;
+    static constexpr int digits10 = 2;
+    static constexpr int max_digits10 = 0;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = true;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static signed char min() noexcept { return -128; }
+    static signed char max() noexcept { return 127; }
+    static signed char lowest() noexcept { return -128; }
+};
+
+// unsigned char specialization
+template<>
+struct numeric_limits<unsigned char> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = true;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_exact = true;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_denorm = false;
+    static constexpr int digits = 8;
+    static constexpr int digits10 = 2;
+    static constexpr int max_digits10 = 0;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = true;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static unsigned char min() noexcept { return 0; }
+    static unsigned char max() noexcept { return 255; }
+    static unsigned char lowest() noexcept { return 0; }
+};
+
+// short specialization
+template<>
+struct numeric_limits<short> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = true;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_exact = true;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_denorm = false;
+    static constexpr int digits = 15;
+    static constexpr int digits10 = 4;
+    static constexpr int max_digits10 = 0;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = true;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static short min() noexcept { return -32768; }
+    static short max() noexcept { return 32767; }
+    static short lowest() noexcept { return -32768; }
+};
+
+// unsigned short specialization
+template<>
+struct numeric_limits<unsigned short> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = true;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_exact = true;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_denorm = false;
+    static constexpr int digits = 16;
+    static constexpr int digits10 = 4;
+    static constexpr int max_digits10 = 0;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = true;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static unsigned short min() noexcept { return 0; }
+    static unsigned short max() noexcept { return 65535; }
+    static unsigned short lowest() noexcept { return 0; }
+};
+
+// int specialization
+template<>
+struct numeric_limits<int> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = true;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_exact = true;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_denorm = false;
+    static constexpr int digits = 31;
+    static constexpr int digits10 = 9;
+    static constexpr int max_digits10 = 0;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = true;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static int min() noexcept { return -2147483648; }
+    static int max() noexcept { return 2147483647; }
+    static int lowest() noexcept { return -2147483648; }
+};
+
+// unsigned int specialization
+template<>
+struct numeric_limits<unsigned int> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = true;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_exact = true;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_denorm = false;
+    static constexpr int digits = 32;
+    static constexpr int digits10 = 9;
+    static constexpr int max_digits10 = 0;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = true;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static unsigned int min() noexcept { return 0; }
+    static unsigned int max() noexcept { return 4294967295U; }
+    static unsigned int lowest() noexcept { return 0; }
+};
+
+// long specialization
+template<>
+struct numeric_limits<long> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = true;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_exact = true;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_denorm = false;
+    static constexpr int digits = 63;
+    static constexpr int digits10 = 18;
+    static constexpr int max_digits10 = 0;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = true;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static long min() noexcept { return -9223372036854775807L - 1; }
+    static long max() noexcept { return 9223372036854775807L; }
+    static long lowest() noexcept { return -9223372036854775807L - 1; }
+};
+
+// unsigned long specialization
+template<>
+struct numeric_limits<unsigned long> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = true;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_exact = true;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_denorm = false;
+    static constexpr int digits = 64;
+    static constexpr int digits10 = 19;
+    static constexpr int max_digits10 = 0;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = true;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static unsigned long min() noexcept { return 0UL; }
+    static unsigned long max() noexcept { return 18446744073709551615UL; }
+    static unsigned long lowest() noexcept { return 0UL; }
+};
+
+// long long specialization
+template<>
+struct numeric_limits<long long> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = true;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_exact = true;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_denorm = false;
+    static constexpr int digits = 63;
+    static constexpr int digits10 = 18;
+    static constexpr int max_digits10 = 0;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = true;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static long long min() noexcept { return -9223372036854775807LL - 1; }
+    static long long max() noexcept { return 9223372036854775807LL; }
+    static long long lowest() noexcept { return -9223372036854775807LL - 1; }
+};
+
+// unsigned long long specialization
+template<>
+struct numeric_limits<unsigned long long> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = true;
+    static constexpr bool is_signed = false;
+    static constexpr bool is_exact = true;
+    static constexpr bool has_infinity = false;
+    static constexpr bool has_quiet_NaN = false;
+    static constexpr bool has_denorm = false;
+    static constexpr int digits = 64;
+    static constexpr int digits10 = 19;
+    static constexpr int max_digits10 = 0;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = true;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static unsigned long long min() noexcept { return 0ULL; }
+    static unsigned long long max() noexcept { return 18446744073709551615ULL; }
+    static unsigned long long lowest() noexcept { return 0ULL; }
+};
+
+// float specialization
+template<>
+struct numeric_limits<float> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = false;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_exact = false;
+    static constexpr bool has_infinity = true;
+    static constexpr bool has_quiet_NaN = true;
+    static constexpr bool has_denorm = true;
+    static constexpr int digits = 24;
+    static constexpr int digits10 = 6;
+    static constexpr int max_digits10 = 9;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = false;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr int min_exponent = -125;
+    static constexpr int max_exponent = 128;
+    static constexpr int min_exponent10 = -37;
+    static constexpr int max_exponent10 = 38;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static float min() noexcept { return 1.17549435e-38F; }
+    static float max() noexcept { return 3.40282347e+38F; }
+    static float lowest() noexcept { return -3.40282347e+38F; }
+    static float epsilon() noexcept { return 1.19209290e-07F; }
+    static float round_error() noexcept { return 0.5F; }
+    static float infinity() noexcept { return __builtin_huge_valf(); }
+    static float quiet_NaN() noexcept { return __builtin_nanf(""); }
+    static float signal_NaN() noexcept { return __builtin_nanf(""); }
+    static float denorm_min() noexcept { return 1.17549435e-38F; }
+};
+
+// double specialization
+template<>
+struct numeric_limits<double> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = false;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_exact = false;
+    static constexpr bool has_infinity = true;
+    static constexpr bool has_quiet_NaN = true;
+    static constexpr bool has_denorm = true;
+    static constexpr int digits = 53;
+    static constexpr int digits10 = 15;
+    static constexpr int max_digits10 = 17;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = false;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr int min_exponent = -1021;
+    static constexpr int max_exponent = 1024;
+    static constexpr int min_exponent10 = -307;
+    static constexpr int max_exponent10 = 308;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static double min() noexcept { return 2.2250738585072014e-308; }
+    static double max() noexcept { return 1.7976931348623157e+308; }
+    static double lowest() noexcept { return -1.7976931348623157e+308; }
+    static double epsilon() noexcept { return 2.2204460492503131e-016; }
+    static double round_error() noexcept { return 0.5; }
+    static double infinity() noexcept { return __builtin_huge_val(); }
+    static double quiet_NaN() noexcept { return __builtin_nan(""); }
+    static double signal_NaN() noexcept { return __builtin_nan(""); }
+    static double denorm_min() noexcept { return 2.2250738585072014e-308; }
+};
+
+// long double specialization
+template<>
+struct numeric_limits<long double> {
+    static constexpr bool is_specialized = true;
+    static constexpr bool is_integer = false;
+    static constexpr bool is_signed = true;
+    static constexpr bool is_exact = false;
+    static constexpr bool has_infinity = true;
+    static constexpr bool has_quiet_NaN = true;
+    static constexpr bool has_denorm = true;
+    static constexpr int digits = 64;
+    static constexpr int digits10 = 18;
+    static constexpr int max_digits10 = 21;
+    static constexpr bool is_bounded = true;
+    static constexpr bool is_modulo = false;
+    static constexpr bool traps = true;
+    static constexpr bool tinyness_before = false;
+    static constexpr int radix = 2;
+    static constexpr int min_exponent = -4950;
+    static constexpr int max_exponent = 4966;
+    static constexpr int min_exponent10 = -4930;
+    static constexpr int max_exponent10 = 4931;
+    static constexpr float_round_style round_style = float_round_style::round_to_nearest;
+    static long double min() noexcept { return 3.362103143493059e-4932L; }
+    static long double max() noexcept { return 1.18973149535723176e+4932L; }
+    static long double lowest() noexcept { return -1.18973149535723176e+4932L; }
+    static long double epsilon() noexcept { return 1.08420217248550443e-019L; }
+    static long double round_error() noexcept { return 0.5L; }
+    static long double infinity() noexcept { return __builtin_huge_vall(); }
+    static long double quiet_NaN() noexcept { return __builtin_nansl(""); }
+    static long double signal_NaN() noexcept { return __builtin_nansl(""); }
+    static long double denorm_min() noexcept { return 3.362103143493059e-4932L; }
+};
+
+} // namespace std
+
+#endif // _LIBCXX_OM_LIMITS

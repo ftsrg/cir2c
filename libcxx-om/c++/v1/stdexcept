@@ -1,0 +1,115 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <stdexcept>
+// Simplified standard exceptions for verification
+
+#ifndef _LIBCXX_OM_STDEXCEPT
+#define _LIBCXX_OM_STDEXCEPT
+
+namespace std {
+
+// logic_error — base for logical errors
+class logic_error : public exception {
+public:
+    explicit logic_error(const char* msg) : msg_(msg ? msg : "std::logic_error") {}
+    virtual const char* what() const noexcept override { return msg_; }
+private:
+    const char* msg_;
+};
+
+// domain_error — argument domain error
+class domain_error : public logic_error {
+public:
+    explicit domain_error(const char* msg) : logic_error(msg ? msg : "std::domain_error") {}
+};
+
+// invalid_argument — invalid argument
+class invalid_argument : public logic_error {
+public:
+    explicit invalid_argument(const char* msg) : logic_error(msg ? msg : "std::invalid_argument") {}
+};
+
+// length_error — length limit exceeded
+class length_error : public logic_error {
+public:
+    explicit length_error(const char* msg) : logic_error(msg ? msg : "std::length_error") {}
+};
+
+// out_of_range — out of range
+class out_of_range : public logic_error {
+public:
+    explicit out_of_range(const char* msg) : logic_error(msg ? msg : "std::out_of_range") {}
+};
+
+// runtime_error — base for runtime errors
+class runtime_error : public exception {
+public:
+    explicit runtime_error(const char* msg) : msg_(msg ? msg : "std::runtime_error") {}
+    virtual const char* what() const noexcept override { return msg_; }
+private:
+    const char* msg_;
+};
+
+// range_error — range error
+class range_error : public runtime_error {
+public:
+    explicit range_error(const char* msg) : runtime_error(msg ? msg : "std::range_error") {}
+};
+
+// overflow_error — overflow
+class overflow_error : public runtime_error {
+public:
+    explicit overflow_error(const char* msg) : runtime_error(msg ? msg : "std::overflow_error") {}
+};
+
+// underflow_error — underflow
+class underflow_error : public runtime_error {
+public:
+    explicit underflow_error(const char* msg) : runtime_error(msg ? msg : "std::underflow_error") {}
+};
+
+// bad_weak_ptr — bad weak pointer
+class bad_weak_ptr : public exception {
+public:
+    bad_weak_ptr() noexcept {}
+    virtual const char* what() const noexcept override { return "std::bad_weak_ptr"; }
+};
+
+// bad_function_call — bad function call
+class bad_function_call : public exception {
+public:
+    bad_function_call() noexcept {}
+    virtual const char* what() const noexcept override { return "std::bad_function_call"; }
+};
+
+// bad_alloc — bad allocation
+class bad_alloc : public exception {
+public:
+    bad_alloc() noexcept {}
+    virtual const char* what() const noexcept override { return "std::bad_alloc"; }
+};
+
+// bad_array_new_length — bad array new length
+class bad_array_new_length : public bad_alloc {
+public:
+    bad_array_new_length() noexcept {}
+    virtual const char* what() const noexcept override { return "std::bad_array_new_length"; }
+};
+
+} // namespace std
+
+#endif // _LIBCXX_OM_STDEXCEPT

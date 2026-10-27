@@ -1,0 +1,253 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <cstdlib>
+// Simplified C++ header for standard library functions
+
+#ifndef _LIBCXX_OM_CSTDLIB
+#define _LIBCXX_OM_CSTDLIB
+
+#include <stddef.h>
+
+namespace std {
+
+// Nondeterministic intrinsics for verification
+inline int __VERIFIER_nondet_int() {
+    int x;
+    x = __builtin_nondet_int();
+    return x;
+}
+
+inline long __VERIFIER_nondet_long() {
+    long x;
+    x = __builtin_nondet_long();
+    return x;
+}
+
+// abs - absolute value
+inline int abs(int x) {
+    return x < 0 ? -x : x;
+}
+
+inline long abs(long x) {
+    return x < 0 ? -x : x;
+}
+
+inline long long abs(long long x) {
+    return x < 0 ? -x : x;
+}
+
+// labs - long absolute value
+inline long labs(long x) {
+    return x < 0 ? -x : x;
+}
+
+// llabs - long long absolute value
+inline long long llabs(long long x) {
+    return x < 0 ? -x : x;
+}
+
+// div - integer division with remainder
+struct div_t {
+    int quot;
+    int rem;
+};
+
+struct ldiv_t {
+    long quot;
+    long rem;
+};
+
+struct lldiv_t {
+    long long quot;
+    long long rem;
+};
+
+inline div_t div(int numer, int denom) {
+    div_t result;
+    result.quot = numer / denom;
+    result.rem = numer % denom;
+    return result;
+}
+
+inline ldiv_t div(long numer, long denom) {
+    ldiv_t result;
+    result.quot = numer / denom;
+    result.rem = numer % denom;
+    return result;
+}
+
+inline lldiv_t div(long long numer, long long denom) {
+    lldiv_t result;
+    result.quot = numer / denom;
+    result.rem = numer % denom;
+    return result;
+}
+
+// rand - returns nondeterministic integer
+inline int rand() {
+    return __VERIFIER_nondet_int();
+}
+
+// srand - seed the random number generator (no-op in verification)
+inline void srand(unsigned int seed) {
+    // No-op for verification purposes
+}
+
+// malloc - allocate memory (nondeterministic pointer)
+inline void* malloc(size_t size) {
+    (void)size;
+    return __VERIFIER_nondet_ptr();
+}
+
+// free - deallocate memory (no-op in verification)
+inline void free(void* ptr) {
+    (void)ptr;
+    // No-op for verification purposes
+}
+
+// calloc - allocate zero-initialized memory
+inline void* calloc(size_t count, size_t size) {
+    (void)count;
+    (void)size;
+    return __VERIFIER_nondet_ptr();
+}
+
+// realloc - reallocate memory
+inline void* realloc(void* ptr, size_t size) {
+    (void)ptr;
+    (void)size;
+    return __VERIFIER_nondet_ptr();
+}
+
+// atoi - convert string to int (nondeterministic)
+inline int atoi(const char* str) {
+    (void)str;
+    return __VERIFIER_nondet_int();
+}
+
+// atol - convert string to long
+inline long atol(const char* str) {
+    (void)str;
+    return __VERIFIER_nondet_long();
+}
+
+// atoll - convert string to long long
+inline long long atoll(const char* str) {
+    (void)str;
+    long long x;
+    x = __builtin_nondet_llong();
+    return x;
+}
+
+// strtol - convert string to long
+inline long strtol(const char* nptr, char** endptr, int base) {
+    (void)nptr;
+    (void)endptr;
+    (void)base;
+    return __VERIFIER_nondet_long();
+}
+
+// strtoll - convert string to long long
+inline long long strtoll(const char* nptr, char** endptr, int base) {
+    (void)nptr;
+    (void)endptr;
+    (void)base;
+    long long x;
+    x = __builtin_nondet_llong();
+    return x;
+}
+
+// strtoul - convert string to unsigned long
+inline unsigned long strtoul(const char* nptr, char** endptr, int base) {
+    (void)nptr;
+    (void)endptr;
+    (void)base;
+    unsigned long x;
+    x = __builtin_nondet_ulong();
+    return x;
+}
+
+// strtod - convert string to double
+inline double strtod(const char* nptr, char** endptr) {
+    (void)nptr;
+    (void)endptr;
+    double x;
+    x = __builtin_nondet_double();
+    return x;
+}
+
+// system - execute system command (no-op)
+inline int system(const char* command) {
+    (void)command;
+    return 0;
+}
+
+// exit - terminate program (no-op)
+__attribute__((noreturn)) inline void exit(int code) {
+    (void)code;
+    __builtin_unreachable();
+}
+
+// getenv - get environment variable (nondeterministic)
+inline const char* getenv(const char* name) {
+    (void)name;
+    return nullptr;
+}
+
+// qsort - quicksort (simplified)
+inline void qsort(void* base, size_t nmemb, size_t size,
+                  int (*compar)(const void*, const void*)) {
+    // Simplified bubble sort for verification
+    unsigned char* arr = (unsigned char*)base;
+    for (size_t i = 0; i < nmemb; i++) {
+        for (size_t j = 0; j < nmemb - 1; j++) {
+            if (compar(arr + j * size, arr + (j + 1) * size) > 0) {
+                // Swap
+                unsigned char* tmp = (unsigned char*)malloc(size);
+                for (size_t k = 0; k < size; k++) {
+                    tmp[k] = arr[j * size + k];
+                    arr[j * size + k] = arr[(j + 1) * size + k];
+                    arr[(j + 1) * size + k] = tmp[k];
+                }
+                free(tmp);
+            }
+        }
+    }
+}
+
+// bsearch - binary search
+inline void* bsearch(const void* key, const void* base, size_t nmemb,
+                     size_t size, int (*compar)(const void*, const void*)) {
+    const unsigned char* b = (const unsigned char*)base;
+    size_t low = 0, high = nmemb;
+    while (low < high) {
+        size_t mid = low + (high - low) / 2;
+        int c = compar(key, b + mid * size);
+        if (c < 0) {
+            high = mid;
+        } else if (c > 0) {
+            low = mid + 1;
+        } else {
+            return (void*)(b + mid * size);
+        }
+    }
+    return nullptr;
+}
+
+} // namespace std
+
+#endif // _LIBCXX_OM_CSTDLIB

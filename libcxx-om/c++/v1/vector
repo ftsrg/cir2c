@@ -1,0 +1,221 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <vector>
+// Minimal std::vector for verification — no external dependencies
+
+#ifndef _LIBCXX_OM_VECTOR
+#define _LIBCXX_OM_VECTOR
+
+namespace std {
+
+// Minimal allocator — no-op for verification
+template<typename T>
+struct allocator {
+    typedef T value_type;
+    typedef T* pointer;
+    typedef const T* const_pointer;
+    typedef T& reference;
+    typedef const T& const_reference;
+    typedef unsigned long size_type;
+    typedef long difference_type;
+    allocator() noexcept {}
+    template<typename U> allocator(const allocator<U>&) noexcept {}
+    pointer allocate(size_type n) { return static_cast<T*>(__builtin_malloc(n * sizeof(T))); }
+    void deallocate(T* p, size_type) { __builtin_free(p); }
+};
+
+template<typename T1, typename T2>
+bool operator==(const allocator<T1>&, const allocator<T2>&) noexcept { return true; }
+
+// vector — simplified dynamic array for verification
+template<typename T, typename Allocator = allocator<T>>
+class vector {
+public:
+    typedef T value_type;
+    typedef Allocator allocator_type;
+    typedef T* iterator;
+    typedef const T* const_iterator;
+    typedef unsigned long size_type;
+    typedef long difference_type;
+    typedef T& reference;
+    typedef const T& const_reference;
+    typedef T* pointer;
+    typedef const T* const_pointer;
+
+    vector() noexcept : data_(nullptr), size_(0), capacity_(0) {}
+
+    explicit vector(size_type n) : data_(nullptr), size_(0), capacity_(0) {
+        resize(n);
+    }
+
+    vector(size_type n, const value_type& value) : data_(nullptr), size_(0), capacity_(0) {
+        resize(n, value);
+    }
+
+    vector(const vector& other) : data_(nullptr), size_(0), capacity_(0) {
+        if (other.size_ > 0) {
+            reserve(other.size_);
+            for (size_type i = 0; i < other.size_; i++)
+                data_[i] = other.data_[i];
+            size_ = other.size_;
+        }
+    }
+
+    vector(vector&& other) noexcept
+        : data_(other.data_), size_(other.size_), capacity_(other.capacity_) {
+        other.data_ = nullptr;
+        other.size_ = 0;
+        other.capacity_ = 0;
+    }
+
+    ~vector() {
+        if (data_) __builtin_free(data_);
+    }
+
+    vector& operator=(const vector& other) {
+        if (this != &other) {
+            if (data_) __builtin_free(data_);
+            data_ = nullptr;
+            size_ = 0;
+            capacity_ = 0;
+            if (other.size_ > 0) {
+                reserve(other.size_);
+                for (size_type i = 0; i < other.size_; i++)
+                    data_[i] = other.data_[i];
+                size_ = other.size_;
+            }
+        }
+        return *this;
+    }
+
+    vector& operator=(vector&& other) noexcept {
+        if (this != &other) {
+            if (data_) __builtin_free(data_);
+            data_ = other.data_;
+            size_ = other.size_;
+            capacity_ = other.capacity_;
+            other.data_ = nullptr;
+            other.size_ = 0;
+            other.capacity_ = 0;
+        }
+        return *this;
+    }
+
+    // Iterators
+    iterator begin() noexcept { return data_; }
+    const_iterator begin() const noexcept { return data_; }
+    iterator end() noexcept { return data_ + size_; }
+    const_iterator end() const noexcept { return data_ + size_; }
+    const_iterator cbegin() const noexcept { return data_; }
+    const_iterator cend() const noexcept { return data_ + size_; }
+
+    // Capacity
+    size_type size() const noexcept { return size_; }
+    size_type max_size() const noexcept { return 1048576; }
+    size_type capacity() const noexcept { return capacity_; }
+    bool empty() const noexcept { return size_ == 0; }
+
+    void reserve(size_type n) {
+        if (n > capacity_) {
+            T* new_data = static_cast<T*>(__builtin_malloc(n * sizeof(T)));
+            if (data_) {
+                for (size_type i = 0; i < size_; i++)
+                    new_data[i] = data_[i];
+                __builtin_free(data_);
+            }
+            data_ = new_data;
+            capacity_ = n;
+        }
+    }
+
+    // Element access
+    reference operator[](size_type n) noexcept { return data_[n]; }
+    const_reference operator[](size_type n) const noexcept { return data_[n]; }
+
+    reference at(size_type n) {
+        if (n >= size_) __builtin_unreachable();
+        return data_[n];
+    }
+    const_reference at(size_type n) const {
+        if (n >= size_) __builtin_unreachable();
+        return data_[n];
+    }
+
+    reference front() noexcept { return data_[0]; }
+    const_reference front() const noexcept { return data_[0]; }
+    reference back() noexcept { return data_[size_ - 1]; }
+    const_reference back() const noexcept { return data_[size_ - 1]; }
+
+    pointer data() noexcept { return data_; }
+    const_iterator data() const noexcept { return data_; }
+
+    // Modifiers
+    void push_back(const value_type& value) {
+        if (size_ >= capacity_) {
+            size_type new_cap = capacity_ == 0 ? 1 : capacity_ * 2;
+            reserve(new_cap);
+        }
+        data_[size_++] = value;
+    }
+
+    void pop_back() {
+        if (size_ > 0) size_--;
+    }
+
+    void clear() noexcept { size_ = 0; }
+
+    void resize(size_type n) { resize(n, value_type()); }
+
+    void resize(size_type n, const value_type& value) {
+        if (n > capacity_) reserve(n);
+        for (size_type i = size_; i < n; i++)
+            data_[i] = value;
+        size_ = n;
+    }
+
+    void swap(vector& other) noexcept {
+        T* tmp_d = data_; size_type tmp_s = size_; size_type tmp_c = capacity_;
+        data_ = other.data_; size_ = other.size_; capacity_ = other.capacity_;
+        other.data_ = tmp_d; other.size_ = tmp_s; other.capacity_ = tmp_c;
+    }
+
+    allocator_type get_allocator() const noexcept { return allocator_type(); }
+
+    // Comparison
+    bool operator==(const vector& other) const noexcept {
+        if (size_ != other.size_) return false;
+        for (size_type i = 0; i < size_; i++)
+            if (data_[i] != other.data_[i]) return false;
+        return true;
+    }
+    bool operator!=(const vector& other) const noexcept { return !(*this == other); }
+
+private:
+    T* data_;
+    size_type size_;
+    size_type capacity_;
+};
+
+// Non-member swap
+template<typename T, typename Allocator>
+void swap(vector<T, Allocator>& x, vector<T, Allocator>& y) noexcept {
+    x.swap(y);
+}
+
+} // namespace std
+
+#endif // _LIBCXX_OM_VECTOR

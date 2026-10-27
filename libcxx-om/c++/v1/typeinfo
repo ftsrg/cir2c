@@ -1,0 +1,82 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <typeinfo>
+// Simplified type information for verification
+
+#ifndef _LIBCXX_OM_TYPEINFO
+#define _LIBCXX_OM_TYPEINFO
+
+#include <cstring>
+
+namespace std {
+
+// Type information — simplified for verification
+class type_info {
+public:
+    type_info(const char* name) : name_(name) {}
+    virtual ~type_info() noexcept {}
+
+    type_info(const type_info&) noexcept;
+    type_info& operator=(const type_info&) noexcept;
+
+    bool operator==(const type_info& other) const noexcept {
+        return name_ && other.name_ && strcmp(name_, other.name_) == 0;
+    }
+
+    bool operator!=(const type_info& other) const noexcept {
+        return !(*this == other);
+    }
+
+    bool before(const type_info& other) const noexcept {
+        return name_ && other.name_ && strcmp(name_, other.name_) < 0;
+    }
+
+    const char* name() const noexcept { return name_; }
+    bool __is_const_np() const noexcept { return false; }
+
+private:
+    const char* name_;
+};
+
+// type_info copy constructor and assignment
+inline type_info::type_info(const type_info& other) noexcept : name_(other.name_) {}
+inline type_info& type_info::operator=(const type_info& other) noexcept {
+    name_ = other.name_;
+    return *this;
+}
+
+// bad_cast exception
+class bad_cast : public exception {
+public:
+    bad_cast() noexcept {}
+    virtual const char* what() const noexcept override { return "std::bad_cast"; }
+};
+
+// bad_typeid exception
+class bad_typeid : public exception {
+public:
+    bad_typeid() noexcept {}
+    virtual const char* what() const noexcept override { return "std::bad_typeid"; }
+};
+
+} // namespace std
+
+// typeid operator — returns a reference to a type_info object
+// In verification context, we use a simplified version that just returns the type name
+#define typeid(expr) std::type_info(#expr)
+
+#endif // _LIBCXX_OM_TYPEINFO

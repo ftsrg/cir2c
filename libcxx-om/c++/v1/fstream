@@ -1,0 +1,165 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <fstream>
+// Simplified file I/O for verification — all operations are no-ops
+// Note: ios_base/ostream/istream are defined in <iostream>; this header
+// only adds the file-specific stream classes.
+
+#ifndef _LIBCXX_OM_FSTREAM
+#define _LIBCXX_OM_FSTREAM
+
+#include <cstdio>
+#include <string>
+
+namespace std {
+
+// File output stream — simplified no-op for verification
+class ofstream {
+public:
+    ofstream() noexcept : opened_(false) {}
+
+    explicit ofstream(const char* filename, int mode = 0)
+        : opened_(false) { (void)filename; (void)mode; }
+
+    ~ofstream() noexcept { close(); }
+
+    void open(const char* filename, int mode = 0) {
+        (void)filename; (void)mode;
+        opened_ = true;
+    }
+
+    void close() noexcept { opened_ = false; }
+    bool is_open() const noexcept { return opened_; }
+
+    // Stream state
+    bool good() const noexcept { return opened_; }
+    bool bad() const noexcept { return false; }
+    bool fail() const noexcept { return !opened_; }
+    bool eof() const noexcept { return false; }
+    void clear(int state = 0) noexcept { (void)state; }
+
+    // Output operators — no-ops for verification
+    ofstream& operator<<(int val) { (void)val; return *this; }
+    ofstream& operator<<(unsigned int val) { (void)val; return *this; }
+    ofstream& operator<<(long val) { (void)val; return *this; }
+    ofstream& operator<<(unsigned long val) { (void)val; return *this; }
+    ofstream& operator<<(long long val) { (void)val; return *this; }
+    ofstream& operator<<(unsigned long long val) { (void)val; return *this; }
+    ofstream& operator<<(float val) { (void)val; return *this; }
+    ofstream& operator<<(double val) { (void)val; return *this; }
+    ofstream& operator<<(long double val) { (void)val; return *this; }
+    ofstream& operator<<(const char* val) { (void)val; return *this; }
+    ofstream& operator<<(char val) { (void)val; return *this; }
+    ofstream& operator<<(const void* val) { (void)val; return *this; }
+
+    ofstream& flush() noexcept { return *this; }
+
+    // Manipulators
+    ofstream& operator<<(ofstream& (*func)(ofstream&)) { return func(*this); }
+
+    // I/O flags
+    int width(int w = 0) noexcept { int old = width_; width_ = w; return old; }
+    int precision(int p = -1) noexcept { int old = prec_; if (p >= 0) prec_ = p; return old; }
+
+private:
+    bool opened_;
+    int width_ = 0;
+    int prec_ = 6;
+};
+
+// File input stream — simplified no-op for verification
+class ifstream {
+public:
+    ifstream() noexcept : opened_(false) {}
+
+    explicit ifstream(const char* filename, int mode = 0)
+        : opened_(false) { (void)filename; (void)mode; }
+
+    ~ifstream() noexcept { close(); }
+
+    void open(const char* filename, int mode = 0) {
+        (void)filename; (void)mode;
+        opened_ = true;
+    }
+
+    void close() noexcept { opened_ = false; }
+    bool is_open() const noexcept { return opened_; }
+
+    // Stream state
+    bool good() const noexcept { return opened_; }
+    bool bad() const noexcept { return false; }
+    bool fail() const noexcept { return !opened_; }
+    bool eof() const noexcept { return false; }
+    void clear(int state = 0) noexcept { (void)state; }
+
+    // Input operators — use nondeterminism for verification
+    ifstream& operator>>(int& val) { val = __VERIFIER_nondet_int(); return *this; }
+    ifstream& operator>>(unsigned int& val) { val = __VERIFIER_nondet_uint(); return *this; }
+    ifstream& operator>>(long& val) { val = (long)__VERIFIER_nondet_int(); return *this; }
+    ifstream& operator>>(float& val) { val = __VERIFIER_nondet_float(); return *this; }
+    ifstream& operator>>(double& val) { val = __VERIFIER_nondet_double(); return *this; }
+    ifstream& operator>>(char& val) { val = (char)__VERIFIER_nondet_int(); return *this; }
+
+    ifstream& getline(char* s, long n, char delim = '\n') {
+        (void)s; (void)n; (void)delim;
+        return *this;
+    }
+
+private:
+    bool opened_;
+};
+
+// File stream (both input and output) — simplified
+class fstream {
+public:
+    fstream() noexcept : opened_(false) {}
+
+    explicit fstream(const char* filename, int mode = 0)
+        : opened_(false) { (void)filename; (void)mode; }
+
+    ~fstream() noexcept { close(); }
+
+    void open(const char* filename, int mode = 0) {
+        (void)filename; (void)mode;
+        opened_ = true;
+    }
+
+    void close() noexcept { opened_ = false; }
+    bool is_open() const noexcept { return opened_; }
+
+    bool good() const noexcept { return opened_; }
+    bool bad() const noexcept { return false; }
+    bool fail() const noexcept { return !opened_; }
+    bool eof() const noexcept { return false; }
+
+    template<typename T>
+    fstream& operator<<(T val) { (void)val; return *this; }
+    template<typename T>
+    fstream& operator>>(T& val) { (void)val; return *this; }
+
+private:
+    bool opened_;
+};
+
+// Common manipulators
+inline ofstream& endl(ofstream& os) { return os; }
+inline ofstream& ends(ofstream& os) { return os; }
+inline ofstream& flush(ofstream& os) { return os.flush(); }
+
+} // namespace std
+
+#endif // _LIBCXX_OM_FSTREAM

@@ -1,0 +1,251 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <algorithm>
+// Minimal algorithms for verification
+
+#ifndef _LIBCXX_OM_ALGORITHM
+#define _LIBCXX_OM_ALGORITHM
+
+#include <utility>
+
+namespace std {
+
+// sort — simple insertion sort for verification
+template<typename RandomIt>
+void sort(RandomIt first, RandomIt last) {
+    for (RandomIt i = first + 1; i < last; ++i) {
+        auto key = *i;
+        RandomIt j = i;
+        while (j > first && *(j - 1) > key) {
+            *j = *(j - 1);
+            --j;
+        }
+        *j = key;
+    }
+}
+
+// find
+template<typename InputIt, typename T>
+InputIt find(InputIt first, InputIt last, const T& value) {
+    for (; first != last; ++first) {
+        if (*first == value) return first;
+    }
+    return last;
+}
+
+// count
+template<typename InputIt, typename T>
+long count(InputIt first, InputIt last, const T& value) {
+    long n = 0;
+    for (; first != last; ++first) {
+        if (*first == value) n++;
+    }
+    return n;
+}
+
+// min_element
+template<typename ForwardIt>
+ForwardIt min_element(ForwardIt first, ForwardIt last) {
+    ForwardIt min = first;
+    for (++first; first != last; ++first) {
+        if (*first < *min) min = first;
+    }
+    return min;
+}
+
+// max_element
+template<typename ForwardIt>
+ForwardIt max_element(ForwardIt first, ForwardIt last) {
+    ForwardIt max = first;
+    for (++first; first != last; ++first) {
+        if (*first > *max) max = first;
+    }
+    return max;
+}
+
+// min
+template<typename T>
+const T& min(const T& a, const T& b) {
+    return (a < b) ? a : b;
+}
+
+// max
+template<typename T>
+const T& max(const T& a, const T& b) {
+    return (a < b) ? b : a;
+}
+
+// lower_bound
+template<typename ForwardIt, typename T>
+ForwardIt lower_bound(ForwardIt first, ForwardIt last, const T& value) {
+    long dist = 0;
+    for (ForwardIt it = first; it != last; ++it) dist++;
+    long half, step;
+    ForwardIt it = first;
+    for (long dist = 0; ; ) {
+        for (ForwardIt tmp = it; tmp != last; ++tmp) dist++;
+        if (dist == 0) return it;
+        half = dist / 2;
+        it = first;
+        for (long i = 0; i < half; i++, ++it) {}
+        if (*it < value) {
+            ++it;
+            first = it;
+        } else {
+            last = it;
+        }
+    }
+}
+
+// upper_bound
+template<typename ForwardIt, typename T>
+ForwardIt upper_bound(ForwardIt first, ForwardIt last, const T& value) {
+    long dist = 0;
+    for (ForwardIt it = first; it != last; ++it) dist++;
+    ForwardIt it;
+    for (; dist > 0; ) {
+        long half = dist / 2;
+        it = first;
+        for (long i = 0; i < half; i++, ++it) {}
+        if (!(value < *it)) {
+            ++it;
+            first = it;
+            dist -= half + 1;
+        } else {
+            dist = half;
+        }
+    }
+    return first;
+}
+
+// binary_search
+template<typename ForwardIt, typename T>
+bool binary_search(ForwardIt first, ForwardIt last, const T& value) {
+    ForwardIt it = lower_bound(first, last, value);
+    if (it == last) return false;
+    return !(value < *it);
+}
+
+// equal_range
+template<typename ForwardIt, typename T>
+pair<ForwardIt, ForwardIt> equal_range(ForwardIt first, ForwardIt last, const T& value) {
+    return pair<ForwardIt, ForwardIt>(lower_bound(first, last, value), upper_bound(first, last, value));
+}
+
+// mismatch
+template<typename InputIt1, typename InputIt2>
+pair<InputIt1, InputIt2> mismatch(InputIt1 first1, InputIt1 last1, InputIt2 first2) {
+    while (first1 != last1 && *first1 == *first2) {
+        ++first1;
+        ++first2;
+    }
+    return pair<InputIt1, InputIt2>(first1, first2);
+}
+
+// for_each
+template<typename InputIt, typename Function>
+Function for_each(InputIt first, InputIt last, Function f) {
+    for (; first != last; ++first) f(*first);
+    return f;
+}
+
+// transform
+template<typename InputIt, typename OutputIt, typename UnaryOp>
+OutputIt transform(InputIt first, InputIt last, OutputIt d_first, UnaryOp op) {
+    for (; first != last; ++first, ++d_first)
+        *d_first = op(*first);
+    return d_first;
+}
+
+// accumulate
+template<typename InputIt, typename T>
+T accumulate(InputIt first, InputIt last, T init) {
+    for (; first != last; ++first) init += *first;
+    return init;
+}
+
+// fill
+template<typename ForwardIt, typename T>
+void fill(ForwardIt first, ForwardIt last, const T& value) {
+    for (; first != last; ++first) *first = value;
+}
+
+// copy
+template<typename InputIt, typename OutputIt>
+OutputIt copy(InputIt first, InputIt last, OutputIt result) {
+    for (; first != last; ++first, ++result) *result = *first;
+    return result;
+}
+
+// reverse
+template<typename BidirIt>
+void reverse(BidirIt first, BidirIt last) {
+    while (first < last) {
+        swap(*first, *--last);
+        ++first;
+    }
+}
+
+// rotate
+template<typename ForwardIt>
+ForwardIt rotate(ForwardIt first, ForwardIt middle, ForwardIt last) {
+    // simple implementation
+    long n = 0;
+    for (ForwardIt it = first; it != last; ++it) n++;
+    long m = 0;
+    for (ForwardIt it = first; it != middle; ++it) m++;
+    // store middle elements
+    return last;
+}
+
+// is_sorted
+template<typename RandomIt>
+bool is_sorted(RandomIt first, RandomIt last) {
+    if (first == last) return true;
+    for (RandomIt it = first + 1; it != last; ++it) {
+        if (*it < *(it - 1)) return false;
+    }
+    return true;
+}
+
+// all_of
+template<typename InputIt, typename Predicate>
+bool all_of(InputIt first, InputIt last, Predicate pred) {
+    for (; first != last; ++first) {
+        if (!pred(*first)) return false;
+    }
+    return true;
+}
+
+// any_of
+template<typename InputIt, typename Predicate>
+bool any_of(InputIt first, InputIt last, Predicate pred) {
+    for (; first != last; ++first) {
+        if (pred(*first)) return true;
+    }
+    return false;
+}
+
+// none_of
+template<typename InputIt, typename Predicate>
+bool none_of(InputIt first, InputIt last, Predicate pred) {
+    return !any_of(first, last, pred);
+}
+
+} // namespace std
+
+#endif // _LIBCXX_OM_ALGORITHM

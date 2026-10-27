@@ -1,0 +1,302 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <unordered_map>
+// Simplified C++ header for std::unordered_map
+
+#ifndef _LIBCXX_OM_UNORDERED_MAP
+#define _LIBCXX_OM_UNORDERED_MAP
+
+#include <stddef.h>
+
+namespace std {
+
+// hash - simplified
+template<typename T>
+struct hash {};
+
+template<>
+struct hash<int> {
+    size_t operator()(int x) const { return (size_t)x; }
+};
+
+template<>
+struct hash<long> {
+    size_t operator()(long x) const { return (size_t)x; }
+};
+
+template<>
+struct hash<long long> {
+    size_t operator()(long long x) const { return (size_t)x; }
+};
+
+template<>
+struct hash<unsigned int> {
+    size_t operator()(unsigned int x) const { return (size_t)x; }
+};
+
+template<>
+struct hash<unsigned long> {
+    size_t operator()(unsigned long x) const { return (size_t)x; }
+};
+
+template<>
+struct hash<bool> {
+    size_t operator()(bool x) const { return x ? 1 : 0; }
+};
+
+template<>
+struct hash<char> {
+    size_t operator()(char x) const { return (size_t)(unsigned char)x; }
+};
+
+template<>
+struct hash<float> {
+    size_t operator()(float x) const { return *(size_t*)&x; }
+};
+
+template<>
+struct hash<double> {
+    size_t operator()(double x) const { return *(size_t*)&x; }
+};
+
+// unordered_map - simplified
+template<typename Key, typename T, typename Hash = hash<Key>, typename KeyEqual = equal_to<Key>, typename Allocator = allocator<pair<const Key, T>>>
+class unordered_map {
+public:
+    typedef Key key_type;
+    typedef T mapped_type;
+    typedef pair<const Key, T> value_type;
+    typedef Hash hash_function;
+    typedef KeyEqual key_equal;
+    typedef Allocator allocator_type;
+    typedef size_t size_type;
+    typedef ptrdiff_t difference_type;
+
+    struct iterator {
+        value_type* ptr;
+        iterator(value_type* p = nullptr) : ptr(p) {}
+        value_type& operator*() const { return *ptr; }
+        value_type* operator->() const { return ptr; }
+        iterator& operator++() { ptr++; return *this; }
+        bool operator==(const iterator& other) const { return ptr == other.ptr; }
+        bool operator!=(const iterator& other) const { return ptr != other.ptr; }
+    };
+
+    typedef iterator const_iterator;
+
+    static constexpr size_t MAX_SIZE = 64;
+
+    unordered_map() : data_(nullptr), size_(0) {}
+
+    unordered_map(const unordered_map& other) : data_(nullptr), size_(0) {
+        for (size_type i = 0; i < other.size_; i++) {
+            insert(other.data_[i]);
+        }
+    }
+
+    unordered_map(unordered_map&& other) noexcept : data_(other.data_), size_(other.size_) {
+        other.data_ = nullptr;
+        other.size_ = 0;
+    }
+
+    ~unordered_map() {
+        if (data_) delete[] data_;
+    }
+
+    unordered_map& operator=(const unordered_map& other) {
+        if (this != &other) {
+            clear();
+            for (size_type i = 0; i < other.size_; i++) {
+                insert(other.data_[i]);
+            }
+        }
+        return *this;
+    }
+
+    unordered_map& operator=(unordered_map&& other) noexcept {
+        if (this != &other) {
+            if (data_) delete[] data_;
+            data_ = other.data_;
+            size_ = other.size_;
+            other.data_ = nullptr;
+            other.size_ = 0;
+        }
+        return *this;
+    }
+
+    iterator begin() noexcept { return iterator(data_); }
+    iterator end() noexcept { return iterator(data_ + size_); }
+    const_iterator begin() const noexcept { return const_iterator(data_); }
+    const_iterator end() const noexcept { return const_iterator(data_ + size_); }
+
+    size_type size() const noexcept { return size_; }
+    size_type max_size() const noexcept { return MAX_SIZE; }
+    bool empty() const noexcept { return size_ == 0; }
+
+    T& operator[](const Key& key) {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == key) return data_[i].second;
+        }
+        if (size_ < MAX_SIZE) {
+            value_type* new_data = new value_type[size_ + 1];
+            if (data_) {
+                for (size_type i = 0; i < size_; i++) new_data[i] = data_[i];
+                delete[] data_;
+            }
+            new_data[size_] = value_type(key, T());
+            data_ = new_data;
+            size_++;
+            return data_[size_ - 1].second;
+        }
+        __VERIFIER_error();
+        return data_[0].second;
+    }
+
+    T& at(const Key& key) {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == key) return data_[i].second;
+        }
+        __VERIFIER_error();
+        return data_[0].second;
+    }
+
+    const T& at(const Key& key) const {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == key) return data_[i].second;
+        }
+        __VERIFIER_error();
+        return data_[0].second;
+    }
+
+    pair<iterator, bool> insert(const value_type& value) {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == value.first) return pair<iterator, bool>(iterator(data_ + i), false);
+        }
+        if (size_ < MAX_SIZE) {
+            value_type* new_data = new value_type[size_ + 1];
+            if (data_) {
+                for (size_type i = 0; i < size_; i++) new_data[i] = data_[i];
+                delete[] data_;
+            }
+            new_data[size_] = value;
+            data_ = new_data;
+            size_++;
+            return pair<iterator, bool>(iterator(data_ + size_ - 1), true);
+        }
+        __VERIFIER_error();
+        return pair<iterator, bool>(iterator(data_), false);
+    }
+
+    void insert(initializer_list<value_type> il) {
+        for (auto it = il.begin(); it != il.end(); ++it) {
+            insert(*it);
+        }
+    }
+
+    iterator erase(iterator pos) {
+        size_type idx = pos.ptr - data_;
+        for (size_type i = idx; i < size_ - 1; i++) {
+            data_[i] = data_[i + 1];
+        }
+        size_--;
+        return iterator(data_ + idx);
+    }
+
+    size_type erase(const Key& key) {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == key) {
+                for (size_type j = i; j < size_ - 1; j++) {
+                    data_[j] = data_[j + 1];
+                }
+                size_--;
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    void clear() noexcept {
+        if (data_) delete[] data_;
+        data_ = nullptr;
+        size_ = 0;
+    }
+
+    void swap(unordered_map& other) noexcept {
+        value_type* tmp_data = data_;
+        size_type tmp_size = size_;
+        data_ = other.data_;
+        size_ = other.size_;
+        other.data_ = tmp_data;
+        other.size_ = tmp_size;
+    }
+
+    size_type count(const Key& key) const {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == key) return 1;
+        }
+        return 0;
+    }
+
+    iterator find(const Key& key) {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == key) return iterator(data_ + i);
+        }
+        return end();
+    }
+
+    const_iterator find(const Key& key) const {
+        for (size_type i = 0; i < size_; i++) {
+            if (data_[i].first == key) return const_iterator(data_ + i);
+        }
+        return end();
+    }
+
+    hash_function hash_function() const { return hash_function(); }
+    key_equal key_eq() const { return key_equal(); }
+    allocator_type get_allocator() const { return allocator_type(); }
+
+    size_type bucket_count() const noexcept { return size_; }
+    size_type max_bucket_count() const noexcept { return MAX_SIZE; }
+    size_type bucket_size(size_type n) const noexcept { return n < size_ ? 1 : 0; }
+
+    bool operator==(const unordered_map& other) const {
+        if (size_ != other.size_) return false;
+        for (size_type i = 0; i < size_; i++) {
+            bool found = false;
+            for (size_type j = 0; j < other.size_; j++) {
+                if (data_[i] == other.data_[j]) { found = true; break; }
+            }
+            if (!found) return false;
+        }
+        return true;
+    }
+
+    bool operator!=(const unordered_map& other) const { return !(*this == other); }
+
+private:
+    value_type* data_;
+    size_type size_;
+};
+
+template<typename Key, typename T, typename Hash, typename KeyEqual, typename Allocator>
+void swap(unordered_map<Key, T, Hash, KeyEqual, Allocator>& x, unordered_map<Key, T, Hash, KeyEqual, Allocator>& y) noexcept {
+    x.swap(y);
+}
+
+} // namespace std
+
+#endif // _LIBCXX_OM_UNORDERED_MAP

@@ -1,0 +1,272 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <cstdio>
+// Simplified C++ header for formatted I/O operations
+
+#ifndef _LIBCXX_OM_CSTDIO
+#define _LIBCXX_OM_CSTDIO
+
+#include <stddef.h>
+
+namespace std {
+
+// FILE type - simplified for verification
+struct FILE {
+    int handle;
+};
+
+// Standard streams - no-ops for verification
+extern FILE* stdin;
+extern FILE* stdout;
+extern FILE* stderr;
+
+// printf - formatted output (no-op for verification)
+inline int printf(const char* format, ...) {
+    (void)format;
+    return 0;
+}
+
+// fprintf - formatted output to file (no-op)
+inline int fprintf(FILE* stream, const char* format, ...) {
+    (void)stream;
+    (void)format;
+    return 0;
+}
+
+// sprintf - formatted output to string (no-op)
+inline int sprintf(char* str, const char* format, ...) {
+    (void)str;
+    (void)format;
+    return 0;
+}
+
+// snprintf - formatted output to string with size limit (no-op)
+inline int snprintf(char* str, size_t size, const char* format, ...) {
+    (void)str;
+    (void)size;
+    (void)format;
+    return 0;
+}
+
+// scanf - formatted input (nondeterministic)
+inline int scanf(const char* format, ...) {
+    (void)format;
+    return 0;
+}
+
+// fscanf - formatted input from file (nondeterministic)
+inline int fscanf(FILE* stream, const char* format, ...) {
+    (void)stream;
+    (void)format;
+    return 0;
+}
+
+// sscanf - formatted input from string (nondeterministic)
+inline int sscanf(const char* str, const char* format, ...) {
+    (void)str;
+    (void)format;
+    return 0;
+}
+
+// putchar - output a character (no-op)
+inline int putchar(int c) {
+    (void)c;
+    return 0;
+}
+
+// putc - output a character to file (no-op)
+inline int putc(int c, FILE* stream) {
+    (void)c;
+    (void)stream;
+    return 0;
+}
+
+// fputc - output a character to file (no-op)
+inline int fputc(int c, FILE* stream) {
+    (void)c;
+    (void)stream;
+    return 0;
+}
+
+// puts - output a string (no-op)
+inline int puts(const char* str) {
+    (void)str;
+    return 0;
+}
+
+// fputs - output a string to file (no-op)
+inline int fputs(const char* str, FILE* stream) {
+    (void)str;
+    (void)stream;
+    return 0;
+}
+
+// fwrite - write data to file (no-op)
+inline size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
+    (void)ptr;
+    (void)size;
+    (void)nmemb;
+    (void)stream;
+    return 0;
+}
+
+// getchar - input a character (nondeterministic)
+inline int getchar() {
+    int x;
+    x = __builtin_nondet_int();
+    return x;
+}
+
+// getc - input a character from file (nondeterministic)
+inline int getc(FILE* stream) {
+    (void)stream;
+    int x;
+    x = __builtin_nondet_int();
+    return x;
+}
+
+// fgetc - input a character from file (nondeterministic)
+inline int fgetc(FILE* stream) {
+    (void)stream;
+    int x;
+    x = __builtin_nondet_int();
+    return x;
+}
+
+// gets - input a string (unsafe, nondeterministic)
+inline char* gets(char* str) {
+    (void)str;
+    return nullptr;
+}
+
+// fgets - input a string from file (nondeterministic)
+inline char* fgets(char* str, int count, FILE* stream) {
+    (void)str;
+    (void)count;
+    (void)stream;
+    return nullptr;
+}
+
+// fread - read data from file (nondeterministic)
+inline size_t fread(void* ptr, size_t size, size_t nmemb, FILE* stream) {
+    (void)ptr;
+    (void)size;
+    (void)nmemb;
+    (void)stream;
+    return 0;
+}
+
+// fopen - open a file (nondeterministic)
+inline FILE* fopen(const char* filename, const char* mode) {
+    (void)filename;
+    (void)mode;
+    return nullptr;
+}
+
+// fclose - close a file (no-op)
+inline int fclose(FILE* stream) {
+    (void)stream;
+    return 0;
+}
+
+// fflush - flush a file (no-op)
+inline int fflush(FILE* stream) {
+    (void)stream;
+    return 0;
+}
+
+// fseek - seek in file (no-op)
+inline int fseek(FILE* stream, long offset, int whence) {
+    (void)stream;
+    (void)offset;
+    (void)whence;
+    return 0;
+}
+
+// ftell - get file position (nondeterministic)
+inline long ftell(FILE* stream) {
+    (void)stream;
+    long x;
+    x = __builtin_nondet_long();
+    return x;
+}
+
+// rewind - rewind file (no-op)
+inline void rewind(FILE* stream) {
+    (void)stream;
+}
+
+// feof - check end of file (nondeterministic)
+inline int feof(FILE* stream) {
+    (void)stream;
+    int x;
+    x = __builtin_nondet_int();
+    return x;
+}
+
+// ferror - check file error (nondeterministic)
+inline int ferror(FILE* stream) {
+    (void)stream;
+    int x;
+    x = __builtin_nondet_int();
+    return x;
+}
+
+// clearerr - clear file error (no-op)
+inline void clearerr(FILE* stream) {
+    (void)stream;
+}
+
+// remove - remove a file (no-op)
+inline int remove(const char* filename) {
+    (void)filename;
+    return 0;
+}
+
+// rename - rename a file (no-op)
+inline int rename(const char* old, const char* newname) {
+    (void)old;
+    (void)newname;
+    return 0;
+}
+
+// tmpfile - create temporary file (nondeterministic)
+inline FILE* tmpfile() {
+    return nullptr;
+}
+
+// tmpnam - generate temporary filename (nondeterministic)
+inline char* tmpnam(char* str) {
+    (void)str;
+    return nullptr;
+}
+
+// EOF constant
+constexpr int EOF = -1;
+
+// BUFSIZ constant
+constexpr int BUFSIZ = 8192;
+
+// FOPEN_MAX constant
+constexpr int FOPEN_MAX = 8;
+
+// FILENAME_MAX constant
+constexpr int FILENAME_MAX = 256;
+
+} // namespace std
+
+#endif // _LIBCXX_OM_CSTDIO

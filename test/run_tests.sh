@@ -193,15 +193,21 @@ print_summary() {
 
 JSON_OUT=""              # set via --json-out FILE
 EXTERNALIZE_STD_FLAG="--no-externalize-std"   # default; override with --externalize-std
+EXTRA_INCLUDES=()         # extra --include DIR flags forwarded to the runner
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --json-out)           JSON_OUT="$2"; shift 2 ;;
         --externalize-std)    EXTERNALIZE_STD_FLAG="--externalize-std";    shift ;;
         --no-externalize-std) EXTERNALIZE_STD_FLAG="--no-externalize-std"; shift ;;
+        --include)            EXTRA_INCLUDES+=("$2"); shift 2 ;;
         *) break ;;
     esac
 done
 export EXTERNALIZE_STD_FLAG
+# Bash arrays cannot be exported to parallel worker subshells, so flatten to a
+# newline-delimited scalar that workers can reconstruct.
+EXTRA_INCLUDES_STR=$(printf '%s\n' "${EXTRA_INCLUDES[@]}" 2>/dev/null || true)
+export EXTRA_INCLUDES_STR
 
 # Write a JSON file summarising the run (used by the GitHub Actions workflow to
 # build the PR comment table without fragile text parsing).
@@ -510,6 +516,10 @@ run_llvm_test() {
 
     local -a inc=(); local _d
     while IFS= read -r _d; do [ -n "$_d" ] && inc+=(--include "$_d"); done < <(compute_includes "$src_file")
+    # Add extra include directories passed on the command line (e.g. libcxx-om).
+    if [ -n "${EXTRA_INCLUDES_STR:-}" ]; then
+        while IFS= read -r _d; do [ -n "$_d" ] && inc+=(--include "$_d"); done <<< "$EXTRA_INCLUDES_STR"
+    fi
     # shellcheck disable=SC2086
     timeout "$TIMEOUT" "$RUNNER" $lang_flag "$EXTERNALIZE_STD_FLAG" \
         --mlir "$mlir_file" \
@@ -774,7 +784,7 @@ MULTISOURCE_OPTIONS="$SCRIPT_DIR/llvm-multisource-options.sh"
 FPCMP="$SCRIPT_DIR/fpcmp.py"
 export MULTISOURCE_OPTIONS FPCMP
 export TIMEOUT RUNNER GCC CLANGPP INTEGRATION_OUTPUT_DIR LLVM_EVAL_DIR LLVM_EVAL_OUTPUT_DIR
-export ESBMC_EVAL_DIR ESBMC_EVAL_OUTPUT_DIR EXTERNALIZE_STD_FLAG MULTI_MERGE
+export ESBMC_EVAL_DIR ESBMC_EVAL_OUTPUT_DIR EXTERNALIZE_STD_FLAG MULTI_MERGE EXTRA_INCLUDES_STR
 export -f pipeline_stage run_selfchecking run_c_test run_cpp_test run_llvm_test run_llvm_multi_test run_esbmc_test
 
 # ---------------------------------------------------------------------------

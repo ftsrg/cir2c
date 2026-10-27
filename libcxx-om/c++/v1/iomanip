@@ -1,0 +1,151 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <iomanip>
+// Simplified I/O manipulators for verification
+
+#ifndef _LIBCXX_OM_IOMANIP
+#define _LIBCXX_OM_IOMANIP
+
+namespace std {
+
+// Forward declaration — ostream is defined in iostream/fstream
+class ostream;
+class ios;
+class ios_base;
+
+// setw — sets field width
+class _setw_t {
+public:
+    explicit _setw_t(int w) : width_(w) {}
+    int width() const { return width_; }
+private:
+    int width_;
+};
+
+inline _setw_t setw(int n) { return _setw_t(n); }
+
+// setprecision — sets decimal precision
+class _setprecision_t {
+public:
+    explicit _setprecision_t(int p) : precision_(p) {}
+    int precision() const { return precision_; }
+private:
+    int precision_;
+};
+
+inline _setprecision_t setprecision(int n) { return _setprecision_t(n); }
+
+// setbase — sets numeric base
+class _setbase_t {
+public:
+    explicit _setbase_t(int b) : base_(b) {}
+    int base() const { return base_; }
+private:
+    int base_;
+};
+
+inline _setbase_t setbase(int b) { return _setbase_t(b); }
+
+// setfill — sets fill character
+class _setfill_t {
+public:
+    explicit _setfill_t(char c) : fill_(c) {}
+    char fill() const { return fill_; }
+private:
+    char fill_;
+};
+
+inline _setfill_t setfill(char c) { return _setfill_t(c); }
+
+// setiosflags — sets format flags
+inline void setiosflags(unsigned long flags) {
+    (void)flags;
+}
+
+// unsetf — unsets format flags
+inline void unsetf(unsigned long flags) {
+    (void)flags;
+}
+
+// setw — sets field width on stream
+inline ostream& operator<<(ostream& os, const _setw_t& manip) {
+    (void)os; (void)manip;
+    return os;
+}
+
+// setprecision — sets precision on stream
+inline ostream& operator<<(ostream& os, const _setprecision_t& manip) {
+    (void)os; (void)manip;
+    return os;
+}
+
+// setbase — sets base on stream
+inline ostream& operator<<(ostream& os, const _setbase_t& manip) {
+    (void)os; (void)manip;
+    return os;
+}
+
+// setfill — sets fill char on stream
+inline ostream& operator<<(ostream& os, const _setfill_t& manip) {
+    (void)os; (void)manip;
+    return os;
+}
+
+// Common manipulators (also in iostream/fstream)
+inline ostream& hex(ostream& os) { return os; }
+inline ostream& dec(ostream& os) { return os; }
+inline ostream& oct(ostream& os) { return os; }
+inline ostream& sethex(ostream& os) { return os; }
+inline ostream& setdec(ostream& os) { return os; }
+inline ostream& setoct(ostream& os) { return os; }
+inline ostream& fixed(ostream& os) { return os; }
+inline ostream& scientific(ostream& os) { return os; }
+inline ostream& left(ostream& os) { return os; }
+inline ostream& right(ostream& os) { return os; }
+inline ostream& internal(ostream& os) { return os; }
+inline ostream& showbase(ostream& os) { return os; }
+inline ostream& showpoint(ostream& os) { return os; }
+inline ostream& showpos(ostream& os) { return os; }
+inline ostream& skipws(ostream& os) { return os; }
+inline ostream& unitbuf(ostream& os) { return os; }
+inline ostream& uppercase(ostream& os) { return os; }
+inline ostream& nouppercase(ostream& os) { return os; }
+inline ostream& boolalpha(ostream& os) { return os; }
+inline ostream& noboolalpha(ostream& os) { return os; }
+
+// Format flags constants (inline namespace to avoid conflict with ios_base class)
+namespace ios_base_constants {
+    const unsigned long fmtflags_skipws = 1;
+    const unsigned long fmtflags_left = 2;
+    const unsigned long fmtflags_right = 4;
+    const unsigned long fmtflags_internal = 8;
+    const unsigned long fmtflags_dec = 16;
+    const unsigned long fmtflags_hex = 32;
+    const unsigned long fmtflags_oct = 64;
+    const unsigned long fmtflags_fixed = 128;
+    const unsigned long fmtflags_scientific = 256;
+    const unsigned long fmtflags_showbase = 512;
+    const unsigned long fmtflags_showpoint = 1024;
+    const unsigned long fmtflags_showpos = 2048;
+    const unsigned long fmtflags_unitbuf = 4096;
+    const unsigned long fmtflags_uppercase = 8192;
+    const unsigned long fmtflags_boolalpha = 16384;
+}
+
+} // namespace std
+
+#endif // _LIBCXX_OM_IOMANIP

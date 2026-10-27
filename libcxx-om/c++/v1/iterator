@@ -1,0 +1,218 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <iterator>
+// Simplified iterator utilities for verification
+
+#ifndef _LIBCXX_OM_ITERATOR
+#define _LIBCXX_OM_ITERATOR
+
+namespace std {
+
+// Iterator category tags
+struct input_iterator_tag {};
+struct output_iterator_tag {};
+struct forward_iterator_tag : input_iterator_tag {};
+struct bidirectional_iterator_tag : forward_iterator_tag {};
+struct random_access_iterator_tag : bidirectional_iterator_tag {};
+
+// Base iterator class — provides typedefs for common iterator traits
+template<typename Category, typename T, typename Distance = ptrdiff_t,
+         typename Pointer = T*, typename Reference = T&>
+struct iterator {
+    typedef Category iterator_category;
+    typedef T value_type;
+    typedef Distance difference_type;
+    typedef Pointer pointer;
+    typedef Reference reference;
+};
+
+// Iterator traits — extracts properties from any iterator type
+template<typename Iterator>
+struct iterator_traits {
+    typedef typename Iterator::iterator_category iterator_category;
+    typedef typename Iterator::value_type value_type;
+    typedef typename Iterator::difference_type difference_type;
+    typedef typename Iterator::pointer pointer;
+    typedef typename Iterator::reference reference;
+};
+
+// Pointer specialization
+template<typename T>
+struct iterator_traits<T*> {
+    typedef random_access_iterator_tag iterator_category;
+    typedef T value_type;
+    typedef ptrdiff_t difference_type;
+    typedef T* pointer;
+    typedef T& reference;
+};
+
+// Const pointer specialization
+template<typename T>
+struct iterator_traits<const T*> {
+    typedef random_access_iterator_tag iterator_category;
+    typedef T value_type;
+    typedef ptrdiff_t difference_type;
+    typedef const T* pointer;
+    typedef const T& reference;
+};
+
+// begin() and end() for arrays
+template<typename T, size_t N>
+inline T* begin(T (&array)[N]) noexcept { return array; }
+
+template<typename T, size_t N>
+inline T* end(T (&array)[N]) noexcept { return array + N; }
+
+// cbegin() and cend() for arrays
+template<typename T, size_t N>
+inline const T* cbegin(const T (&array)[N]) noexcept { return array; }
+
+template<typename T, size_t N>
+inline const T* cend(const T (&array)[N]) noexcept { return array + N; }
+
+// back_insert_iterator
+template<typename Container>
+class back_insert_iterator {
+public:
+    typedef output_iterator_tag iterator_category;
+    typedef void value_type;
+    typedef void difference_type;
+    typedef Container* container_type;
+    typedef Container& container_reference;
+    typedef back_insert_iterator& reference;
+
+    explicit back_insert_iterator(Container& c) : container_(&c) {}
+
+    back_insert_iterator& operator=(const typename Container::value_type& value) {
+        container_->push_back(value);
+        return *this;
+    }
+
+    back_insert_iterator& operator*() { return *this; }
+    back_insert_iterator& operator++() { return *this; }
+    back_insert_iterator operator++(int) { return *this; }
+
+private:
+    Container* container_;
+};
+
+// front_insert_iterator
+template<typename Container>
+class front_insert_iterator {
+public:
+    typedef output_iterator_tag iterator_category;
+    typedef void value_type;
+    typedef void difference_type;
+    typedef Container* container_type;
+    typedef Container& container_reference;
+    typedef front_insert_iterator& reference;
+
+    explicit front_insert_iterator(Container& c) : container_(&c) {}
+
+    front_insert_iterator& operator=(const typename Container::value_type& value) {
+        container_->push_front(value);
+        return *this;
+    }
+
+    front_insert_iterator& operator*() { return *this; }
+    front_insert_iterator& operator++() { return *this; }
+    front_insert_iterator operator++(int) { return *this; }
+
+private:
+    Container* container_;
+};
+
+// insert_iterator
+template<typename Container>
+class insert_iterator {
+public:
+    typedef output_iterator_tag iterator_category;
+    typedef void value_type;
+    typedef void difference_type;
+    typedef Container* container_type;
+    typedef Container& container_reference;
+    typedef insert_iterator& reference;
+
+    insert_iterator(Container& c, typename Container::iterator iter)
+        : container_(&c), iter_(iter) {}
+
+    insert_iterator& operator=(const typename Container::value_type& value) {
+        iter_ = container_->insert(iter_, value);
+        ++iter_;
+        return *this;
+    }
+
+    insert_iterator& operator*() { return *this; }
+    insert_iterator& operator++() { return *this; }
+    insert_iterator operator++(int) { return *this; }
+
+private:
+    Container* container_;
+    typename Container::iterator iter_;
+};
+
+// back_inserter — returns an output iterator that pushes back into a container
+template<typename Container>
+inline back_insert_iterator<Container> back_inserter(Container& c) {
+    return back_insert_iterator<Container>(c);
+}
+
+// front_inserter — returns an output iterator that pushes front into a container
+template<typename Container>
+inline front_insert_iterator<Container> front_inserter(Container& c) {
+    return front_insert_iterator<Container>(c);
+}
+
+// inserter — returns an output iterator that inserts at a position
+template<typename Container, typename Iterator>
+inline insert_iterator<Container> inserter(Container& c, Iterator i) {
+    return insert_iterator<Container>(c, i);
+}
+
+// distance — returns the number of elements between two iterators
+template<typename InputIterator>
+inline typename iterator_traits<InputIterator>::difference_type
+distance(InputIterator first, InputIterator last) {
+    typename iterator_traits<InputIterator>::difference_type n = 0;
+    for (; first != last; ++first) ++n;
+    return n;
+}
+
+// advance — moves an iterator forward by n elements
+template<typename InputIterator, typename Distance>
+inline void advance(InputIterator& i, Distance n) {
+    for (; n > 0; --n) ++i;
+}
+
+// next — returns a copy of iter advanced by n
+template<typename InputIterator>
+inline InputIterator next(InputIterator iter, typename iterator_traits<InputIterator>::difference_type n = 1) {
+    advance(iter, n);
+    return iter;
+}
+
+// prev — returns a copy of iter moved backward by n
+template<typename BidirectionalIterator>
+inline BidirectionalIterator prev(BidirectionalIterator iter,
+    typename iterator_traits<BidirectionalIterator>::difference_type n = 1) {
+    for (; n > 0; --n) --iter;
+    return iter;
+}
+
+} // namespace std
+
+#endif // _LIBCXX_OM_ITERATOR

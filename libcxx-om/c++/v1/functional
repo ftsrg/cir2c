@@ -1,0 +1,96 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Operational Model: <functional>
+// Simplified C++ header for function objects
+
+#ifndef _LIBCXX_OM_FUNCTIONAL
+#define _LIBCXX_OM_FUNCTIONAL
+
+namespace std {
+
+// function - simplified callable wrapper
+template<typename Signature>
+class function;
+
+// Specialization for R(Args...)
+template<typename R, typename... Args>
+class function<R(Args...)> {
+public:
+    function() : func_(nullptr) {}
+
+    template<typename F>
+    function(F f) : func_(reinterpret_cast<void*>(f)) {}
+
+    function(const function& other) : func_(other.func_) {}
+    function(function&& other) noexcept : func_(other.func_) { other.func_ = nullptr; }
+
+    ~function() {}
+
+    function& operator=(const function& other) { func_ = other.func_; return *this; }
+    function& operator=(function&& other) noexcept { func_ = other.func_; other.func_ = nullptr; return *this; }
+
+    bool operator==(std::nullptr_t) const { return func_ == nullptr; }
+    bool operator!=(std::nullptr_t) const { return func_ != nullptr; }
+    explicit operator bool() const { return func_ != nullptr; }
+
+    void clear() { func_ = nullptr; }
+
+private:
+    void* func_;
+};
+
+// reference_wrapper - already in utility
+
+// mem_fn - simplified
+template<typename F>
+struct mem_fn_t {
+    F ptr_;
+    mem_fn_t(F p) : ptr_(p) {}
+};
+
+template<typename F>
+mem_fn_t<F> mem_fn(F p) { return mem_fn_t<F>(p); }
+
+// bind - simplified placeholder
+struct placeholder {};
+
+// ref / cref
+template<typename T>
+reference_wrapper<T> ref(T& t) { return reference_wrapper<T>(t); }
+
+template<typename T>
+reference_wrapper<const T> cref(const T& t) { return reference_wrapper<const T>(t); }
+
+// bad_function_call
+class bad_function_call {};
+
+// default_delete
+template<typename T>
+struct default_delete {
+    void operator()(T* p) const { delete p; }
+};
+
+template<typename T>
+struct default_delete<T[]> {
+    void operator()(T* p) const { delete[] p; }
+};
+
+// reference_wrapper is already defined in utility
+
+} // namespace std
+
+#endif // _LIBCXX_OM_FUNCTIONAL
