@@ -591,7 +591,17 @@ void Mapper::computeReachableDefs(mlir::ModuleOp module) {
     if (sym.empty()) return;
     mlir::Operation *fop = f.getOperation();
     bool hasBody = fop->getNumRegions() > 0 && !fop->getRegion(0).empty();
-    if (!hasBody) { declOnlyFuncs_.insert(sym); return; }
+    if (!hasBody) {
+      declOnlyFuncs_.insert(sym);
+      // emitFuncForwardDecl gives a body-less complete-object constructor or
+      // destructor a stub that calls the base variant: that variant is used.
+      for (auto [from, to] : {std::pair<const char *, const char *>{"C1E", "C2E"}, {"D1E", "D2E"}}) {
+        size_t pos = sym.rfind(from);
+        if (pos != std::string::npos)
+          edges[sym].insert(sym.substr(0, pos) + to + sym.substr(pos + 3));
+      }
+      return;
+    }
     cir::GlobalLinkageKind lk = f.getLinkage();
     bool droppable = cir::isLinkOnceLinkage(lk) || cir::isWeakLinkage(lk) ||
                      cir::isAvailableExternallyLinkage(lk);
@@ -1616,7 +1626,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
       if (!recordType) return; // Not pointing to a record, skip
 
       // Get struct name using API
-      std::string structName = TypeMapper::recordCName(recordType.getName());
+      std::string structName = recordType.getName() && !recordType.getName().getValue().empty() ? TypeMapper::recordCName(recordType.getName()) : anonRecordCName(recordType);
 
       // Track unions
       if (recordType.isUnion()) {
@@ -1633,7 +1643,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
         mlir::Type resPointee = resPtrType.getPointee();
 
         if (auto resRecordType = mlir::dyn_cast<cir::RecordType>(resPointee)) {
-          std::string fieldStructName = TypeMapper::recordCName(resRecordType.getName());
+          std::string fieldStructName = resRecordType.getName() && !resRecordType.getName().getValue().empty() ? TypeMapper::recordCName(resRecordType.getName()) : anonRecordCName(resRecordType);
 
           if (resRecordType.isUnion()) {
             info.baseType = "union " + fieldStructName;
@@ -1655,7 +1665,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
 
           // Get the final element type
           if (auto elemRecordType = mlir::dyn_cast<cir::RecordType>(currentType)) {
-            std::string arrayStructName = TypeMapper::recordCName(elemRecordType.getName());
+            std::string arrayStructName = elemRecordType.getName() && !elemRecordType.getName().getValue().empty() ? TypeMapper::recordCName(elemRecordType.getName()) : anonRecordCName(elemRecordType);
 
             if (elemRecordType.isUnion()) {
               info.baseType = "union " + arrayStructName;
@@ -1874,7 +1884,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
       }
       if (auto rt = mlir::dyn_cast<cir::RecordType>(t)) {
         if (!rt.getName()) return;
-        std::string cn = TypeMapper::recordCName(rt.getName());
+        std::string cn = rt.getName() && !rt.getName().getValue().empty() ? TypeMapper::recordCName(rt.getName()) : anonRecordCName(rt);
         if (cn.rfind("std__", 0) != 0) return;
         if (isValue) stdStructValueUsed.insert(cn);
         stdStructAnyRef.insert(cn);
