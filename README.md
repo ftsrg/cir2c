@@ -322,6 +322,7 @@ script merges the translation units into one C program. See
 | `--flat-mlir FILE` | Write the flat CIR to `FILE`. This option includes `--flatten`. |
 | `--include DIR` | Add the `-I DIR` option to the CIR step. You can give this option more than one time. |
 | `--cflag FLAG` | Add `FLAG` to the CIR step, for example `-DNAME=VALUE`. You can give this option more than one time. The script adds no such flag itself. |
+| `--no-call-conv-lowering` | Skip the ClangIR calling-convention lowering, for types that it cannot lower yet. **CAUTION:** this is not sound. An object with a move constructor is then passed as a bitwise copy, so the caller never sees it moved from and destroys it. Use it for all translation units of a program or for none. |
 | `--merge c\|cir` | Set how more than one input file is merged. `c` (the default) merges the C outputs. `cir` merges the CIR modules with `cir-merge`. |
 | `--externalize-std` | Replace the `std::` calls and the library calls with unknown values. This is the default. |
 | `--tu-part` | The output is one translation unit of several, to be linked: internal symbols are `static`, symbols that each unit may define are `weak`, functions have their symbol names, and global constructors have `__attribute__((constructor))`. See [5.6](#56-merge-translation-units). |

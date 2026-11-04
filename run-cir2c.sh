@@ -40,6 +40,11 @@
 #   --[no-]externalize-std    Externalize (default) or keep std:: calls
 #   --tu-part                 The output is one translation unit of several; it
 #                             keeps the C linkage of its symbols, to be linked
+#   --no-call-conv-lowering   Skip ClangIR's calling-convention lowering, for types
+#                             it cannot lower yet. UNSOUND: an object with a move
+#                             constructor is then passed by value as a bitwise copy,
+#                             so the caller never sees it moved from and destroys it.
+#                             Use it for all translation units of a program or none.
 
 set -euo pipefail
 
@@ -72,8 +77,7 @@ INCLUDE_FLAGS=()   # -I dirs for CIR generation, supplied by the caller
 EXTRA_CFLAGS=()    # further flags for CIR generation (--cflag), e.g. -D
 EXTERNALIZE_STD=true
 TU_PART=()
-# The pass cannot lower every by-value record yet, and cir2c does not need it.
-CIR_CFLAGS=(-Xclang -fno-clangir-call-conv-lowering)
+CIR_CFLAGS=()
 
 usage() {
     echo "Usage: $0 [OPTIONS] <input-file(s)> <output.c>" >&2
@@ -82,7 +86,7 @@ usage() {
     echo "  --mlir FILE, --flat-mlir FILE" >&2
     echo "  --include DIR   add -I DIR to CIR generation (repeatable)" >&2
     echo "  --cflag FLAG    add FLAG to CIR generation (repeatable)" >&2
-    echo "  --[no-]externalize-std, --tu-part" >&2
+    echo "  --[no-]externalize-std, --tu-part, --no-call-conv-lowering" >&2
     exit 1
 }
 
@@ -99,6 +103,7 @@ while [[ $# -gt 0 ]]; do
         --externalize-std)    EXTERNALIZE_STD=true; shift ;;
         --no-externalize-std) EXTERNALIZE_STD=false; shift ;;
         --tu-part)            TU_PART=(--tu-part); shift ;;
+        --no-call-conv-lowering) CIR_CFLAGS=(-Xclang -fno-clangir-call-conv-lowering); shift ;;
         --) shift; break ;;
         -*) usage ;;
         *) break ;;
@@ -169,7 +174,7 @@ run_single_pipeline() {
     "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$input" -o "$cir_file" \
         ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
         ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
-        "${CIR_CFLAGS[@]}" ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
+        ${CIR_CFLAGS[@]+"${CIR_CFLAGS[@]}"} ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
 
     # Step 2: Preprocess
     local pre_file
@@ -206,7 +211,7 @@ compile_to_cir() {
     "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$input" -o "$output" \
         ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
         ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
-        "${CIR_CFLAGS[@]}" ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
+        ${CIR_CFLAGS[@]+"${CIR_CFLAGS[@]}"} ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
 }
 
 if [[ "$NUM_INPUTS" -eq 1 ]]; then
@@ -218,7 +223,7 @@ if [[ "$NUM_INPUTS" -eq 1 ]]; then
     "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$INPUT_FILE" -o "$CIR_FILE" \
         ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
         ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
-        "${CIR_CFLAGS[@]}" ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
+        ${CIR_CFLAGS[@]+"${CIR_CFLAGS[@]}"} ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
 
     # Step 2: Preprocess
     PRE_FILE=$(_tmpmlir "")
