@@ -1118,7 +1118,7 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
           body += fmtElem(e);
         }
     }
-    out << "void *" << name << "[] = { " << body << " };\n";
+    out << tuPartLinkage(globalOp.getLinkage()) << "void *" << name << "[] = { " << body << " };\n";
     return true;
   }
 
