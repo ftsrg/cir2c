@@ -28,6 +28,15 @@ _LIBCPP_BEGIN_NAMESPACE_STD
 using streamsize = long;
 using streamoff  = long long;
 
+// Formatting is not localized, so there is only one locale.
+class locale {
+public:
+  static const locale& classic() {
+    static const locale __l;
+    return __l;
+  }
+};
+
 class ios_base {
 public:
   using fmtflags = unsigned;
@@ -70,6 +79,8 @@ public:
   void exceptions(iostate) {}
   explicit operator bool() const { return !fail(); }
   bool operator!() const { return fail(); }
+  locale imbue(const locale& __l) { return __l; }
+  locale getloc() const { return locale(); }
 
 protected:
   fmtflags __flags_ = dec | skipws | right;
@@ -95,6 +106,31 @@ public:
     __precision_ = __o.__precision_;
     __fill_ = __o.__fill_;
     return *this;
+  }
+};
+
+// Just the reading side of a stream, as `rdbuf()` is used to read all of one.
+template <class _CharT, class _Traits>
+class basic_streambuf {
+  basic_istream<_CharT, _Traits>* __is_;
+
+public:
+  using char_type   = _CharT;
+  using traits_type = _Traits;
+  using int_type    = typename _Traits::int_type;
+  explicit basic_streambuf(basic_istream<_CharT, _Traits>* __is = nullptr) : __is_(__is) {}
+  int_type sgetc() {
+    _CharT __c;
+    return __is_ != nullptr && __is_->__om_peek(__c) ? _Traits::to_int_type(__c) : _Traits::eof();
+  }
+  int_type sbumpc() {
+    int_type __r = sgetc();
+    if (!_Traits::eq_int_type(__r, _Traits::eof())) __is_->__om_bump();
+    return __r;
+  }
+  int_type snextc() {
+    sbumpc();
+    return sgetc();
   }
 };
 
@@ -160,6 +196,10 @@ public:
   basic_ostream& operator<<(long double __v) { return *this << (long long)__v; }
   basic_ostream& operator<<(const void* __p) { return __om_put_int((unsigned long long)__p, false); }
   basic_ostream& operator<<(basic_ostream& (*__f)(basic_ostream&)) { return __f(*this); }
+  basic_ostream& operator<<(basic_streambuf<_CharT, _Traits>* __sb) {
+    while (!_Traits::eq_int_type(__sb->sgetc(), _Traits::eof())) put(_Traits::to_char_type(__sb->sbumpc()));
+    return *this;
+  }
   basic_ostream& operator<<(_Ios& (*__f)(_Ios&)) { __f(*this); return *this; }
   basic_ostream& operator<<(ios_base& (*__f)(ios_base&)) { __f(*this); return *this; }
   friend basic_ostream& operator<<(basic_ostream& __os, _CharT __c) { __os.__om_pad_and_write(&__c, 1); return __os; }
@@ -185,8 +225,10 @@ basic_ostream<char, _Traits>& operator<<(basic_ostream<char, _Traits>& __os, con
 template <class _CharT, class _Traits>
 class basic_istream : public basic_ios<_CharT, _Traits> {
   streamsize __gcount_ = 0;
+  basic_streambuf<_CharT, _Traits> __sb_{this};
 
 public:
+  basic_streambuf<_CharT, _Traits>* rdbuf() { return &__sb_; }
   // The next character, or false at the end of input.
   virtual bool __om_peek(_CharT&) { return false; }
   virtual void __om_bump() {}
@@ -408,9 +450,6 @@ _OM_FILE_STREAM(basic_fstream, basic_iostream, ios_base::in | ios_base::out)
 #undef _OM_STRING_STREAM_WRITE
 #undef _OM_STRING_STREAM_COMMON
 
-
-template <class _CharT, class _Traits>
-class basic_streambuf {};
 
 template <class _CharT, class _Traits>
 basic_ostream<_CharT, _Traits>& endl(basic_ostream<_CharT, _Traits>& __os) { return __os.put(_CharT('\n')); }

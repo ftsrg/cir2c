@@ -44,6 +44,10 @@ template <class _K, class _T, class _C, class _A>
 bool operator==(const map<_K, _T, _C, _A>& __a, const map<_K, _T, _C, _A>& __b) { return __om_assoc_equal(__a, __b); }
 template <class _K, class _T, class _C, class _A>
 bool operator!=(const map<_K, _T, _C, _A>& __a, const map<_K, _T, _C, _A>& __b) { return !(__a == __b); }
+template <class _K, class _T, class _C, class _A>
+bool operator<(const map<_K, _T, _C, _A>& __a, const map<_K, _T, _C, _A>& __b) {
+  return std::lexicographical_compare(__a.begin(), __a.end(), __b.begin(), __b.end());
+}
 
 _LIBCPP_END_NAMESPACE_STD
 
