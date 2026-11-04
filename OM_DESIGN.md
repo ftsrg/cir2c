@@ -18,140 +18,71 @@ limitations under the License.
 
 ## Motivation
 
-The cir2c tool translates C++ code to verifier-friendly C via ClangIR (CIR). By default, all `std::` calls are replaced with `__VERIFIER_nondet_*()` (nondeterministic), which is conservative but loses all library semantics. With `--no-externalize-std`, the real libc++ headers are used, but many symbols have no body in CIR, making verification unsound for containers.
+libc++ is written for speed and ABI stability. Its containers are balanced trees, hash
+tables and bit-tagged unions, and many of its members live in the compiled library, where
+a verifier has no body for them. Operational models (OMs) are small replacements that
+behave the same for a correct program and read as simple loops.
 
-Operational models solve this problem by providing simplified C++ headers that shadow the real libc++ headers during CIR generation. These models replace C++ templates, classes, and complex constructs with simple C-like structs and functions that are easy for Theta to verify.
-
-## Architecture
-
-```
-C++ source (#include <vector>)
-       ↓
-clang++ -emit-cir -I libcxx-om/   ← Operational models shadow libc++
-       ↓
-CIR MLIR
-       ↓
-cir2c --externalize-std
-       ↓
-Verifier-friendly C with __VERIFIER_*
-       ↓
-Theta verification
-       ↓
-Result: SAFE / UNSAFE
-```
-
-## Design Decisions
-
-### 1. Shadow Headers via --include
-
-- Create a separate `libcxx-om/` directory
-- Users pass `--include libcxx-om/` to `run-cir2c.sh`
-- The OMs shadow the real libc++ headers during CIR generation
-- Original headers remain intact and optional
-
-### 2. Simplified Container Implementations
-
-All containers use simple array-based implementations:
-- **vector**: Dynamic array with push_back, pop_back, iterators
-- **map/set**: Linear search arrays (not trees)
-- **list**: Array-based (not linked list)
-- **deque**: Array-based (not block-based)
-
-This simplification makes the code easier to verify while preserving the essential semantics.
-
-### 3. Bounded Sizes
-
-All containers have a maximum size of 64 elements. This keeps verification tractable while being sufficient for most test cases.
-
-### 4. Nondeterminism for I/O
-
-- `cout`, `cin`, `cerr` are no-ops
-- `rand()` returns `__VERIFIER_nondet_int()`
-- `malloc()` returns `__VERIFIER_nondet_ptr()`
-- File I/O functions return null/0
-
-### 5. Assert Mapping
-
-The `assert` macro is mapped to `__VERIFIER_error()`, so failed assertions become verification errors.
-
-### 6. Smart Pointers
-
-- `unique_ptr`: Simple wrapper with move semantics
-- `shared_ptr`: Reference counting with a shared counter
-- `weak_ptr`: Simplified, just stores a raw pointer
-
-### 7. Algorithms
-
-All algorithms use simple O(n²) implementations:
-- `sort`: Insertion sort
-- `find`: Linear search
-- `binary_search`: Uses `lower_bound` with linear scan
-- `merge`: Simple merge of two sorted arrays
-
-## Verification Strategy
-
-### Property-Based Verification
-
-Write small C++ programs that use stdlib features, translate them through cir2c, and verify key properties:
-
-```cpp
-vector<int> v;
-v.push_back(1);
-v.push_back(2);
-assert(v.size() == 2);  // Verified by Theta
-```
-
-### Interface Conformance
-
-Verify that the C models satisfy the formal interface contracts from cppreference:
-- `vector::push_back` increases size by 1
-- `string::length` returns the correct value
-- `map::find` returns end() for missing keys
-
-## File Structure
+## How they plug in
 
 ```
-libcxx-om/
-├── README.md
-├── c++/v1/
-│   ├── vector          # std::vector
-│   ├── string          # std::string
-│   ├── map             # std::map
-│   ├── set             # std::set
-│   ├── unordered_map   # std::unordered_map
-│   ├── unordered_set   # std::unordered_set
-│   ├── list            # std::list
-│   ├── deque           # std::deque
-│   ├── array           # std::array
-│   ├── algorithm       # std algorithms
-│   ├── utility         # pair, swap, type traits
-│   ├── functional      # function objects
-│   ├── iostream        # cout, cin (no-ops)
-│   ├── memory          # smart pointers
-│   ├── numeric         # accumulate, etc.
-│   ├── optional        # std::optional
-│   ├── tuple           # std::tuple
-│   ├── cassert         # assert
-│   ├── cstring         # C string functions
-│   ├── cmath           # C math functions
-│   ├── cstdlib         # C stdlib functions
-│   └── cstdio          # C stdio functions
+./run-cir2c.sh --include libcxx-om/c++/v1 --no-externalize-std input.cpp out.c
 ```
 
-## Known Limitations
+`--include` becomes `-I`, which is searched before the `-isystem` libc++. Every
+`#include`, including the ones inside libc++'s own headers, finds a model first if there
+is one. `--no-externalize-std` keeps the bodies of the models.
 
-1. **No templates in output**: All templates are resolved at compile time
-2. **No exceptions**: No try/catch support
-3. **No multithreading**: No mutex, thread, or atomic support
-4. **No file I/O**: fstream is not modeled
-5. **No regex, filesystem, coroutines**: Out of scope
-6. **Bounded containers**: Max 64 elements
-7. **Simple algorithms**: O(n²) implementations for verifiability
+## Design
 
-## Future Work
+**One namespace.** Models are declared in libc++'s own inline namespace
+(`_LIBCPP_BEGIN_NAMESPACE_STD`), with the template parameters of `<__fwd/*.h>`. A model
+is therefore the same entity libc++'s other headers name, so `<queue>` on the model of
+`<deque>`, or `<algorithm>` on the model of `<vector>`, work unchanged.
 
-- Add more headers (fstream, sstream, regex)
-- Add more algorithm variants
-- Improve iterator implementations
-- Add range-based for loop support
-- Add more type traits
+**Shadow only what needs it.** A header is modelled when it is heavy or depends on the
+compiled library. Everything else stays libc++, which keeps the API complete and the
+models short: `<array>`, `<tuple>`, `<optional>`, `<utility>`, `<type_traits>`,
+`<algorithm>` apart from sorting, `<memory>` with `unique_ptr` and `shared_ptr`,
+`<chrono>`, `<atomic>`.
+
+**The narrowest header.** When libc++ splits a class into an internal header that other
+headers include directly, that internal header is the one shadowed, for example
+`<__vector/vector.h>`. The models are tied to the libc++ of the pinned LLVM revision.
+
+| Model | Shadows | How |
+|---|---|---|
+| `vector` | `__vector/vector.h` | heap array with `malloc`, raw pointers as iterators; `vector<bool>` stays libc++ |
+| `string` | `string` | NUL-terminated heap array, no small-string union |
+| `list`, `map`, `set`, `multimap`, `multiset` | same names | one circular linked list (`__om/node_list.h`, `__om/assoc.h`), linear search, stable references |
+| `unordered_map`, `unordered_set`, `unordered_multi*` | same names | the same list, by equality; the hash is never computed |
+| `deque` | `deque` | ring of pointers to single elements, stable references |
+| `shared_ptr` counts | `__memory/shared_count.h` | libc++'s atomic counting, with bodies |
+| `mutex` | `__mutex/mutex.h` | directly on `pthread_mutex_*` |
+| `condition_variable` | `__condition_variable/condition_variable.h` | directly on `pthread_cond_*`; a timed wait may time out at any point |
+| `thread` | `__thread/thread.h` | directly on `pthread_create` with a direct start routine |
+| `function` | `__functional/function.h` | one heap object behind a virtual call |
+| `sort` | `__algorithm/sort.h` | insertion sort, no compiled instantiations |
+| `stdexcept` | `stdexcept` | message held by pointer |
+| streams | `ios`, `ostream`, `istream`, `iostream`, `sstream`, `fstream`, `iomanip`, `streambuf`, `__ostream/basic_ostream.h` | `__om/iostream.h`, no locales or stream buffers |
+
+## What the models do not preserve
+
+- Complexity, iteration order of unordered containers, and capacity growth details.
+- Allocators are accepted and ignored. Memory comes from `malloc`, which aborts on failure.
+- `cout` and the other standard streams, and files, discard what is written. A file opens
+  or fails nondeterministically and has no content to read.
+- String streams keep real text, with base, width and fill. Floats print and parse only
+  their whole part, and `to_string` of a float likewise.
+- A `basic_iostream` holds two stream states, one per base, since a virtual `basic_ios`
+  needs construction tables (VTTs) that cir2c does not lower yet.
+- `hardware_concurrency()` is 1. Time passing is not modelled.
+- Only C++17 and later: the models use `if constexpr` and `std::apply`.
+- `recursive_mutex`, `timed_mutex` and `condition_variable_any` stay libc++, whose members
+  have no bodies here.
+
+## Testing
+
+The models have to give the same results as a real standard library. A program that
+exercises them is translated with and without the models and run, and its output is
+compared with the program compiled natively.
