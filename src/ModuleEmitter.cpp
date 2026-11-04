@@ -112,7 +112,7 @@ static std::string stripEmptyArgList(const std::string &s) {
 static std::string oneLineOperationText(mlir::Operation &op) {
   std::string text;
   llvm::raw_string_ostream rso(text);
-  op.print(rso);
+  op.print(rso, mlir::OpPrintingFlags().assumeVerified().useLocalScope());
   rso.flush();
 
   std::replace(text.begin(), text.end(), '\n', ' ');
@@ -675,14 +675,16 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
                     mangledSym.rfind("_Zdl", 0) == 0 || // operator delete
                     mangledSym.rfind("_Zda", 0) == 0;   // operator delete[]
   bool hasBodyCheck = (fop->getNumRegions() > 0 && !fop->getRegion(0).empty());
+  // Stubs written here exist in every unit that needs them.
+  const char *weakStub = tuPart_ ? "__attribute__((weak)) " : "";
   if (isNewOp && !hasBodyCheck) {
     ensureMallocFreeDeclared(out);
-    out << retType << " " << outName << "(" << params << ") { return malloc(p0); }\n";
+    out << weakStub << retType << " " << outName << "(" << params << ") { return malloc(p0); }\n";
     return true;
   }
   if (isDeleteOp && !hasBodyCheck) {
     ensureMallocFreeDeclared(out);
-    out << retType << " " << outName << "(" << params << ") { free(p0); }\n";
+    out << weakStub << retType << " " << outName << "(" << params << ") { free(p0); }\n";
     return true;
   }
   // __cxa_pure_virtual fills pure-virtual vtable slots (Itanium ABI). It is a
@@ -690,7 +692,7 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
   // reached if a pure virtual is actually invoked (a program bug) — abort.
   if (mangledSym == "__cxa_pure_virtual" || mangledSym == "__cxa_deleted_virtual") {
     ensureAbortDeclared(out);
-    out << "void " << outName << "(void) { abort(); }\n";
+    out << weakStub << "void " << outName << "(void) { abort(); }\n";
     return true;
   }
 
@@ -729,7 +731,7 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
           if (i) args += ", ";
           args += "p" + std::to_string(i);
         }
-        out << retType << " " << outName << "(" << params << ") { "
+        out << weakStub << retType << " " << outName << "(" << params << ") { "
             << baseName << "(" << args << "); }\n";
         return true;
       }
@@ -742,7 +744,7 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
     // we cannot link (we compile as plain C with -lm only).  Emit a noop stub.
     if (mangled.find("D1E") != std::string::npos ||
         mangled.find("D2E") != std::string::npos) {
-      out << retType << " " << outName << "(" << params << ") {}\n";
+      out << weakStub << retType << " " << outName << "(" << params << ") {}\n";
       return true;
     }
   }
@@ -779,6 +781,8 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
   if (!hasBody)
     out << "extern ";
 
+  if (auto f = llvm::dyn_cast<cir::FuncOp>(fop); f && tuPart_ && cir::isLocalLinkage(f.getLinkage()))
+    out << "static ";
   out << retType << " " << outName << "(" << params << ");\n";
   // Record that a prototype for this C name now exists, so the injected libc
   // declarations (memcpy/memset/memchr) don't emit a conflicting second one.
@@ -893,6 +897,9 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
   // (GCC otherwise packs functions onto odd addresses).
   if (usesMemberFnPtr_)
     ctorAttr += "__attribute__((aligned(2))) ";
+  if (auto f = llvm::dyn_cast<cir::FuncOp>(fop))
+    if (fop->getNumRegions() != 0 && !fop->getRegion(0).empty())
+      ctorAttr = tuPartLinkage(f.getLinkage()) + tuPartInitAttr(sym.getValue().str()) + ctorAttr;
   out << ctorAttr << retType << " " << outName << "(" << params << ")";
   std::string funcHeaderText = ctorAttr + retType + " " + outName + "(" + params + ")";
 
@@ -958,7 +965,7 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
   // constructors explicitly here, in the order the loader would. This assumes
   // main() is the program entry point.
   bool isMain = sym.getValue().str() == "main";
-  if (isMain && !globalCtorSymbols_.empty()) {
+  if (isMain && !tuPart_ && !globalCtorSymbols_.empty()) {
     out << "  // global constructors (C++ static init), normally run before main\n";
     for (const std::string &ctorSym : globalCtorSymbols_)
       out << "  " << getFunctionOutputName(ctorSym) << "();\n";
@@ -1001,8 +1008,28 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
   return true;
 }
 
+std::string Mapper::tuPartLinkage(cir::GlobalLinkageKind linkage) const {
+  if (!tuPart_) return "";
+  if (cir::isLocalLinkage(linkage)) return "static ";
+  if (cir::isLinkOnceLinkage(linkage) || cir::isWeakLinkage(linkage) ||
+      cir::isAvailableExternallyLinkage(linkage))
+    return "__attribute__((weak)) ";
+  return "";
+}
+
+std::string Mapper::tuPartInitAttr(const std::string &sym) const {
+  if (!tuPart_) return "";
+  if (std::find(globalCtorSymbols_.begin(), globalCtorSymbols_.end(), sym) !=
+      globalCtorSymbols_.end())
+    return "__attribute__((constructor)) ";
+  if (std::find(globalDtorSymbols_.begin(), globalDtorSymbols_.end(), sym) !=
+      globalDtorSymbols_.end())
+    return "__attribute__((destructor)) ";
+  return "";
+}
+
 void Mapper::emitGlobalDtorsAtMainReturn(std::ostream &out) {
-  if (!emittingMainBody_ || globalDtorSymbols_.empty()) return;
+  if (tuPart_ || !emittingMainBody_ || globalDtorSymbols_.empty()) return;
   out << "  // global destructors (__attribute__((destructor))), normally run at exit\n";
   // Reverse of constructor order: last-registered destructor runs first.
   for (auto it = globalDtorSymbols_.rbegin(); it != globalDtorSymbols_.rend(); ++it)
@@ -1252,6 +1279,7 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
   // NULL and any use of it crashes. (_ZTI* RTTI declarations are handled by the
   // stub special-case below and return before this prefix is used.)
   if (globalOp.isDeclaration()) qualPrefix = "extern " + qualPrefix;
+  else qualPrefix = tuPartLinkage(globalOp.getLinkage()) + qualPrefix;
 
   // Over-alignment: a source `__attribute__((aligned(N)))` (or any ABI alignment
   // exceeding the natural one) is recorded on the CIR global. Some tests check
@@ -2096,23 +2124,25 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
 
   if (hasExceptions_ && !ehPreambleEmitted) {
     out << "// Exception handling state (modelled in plain C)\n";
-    out << "static void *__cir_exc_ptr;\n";
-    out << "static const void *__cir_exc_type;\n";
+    // An exception can cross translation units, so with --tu-part they share it.
+    const char *ehStateLinkage = tuPart_ ? "__attribute__((weak)) " : "static ";
+    out << ehStateLinkage << "void *__cir_exc_ptr;\n";
+    out << ehStateLinkage << "const void *__cir_exc_type;\n";
     // uintptr_t: must be wide enough to hold a pointer value without truncation
     // on any platform (a plain 'unsigned' would lose the high 32 bits on LP64).
-    out << "static unsigned long __cir_exc_type_id;\n";
-    out << "static int __cir_exc_active;\n";
+    out << ehStateLinkage << "unsigned long __cir_exc_type_id;\n";
+    out << ehStateLinkage << "int __cir_exc_active;\n";
     // Destructor for the in-flight exception object (set by cir.throw from its
     // dtor operand); cir.end_catch runs it on the object, mirroring the Itanium
     // ABI where __cxa_end_catch destroys the exception when the last handler
     // exits. Stored as void* and called through a (void(*)(void*)) cast.
-    out << "static void *__cir_exc_dtor;\n";
+    out << ehStateLinkage << "void *__cir_exc_dtor;\n";
     if (!ehTypeSymbols_.empty()) {
       out << "// Per-RTTI address tags: each thrown/caught type symbol gets a\n"
           << "// distinct storage location so catch dispatch is a pointer compare.\n";
       for (const auto &sym : ehTypeSymbols_) {
         std::string san = sanitizeIdentifier(sym);
-        out << "static const char __cir_eh_type_" << san
+        out << ehStateLinkage << "const char __cir_eh_type_" << san
             << "[] = \"" << sym << "\";\n";
       }
     }
@@ -2220,11 +2250,15 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
           fwd += ", __a" + std::to_string(i);
           fnArgTypes += ", " + args[i];
         }
+        if (tuPart_) out << "__attribute__((weak)) ";
         out << ret << " __VERIFIER_virtual_call_"
             << suffix << "(void* __obj, int __slot" << params << ") {\n";
         out << "  void* __fn = ((void**)*(void**)__obj)[__slot];\n";
-        out << "  " << (ret == "void" ? "" : "return ")
-            << "((" << ret << "(*)(" << fnArgTypes << "))__fn)(__obj" << fwd << ");\n";
+        // Through a variable: verifiers dispatch calls over function-pointer
+        // variables, and cannot call the result of a cast.
+        out << "  " << ret << " (*__f)(" << fnArgTypes << ") = (" << ret << "(*)(" << fnArgTypes
+            << "))__fn;\n";
+        out << "  " << (ret == "void" ? "" : "return ") << "__f(__obj" << fwd << ");\n";
         out << "}\n";
       }
       out << "\n";

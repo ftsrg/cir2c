@@ -38,6 +38,8 @@
 #   --flat-mlir FILE          Save flattened MLIR to FILE (implies --flatten)
 #   --cflag FLAG              Add FLAG to the CIR generation step (repeatable)
 #   --[no-]externalize-std    Externalize (default) or keep std:: calls
+#   --tu-part                 The output is one translation unit of several; it
+#                             keeps the C linkage of its symbols, to be linked
 
 set -euo pipefail
 
@@ -69,6 +71,9 @@ FLAT_MLIR_OUT=""
 INCLUDE_FLAGS=()   # -I dirs for CIR generation, supplied by the caller
 EXTRA_CFLAGS=()    # further flags for CIR generation (--cflag), e.g. -D
 EXTERNALIZE_STD=true
+TU_PART=()
+# The pass cannot lower every by-value record yet, and cir2c does not need it.
+CIR_CFLAGS=(-Xclang -fno-clangir-call-conv-lowering)
 
 usage() {
     echo "Usage: $0 [OPTIONS] <input-file(s)> <output.c>" >&2
@@ -77,7 +82,7 @@ usage() {
     echo "  --mlir FILE, --flat-mlir FILE" >&2
     echo "  --include DIR   add -I DIR to CIR generation (repeatable)" >&2
     echo "  --cflag FLAG    add FLAG to CIR generation (repeatable)" >&2
-    echo "  --[no-]externalize-std" >&2
+    echo "  --[no-]externalize-std, --tu-part" >&2
     exit 1
 }
 
@@ -93,6 +98,7 @@ while [[ $# -gt 0 ]]; do
         --cflag)              EXTRA_CFLAGS+=("$2"); shift 2 ;;
         --externalize-std)    EXTERNALIZE_STD=true; shift ;;
         --no-externalize-std) EXTERNALIZE_STD=false; shift ;;
+        --tu-part)            TU_PART=(--tu-part); shift ;;
         --) shift; break ;;
         -*) usage ;;
         *) break ;;
@@ -163,7 +169,7 @@ run_single_pipeline() {
     "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$input" -o "$cir_file" \
         ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
         ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
-        ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
+        "${CIR_CFLAGS[@]}" ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
 
     # Step 2: Preprocess
     local pre_file
@@ -186,6 +192,7 @@ run_single_pipeline() {
     # Step 4: cir2c
     local mapper_cmd=("$CIR2C")
     [[ "$EXTERNALIZE_STD" == true ]] && mapper_cmd+=(--externalize-std) || mapper_cmd+=(--no-externalize-std)
+    mapper_cmd+=(${TU_PART[@]+"${TU_PART[@]}"})
     mapper_cmd+=("$mapper_input" "$output")
     "${mapper_cmd[@]}" || exit 4
 }
@@ -199,7 +206,7 @@ compile_to_cir() {
     "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$input" -o "$output" \
         ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
         ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
-        ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
+        "${CIR_CFLAGS[@]}" ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
 }
 
 if [[ "$NUM_INPUTS" -eq 1 ]]; then
@@ -211,7 +218,7 @@ if [[ "$NUM_INPUTS" -eq 1 ]]; then
     "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$INPUT_FILE" -o "$CIR_FILE" \
         ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
         ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
-        ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
+        "${CIR_CFLAGS[@]}" ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
 
     # Step 2: Preprocess
     PRE_FILE=$(_tmpmlir "")
@@ -231,6 +238,7 @@ if [[ "$NUM_INPUTS" -eq 1 ]]; then
     # Step 4: cir2c
     MAPPER_CMD=("$CIR2C")
     [[ "$EXTERNALIZE_STD" == true ]] && MAPPER_CMD+=(--externalize-std) || MAPPER_CMD+=(--no-externalize-std)
+    MAPPER_CMD+=(${TU_PART[@]+"${TU_PART[@]}"})
     MAPPER_CMD+=("$MAPPER_INPUT" "$OUTPUT_C")
     "${MAPPER_CMD[@]}" || exit 4
 
@@ -280,6 +288,7 @@ else
             # cir2c
             MAPPER_CMD=("$CIR2C")
             [[ "$EXTERNALIZE_STD" == true ]] && MAPPER_CMD+=(--externalize-std) || MAPPER_CMD+=(--no-externalize-std)
+    MAPPER_CMD+=(${TU_PART[@]+"${TU_PART[@]}"})
             MAPPER_CMD+=("$MAPPER_INPUT" "$OUTPUT_C")
             "${MAPPER_CMD[@]}" || exit 4
             ;;

@@ -82,7 +82,7 @@ Mapper::Mapper() : counter(0) {}
 static std::string oneLineOperationText(mlir::Operation &op) {
   std::string text;
   llvm::raw_string_ostream rso(text);
-  op.print(rso);
+  op.print(rso, mlir::OpPrintingFlags().assumeVerified().useLocalScope());
   rso.flush();
 
   std::replace(text.begin(), text.end(), '\n', ' ');
