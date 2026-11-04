@@ -96,10 +96,13 @@ private:
       std::string intrinsic = "__VERIFIER_virtual_call_" + suffix;
       m.setHasVirtualCalls();
 
-      // Argument list: this-ptr, slot index, then the remaining call arguments.
-      std::string args = pointerOperandExpr(o->getOperand(1), m) + ", " +
-                         std::to_string(slot);
-      for (unsigned i = 2; i < o->getNumOperands(); ++i)
+      // Argument list: object, slot index, then the call arguments.
+      // The object is named apart from the arguments: the first argument is not
+      // `this` when the function returns its result through a hidden pointer.
+      Value object = m.getVtableDispatchObject(fnptr);
+      if (!object) object = o->getOperand(1);
+      std::string args = pointerOperandExpr(object, m) + ", " + std::to_string(slot);
+      for (unsigned i = 1; i < o->getNumOperands(); ++i)
         args += ", " + pointerOperandExpr(o->getOperand(i), m);
 
       if (o->getNumResults() > 0) {

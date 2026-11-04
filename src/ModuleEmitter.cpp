@@ -2274,14 +2274,14 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     // so no `weak` linkage is needed (and it would not be plain ISO C).
     if (!virtualCallSigs_.empty()) {
       out << "// Virtual dispatch: default implementations.\n"
-             "// __VERIFIER_virtual_call_<sig>(obj, slot, args): obj's vtable\n"
+             "// __VERIFIER_virtual_call_<sig>(obj, slot, first, args): obj's vtable\n"
              "// pointer is at offset 0; the function is vtable[slot].\n";
       for (const auto &kv : virtualCallSigs_) {
         const std::string &suffix = kv.first;
         const std::string &ret = kv.second.first;
         const std::vector<std::string> &args = kv.second.second;
         // Parameter list and forwarded-argument list.
-        std::string params, fwd, fnArgTypes = "void*";
+        std::string params = ", void* __first", fwd = "__first", fnArgTypes = "void*";
         for (size_t i = 0; i < args.size(); ++i) {
           params += ", " + args[i] + " __a" + std::to_string(i);
           fwd += ", __a" + std::to_string(i);
@@ -2295,7 +2295,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
         // variables, and cannot call the result of a cast.
         out << "  " << ret << " (*__f)(" << fnArgTypes << ") = (" << ret << "(*)(" << fnArgTypes
             << "))__fn;\n";
-        out << "  " << (ret == "void" ? "" : "return ") << "__f(__obj" << fwd << ");\n";
+        out << "  " << (ret == "void" ? "" : "return ") << "__f(" << fwd << ");\n";
         out << "}\n";
       }
       out << "\n";
