@@ -1,142 +1,50 @@
-/*
- * Copyright 2025 Budapest University of Technology and Economics
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// Part of the cir2c operational models of libc++. See OM_DESIGN.md.
+// Copyright 2025 Budapest University of Technology and Economics
+// Licensed under the Apache License, Version 2.0
+// std::set and std::multiset, see __om/assoc.h.
+#ifndef _LIBCPP_SET
+#define _LIBCPP_SET
 
-// Operational Model: <set>
-// Minimal std::set for verification
+#include <__om/assoc.h>
 
-#ifndef _LIBCXX_OM_SET
-#define _LIBCXX_OM_SET
+_LIBCPP_BEGIN_NAMESPACE_STD
 
-#include <utility>
+template <class _Key, class _Compare = less<_Key>, class _Allocator = allocator<_Key> >
+class set : public __om_assoc<_Key, _Key, __om_key_of_self, _Compare, true, false> {
+  using _Base = __om_assoc<_Key, _Key, __om_key_of_self, _Compare, true, false>;
 
-namespace std {
-
-template<typename T>
-struct less {
-    bool operator()(const T& a, const T& b) const { return a < b; }
-};
-
-template<typename Key, typename Compare = less<Key>>
-class set {
 public:
-    typedef Key key_type;
-    typedef Key value_type;
-    typedef Compare key_compare;
-    typedef unsigned long size_type;
-    typedef Key* iterator;
-    typedef const Key* const_iterator;
-
-    static constexpr size_type MAX_SIZE = 64;
-
-    set() : size_(0) {}
-
-    set(const set& other) : size_(other.size_) {
-        for (size_type i = 0; i < size_; i++) keys_[i] = other.keys_[i];
-    }
-
-    set(set&& other) : size_(other.size_) {
-        for (size_type i = 0; i < size_; i++) keys_[i] = other.keys_[i];
-        other.size_ = 0;
-    }
-
-    set& operator=(const set& other) {
-        if (this != &other) {
-            size_ = other.size_;
-            for (size_type i = 0; i < size_; i++) keys_[i] = other.keys_[i];
-        }
-        return *this;
-    }
-
-    iterator begin() { return keys_; }
-    const_iterator begin() const { return keys_; }
-    iterator end() { return keys_ + size_; }
-    const_iterator end() const { return keys_ + size_; }
-    const_iterator cbegin() const { return keys_; }
-    const_iterator cend() const { return keys_ + size_; }
-
-    size_type size() const { return size_; }
-    bool empty() const { return size_ == 0; }
-
-    void clear() { size_ = 0; }
-
-    pair<iterator, bool> insert(const Key& key) {
-        for (size_type i = 0; i < size_; i++) {
-            if (keys_[i] == key) return pair<iterator, bool>(keys_ + i, false);
-        }
-        keys_[size_] = key;
-        return pair<iterator, bool>(keys_ + size_++, true);
-    }
-
-    iterator find(const Key& key) {
-        for (size_type i = 0; i < size_; i++) {
-            if (keys_[i] == key) return keys_ + i;
-        }
-        return keys_ + size_;
-    }
-
-    const_iterator find(const Key& key) const {
-        for (size_type i = 0; i < size_; i++) {
-            if (keys_[i] == key) return keys_ + i;
-        }
-        return keys_ + size_;
-    }
-
-    size_type count(const Key& key) const {
-        for (size_type i = 0; i < size_; i++) {
-            if (keys_[i] == key) return 1;
-        }
-        return 0;
-    }
-
-    size_type erase(const Key& key) {
-        for (size_type i = 0; i < size_; i++) {
-            if (keys_[i] == key) {
-                for (size_type j = i; j < size_ - 1; j++) keys_[j] = keys_[j + 1];
-                size_--;
-                return 1;
-            }
-        }
-        return 0;
-    }
-
-    void swap(set& other) {
-        size_type ts = size_;
-        for (size_type i = 0; i < MAX_SIZE; i++) {
-            Key tk = keys_[i]; keys_[i] = other.keys_[i]; other.keys_[i] = tk;
-        }
-        size_ = other.size_; other.size_ = ts;
-    }
-
-    bool operator==(const set& other) const {
-        if (size_ != other.size_) return false;
-        for (size_type i = 0; i < size_; i++) {
-            if (keys_[i] != other.keys_[i]) return false;
-        }
-        return true;
-    }
-    bool operator!=(const set& other) const { return !(*this == other); }
-
-private:
-    Key keys_[MAX_SIZE];
-    size_type size_;
+  using key_compare    = _Compare;
+  using value_compare  = _Compare;
+  using allocator_type = _Allocator;
+  set() {}
+  explicit set(const _Compare& __c) : _Base(__c) {}
+  set(initializer_list<_Key> __il) { this->insert(__il); }
+  template <class _It, __enable_if_t<!is_integral<_It>::value, int> = 0>
+  set(_It __f, _It __l) { this->insert(__f, __l); }
+  _OM_ASSOC_MEMBERS(set)
+  key_compare key_comp() const { return this->__cmp_; }
 };
 
-template<typename Key, typename Compare>
-void swap(set<Key, Compare>& x, set<Key, Compare>& y) { x.swap(y); }
+template <class _Key, class _Compare = less<_Key>, class _Allocator = allocator<_Key> >
+class multiset : public __om_assoc<_Key, _Key, __om_key_of_self, _Compare, true, true> {
+  using _Base = __om_assoc<_Key, _Key, __om_key_of_self, _Compare, true, true>;
 
-} // namespace std
+public:
+  using key_compare    = _Compare;
+  using allocator_type = _Allocator;
+  multiset() {}
+  explicit multiset(const _Compare& __c) : _Base(__c) {}
+  multiset(initializer_list<_Key> __il) { this->insert(__il); }
+  _OM_ASSOC_MEMBERS(multiset)
+  key_compare key_comp() const { return this->__cmp_; }
+};
 
-#endif // _LIBCXX_OM_SET
+template <class _K, class _C, class _A>
+bool operator==(const set<_K, _C, _A>& __a, const set<_K, _C, _A>& __b) { return __om_assoc_equal(__a, __b); }
+template <class _K, class _C, class _A>
+bool operator!=(const set<_K, _C, _A>& __a, const set<_K, _C, _A>& __b) { return !(__a == __b); }
+
+_LIBCPP_END_NAMESPACE_STD
+
+#endif

@@ -1,288 +1,116 @@
-/*
- * Copyright 2025 Budapest University of Technology and Economics
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// Part of the cir2c operational models of libc++. See OM_DESIGN.md.
+// Copyright 2025 Budapest University of Technology and Economics
+// Licensed under the Apache License, Version 2.0
+// std::list on the shared node list.
+#ifndef _LIBCPP_LIST
+#define _LIBCPP_LIST
 
-// Operational Model: <list>
-// Simplified C++ header for std::list
+#include <__config>
+#include <__memory/allocator.h>
+#include <__om/node_list.h>
+#include <__type_traits/enable_if.h>
+#include <__type_traits/is_integral.h>
+#include <__functional/operations.h>
+#include <algorithm>
+#include <initializer_list>
+#include <iterator>
 
-#ifndef _LIBCXX_OM_LIST
-#define _LIBCXX_OM_LIST
+_LIBCPP_BEGIN_NAMESPACE_STD
 
-#include <stddef.h>
+template <class _Tp, class _Allocator = allocator<_Tp> >
+class list : public __om_node_list<_Tp> {
+  using _Base = __om_node_list<_Tp>;
 
-namespace std {
-
-template<typename T, typename Allocator = allocator<T>>
-class list {
 public:
-    typedef T value_type;
-    typedef Allocator allocator_type;
-    typedef size_t size_type;
-    typedef ptrdiff_t difference_type;
+  using value_type      = _Tp;
+  using allocator_type  = _Allocator;
+  using size_type       = size_t;
+  using difference_type = ptrdiff_t;
+  using reference       = _Tp&;
+  using const_reference = const _Tp&;
+  using pointer         = _Tp*;
+  using const_pointer   = const _Tp*;
+  using typename _Base::const_iterator;
+  using typename _Base::const_reverse_iterator;
+  using typename _Base::iterator;
+  using typename _Base::reverse_iterator;
 
-    struct iterator {
-        T* ptr;
-        iterator(T* p = nullptr) : ptr(p) {}
-        T& operator*() const { return *ptr; }
-        T* operator->() const { return ptr; }
-        iterator& operator++() { ptr++; return *this; }
-        iterator& operator--() { ptr--; return *this; }
-        bool operator==(const iterator& other) const { return ptr == other.ptr; }
-        bool operator!=(const iterator& other) const { return ptr != other.ptr; }
-    };
+  list() {}
+  explicit list(const _Allocator&) {}
+  explicit list(size_t __n) { for (size_t __i = 0; __i < __n; ++__i) emplace_back(); }
+  list(size_t __n, const _Tp& __v) { for (size_t __i = 0; __i < __n; ++__i) push_back(__v); }
+  template <class _It, __enable_if_t<!is_integral<_It>::value, int> = 0>
+  list(_It __first, _It __last) { for (; __first != __last; ++__first) push_back(*__first); }
+  list(initializer_list<_Tp> __il) : list(__il.begin(), __il.end()) {}
+  list(const list& __o) : list(__o.begin(), __o.end()) {}
+  list(list&& __o) noexcept { this->__take(__o); }
+  list& operator=(const list& __o) {
+    if (this != &__o) { this->clear(); for (const _Tp& __v : __o) push_back(__v); }
+    return *this;
+  }
+  list& operator=(list&& __o) noexcept {
+    if (this != &__o) { this->clear(); this->__take(__o); }
+    return *this;
+  }
+  allocator_type get_allocator() const { return allocator_type(); }
 
-    static constexpr size_t MAX_SIZE = 64;
-
-    list() : data_(nullptr), size_(0) {}
-
-    explicit list(size_type n) : data_(nullptr), size_(0) { resize(n); }
-    list(size_type n, const T& value) : data_(nullptr), size_(0) { resize(n, value); }
-
-    list(const list& other) : data_(nullptr), size_(0) {
-        for (size_type i = 0; i < other.size_; i++) {
-            push_back(other.data_[i]);
-        }
+  reference front() { return *this->begin(); }
+  const_reference front() const { return *this->begin(); }
+  reference back() { return *--this->end(); }
+  const_reference back() const { return *--this->end(); }
+  void push_back(const _Tp& __v) { this->__emplace_before(this->end(), __v); }
+  void push_back(_Tp&& __v) { this->__emplace_before(this->end(), std::move(__v)); }
+  void push_front(const _Tp& __v) { this->__emplace_before(this->begin(), __v); }
+  void push_front(_Tp&& __v) { this->__emplace_before(this->begin(), std::move(__v)); }
+  template <class... _Args>
+  reference emplace_back(_Args&&... __a) { return *this->__emplace_before(this->end(), std::forward<_Args>(__a)...); }
+  template <class... _Args>
+  reference emplace_front(_Args&&... __a) { return *this->__emplace_before(this->begin(), std::forward<_Args>(__a)...); }
+  template <class... _Args>
+  iterator emplace(const_iterator __p, _Args&&... __a) { return this->__emplace_before(__p, std::forward<_Args>(__a)...); }
+  void pop_back() { this->erase(--this->end()); }
+  void pop_front() { this->erase(this->begin()); }
+  iterator insert(const_iterator __p, const _Tp& __v) { return this->__emplace_before(__p, __v); }
+  iterator insert(const_iterator __p, _Tp&& __v) { return this->__emplace_before(__p, std::move(__v)); }
+  void remove(const _Tp& __v) {
+    for (iterator __i = this->begin(); __i != this->end();)
+      if (*__i == __v) __i = this->erase(__i); else ++__i;
+  }
+  template <class _Pred>
+  void remove_if(_Pred __p) {
+    for (iterator __i = this->begin(); __i != this->end();)
+      if (__p(*__i)) __i = this->erase(__i); else ++__i;
+  }
+  void resize(size_t __n) {
+    while (this->size() > __n) pop_back();
+    while (this->size() < __n) emplace_back();
+  }
+  void swap(list& __o) noexcept { list __t(std::move(__o)); __o = std::move(*this); *this = std::move(__t); }
+  void splice(const_iterator __pos, list& __o) { splice(__pos, __o, __o.begin(), __o.end()); }
+  void splice(const_iterator __pos, list&& __o) { splice(__pos, __o, __o.begin(), __o.end()); }
+  void splice(const_iterator __pos, list& __o, const_iterator __i) {
+    const_iterator __l = __i;
+    splice(__pos, __o, __i, ++__l);
+  }
+  void splice(const_iterator __pos, list& __o, const_iterator __f, const_iterator __l) {
+    while (__f != __l) {
+      const_iterator __next = __f;
+      ++__next;
+      __om_link* __n = __f.__link();
+      __o.__unlink(__n);
+      this->__link_before(__pos.__link(), __n);
+      __f = __next;
     }
-
-    list(list&& other) noexcept : data_(other.data_), size_(other.size_) {
-        other.data_ = nullptr;
-        other.size_ = 0;
-    }
-
-    ~list() {
-        if (data_) delete[] data_;
-    }
-
-    list& operator=(const list& other) {
-        if (this != &other) {
-            clear();
-            for (size_type i = 0; i < other.size_; i++) {
-                push_back(other.data_[i]);
-            }
-        }
-        return *this;
-    }
-
-    list& operator=(list&& other) noexcept {
-        if (this != &other) {
-            if (data_) delete[] data_;
-            data_ = other.data_;
-            size_ = other.size_;
-            other.data_ = nullptr;
-            other.size_ = 0;
-        }
-        return *this;
-    }
-
-    iterator begin() noexcept { return iterator(data_); }
-    iterator end() noexcept { return iterator(data_ + size_); }
-    const_iterator begin() const noexcept { return const_iterator(data_); }
-    const_iterator end() const noexcept { return const_iterator(data_ + size_); }
-
-    size_type size() const noexcept { return size_; }
-    size_type max_size() const noexcept { return MAX_SIZE; }
-    bool empty() const noexcept { return size_ == 0; }
-
-    T& front() noexcept { return data_[0]; }
-    const T& front() const noexcept { return data_[0]; }
-    T& back() noexcept { return data_[size_ - 1]; }
-    const T& back() const noexcept { return data_[size_ - 1]; }
-
-    void push_front(const T& value) {
-        if (size_ < MAX_SIZE) {
-            T* new_data = new T[size_ + 1];
-            new_data[0] = value;
-            if (data_) {
-                for (size_type i = 0; i < size_; i++) new_data[i + 1] = data_[i];
-                delete[] data_;
-            }
-            data_ = new_data;
-            size_++;
-        }
-    }
-
-    void push_back(const T& value) {
-        if (size_ < MAX_SIZE) {
-            T* new_data = new T[size_ + 1];
-            if (data_) {
-                for (size_type i = 0; i < size_; i++) new_data[i] = data_[i];
-                delete[] data_;
-            }
-            new_data[size_] = value;
-            data_ = new_data;
-            size_++;
-        }
-    }
-
-    void pop_front() {
-        if (size_ > 0) {
-            T* new_data = new T[size_ - 1];
-            for (size_type i = 0; i < size_ - 1; i++) new_data[i] = data_[i + 1];
-            delete[] data_;
-            data_ = new_data;
-            size_--;
-        }
-    }
-
-    void pop_back() {
-        if (size_ > 0) {
-            size_--;
-        }
-    }
-
-    iterator insert(iterator pos, const T& value) {
-        size_type idx = pos.ptr - data_;
-        if (size_ < MAX_SIZE) {
-            T* new_data = new T[size_ + 1];
-            for (size_type i = 0; i < idx; i++) new_data[i] = data_[i];
-            new_data[idx] = value;
-            for (size_type i = idx; i < size_; i++) new_data[i + 1] = data_[i];
-            delete[] data_;
-            data_ = new_data;
-            size_++;
-            return iterator(data_ + idx);
-        }
-        return end();
-    }
-
-    iterator erase(iterator pos) {
-        size_type idx = pos.ptr - data_;
-        for (size_type i = idx; i < size_ - 1; i++) {
-            data_[i] = data_[i + 1];
-        }
-        size_--;
-        return iterator(data_ + idx);
-    }
-
-    void clear() noexcept {
-        if (data_) delete[] data_;
-        data_ = nullptr;
-        size_ = 0;
-    }
-
-    void swap(list& other) noexcept {
-        T* tmp_data = data_;
-        size_type tmp_size = size_;
-        data_ = other.data_;
-        size_ = other.size_;
-        other.data_ = tmp_data;
-        other.size_ = tmp_size;
-    }
-
-    void resize(size_type n) { resize(n, T()); }
-
-    void resize(size_type n, const T& value) {
-        if (n < size_) {
-            size_ = n;
-        } else if (n > size_) {
-            T* new_data = new T[n];
-            if (data_) {
-                for (size_type i = 0; i < size_; i++) new_data[i] = data_[i];
-                delete[] data_;
-            }
-            for (size_type i = size_; i < n; i++) new_data[i] = value;
-            data_ = new_data;
-            size_ = n;
-        }
-    }
-
-    void splice(iterator pos, list& other) {
-        for (auto it = other.begin(); it != other.end(); ++it) {
-            insert(pos, *it);
-            ++pos;
-        }
-        other.clear();
-    }
-
-    void remove(const T& value) {
-        for (auto it = begin(); it != end(); ) {
-            if (*it == value) it = erase(it);
-            else ++it;
-        }
-    }
-
-    void unique() {
-        if (size_ <= 1) return;
-        size_type j = 0;
-        for (size_type i = 1; i < size_; i++) {
-            if (data_[i] != data_[j]) {
-                data_[++j] = data_[i];
-            }
-        }
-        size_ = j + 1;
-    }
-
-    void merge(list& other) {
-        T* merged = new T[size_ + other.size_];
-        size_type i = 0, j = 0, k = 0;
-        while (i < size_ && j < other.size_) {
-            if (other.data_[j] < data_[i]) {
-                merged[k++] = other.data_[j++];
-            } else {
-                merged[k++] = data_[i++];
-            }
-        }
-        while (i < size_) merged[k++] = data_[i++];
-        while (j < other.size_) merged[k++] = other.data_[j++];
-        if (data_) delete[] data_;
-        data_ = merged;
-        size_ = k;
-        other.data_ = nullptr;
-        other.size_ = 0;
-    }
-
-    void sort() {
-        for (size_type i = 0; i < size_; i++) {
-            for (size_type j = i + 1; j < size_; j++) {
-                if (data_[j] < data_[i]) {
-                    T tmp = data_[i];
-                    data_[i] = data_[j];
-                    data_[j] = tmp;
-                }
-            }
-        }
-    }
-
-    void reverse() {
-        for (size_type i = 0; i < size_ / 2; i++) {
-            T tmp = data_[i];
-            data_[i] = data_[size_ - 1 - i];
-            data_[size_ - 1 - i] = tmp;
-        }
-    }
-
-    bool operator==(const list& other) const {
-        if (size_ != other.size_) return false;
-        for (size_type i = 0; i < size_; i++) {
-            if (data_[i] != other.data_[i]) return false;
-        }
-        return true;
-    }
-
-    bool operator!=(const list& other) const { return !(*this == other); }
-
-private:
-    T* data_;
-    size_type size_;
+  }
 };
 
-template<typename T, typename Allocator>
-void swap(list<T, Allocator>& x, list<T, Allocator>& y) noexcept {
-    x.swap(y);
+template <class _Tp, class _A>
+bool operator==(const list<_Tp, _A>& __a, const list<_Tp, _A>& __b) {
+  return __a.size() == __b.size() && std::equal(__a.begin(), __a.end(), __b.begin());
 }
+template <class _Tp, class _A>
+bool operator!=(const list<_Tp, _A>& __a, const list<_Tp, _A>& __b) { return !(__a == __b); }
 
-} // namespace std
+_LIBCPP_END_NAMESPACE_STD
 
-#endif // _LIBCXX_OM_LIST
+#endif
