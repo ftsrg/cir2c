@@ -596,6 +596,8 @@ void Mapper::computeReachableDefs(mlir::ModuleOp module) {
     bool hasBody = fop->getNumRegions() > 0 && !fop->getRegion(0).empty();
     if (!hasBody) {
       declOnlyFuncs_.insert(sym);
+      // Another unit may call the alias clang made of a constructor (C1 of C2).
+      if (tuPart_ && f.getAliasee()) markRoot(sym);
       // emitFuncForwardDecl gives a body-less complete-object constructor or
       // destructor a stub that calls the base variant: that variant is used.
       for (auto [from, to] : {std::pair<const char *, const char *>{"C1E", "C2E"}, {"D1E", "D2E"}}) {
@@ -606,7 +608,9 @@ void Mapper::computeReachableDefs(mlir::ModuleOp module) {
       return;
     }
     cir::GlobalLinkageKind lk = f.getLinkage();
-    bool droppable = cir::isLinkOnceLinkage(lk) || cir::isWeakLinkage(lk) ||
+    // With --tu-part, a weak definition is there for other units: an explicit
+    // template instantiation is only ever defined in its own unit.
+    bool droppable = cir::isLinkOnceLinkage(lk) || (cir::isWeakLinkage(lk) && !tuPart_) ||
                      cir::isAvailableExternallyLinkage(lk);
     if (droppable) droppableDefs_.insert(sym);
     else markRoot(sym);
