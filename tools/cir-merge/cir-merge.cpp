@@ -1087,6 +1087,10 @@ private:
       func.setLinkage(cir::GlobalLinkageKind::LinkOnceODRLinkage);
       func.setComdat(false);
       func.setDsoLocal(false);
+      // Parameter hints such as `dereferenceable` depend on what the unit
+      // knows: a reference to a class that is incomplete in one unit has none.
+      func->removeAttr(func.getArgAttrsAttrName());
+      func->removeAttr(func.getResAttrsAttrName());
     } else if (auto global = dyn_cast<cir::GlobalOp>(clone)) {
       global.setLinkage(cir::GlobalLinkageKind::LinkOnceODRLinkage);
       global.setComdat(false);
@@ -1173,7 +1177,8 @@ std::optional<AttrClass> classifyFunctionAttr(StringRef name) {
       // Function attributes clang attaches as discardable attributes. A
       // declaration's copy only repeats what its own call sites encode.
       .Cases({"cir.target-cpu", "cir.target-features", "cir.tune-cpu",
-              "nothrow", "nobuiltin", "noreturn", "nocallback", "allocsize"},
+              "nothrow", "nobuiltin", "noreturn", "nocallback", "allocsize",
+              "cold"},
              AttrClass::FromKept)
       .Cases({"func_info", "coroutine", "global_ctor_priority",
               "global_dtor_priority", "annotations"},
@@ -1250,12 +1255,24 @@ Type symbolType(Operation *op) {
   return cast<cir::GlobalOp>(op).getSymType();
 }
 
+// clang declares the RTTI objects and vtables of another unit with a pointer
+// as a placeholder type, since only their address is used.
+bool isVagueObjectPlaceholder(cir::GlobalOp global) {
+  StringRef name = global.getSymName();
+  return !isGlobalDefinition(global) &&
+         (name.starts_with("_ZTI") || name.starts_with("_ZTV") ||
+          name.starts_with("_ZTS")) &&
+         isa<cir::PointerType>(global.getSymType());
+}
+
 // Whether `s` is a declaration of a less complete type (see Adaptation).
 bool isIncompleteDeclaration(const Symbol &s) {
   if (s.isDefinition)
     return false;
   if (auto func = dyn_cast<cir::FuncOp>(s.op))
     return func.getNoProto();
+  if (isVagueObjectPlaceholder(cast<cir::GlobalOp>(s.op)))
+    return true;
   auto array = dyn_cast<cir::ArrayType>(cast<cir::GlobalOp>(s.op).getSymType());
   return array && array.getSize() == 0;
 }
@@ -1274,6 +1291,9 @@ bool adaptable(const Symbol &kept, const Symbol &decl) {
   }
   auto keptGlobal = cast<cir::GlobalOp>(kept.op);
   auto declGlobal = cast<cir::GlobalOp>(decl.op);
+  if (isVagueObjectPlaceholder(declGlobal))
+    return keptGlobal.getTlsModelAttr() == declGlobal.getTlsModelAttr() &&
+           keptGlobal.getAddrSpaceAttr() == declGlobal.getAddrSpaceAttr();
   auto keptArray = dyn_cast<cir::ArrayType>(keptGlobal.getSymType());
   auto declArray = cast<cir::ArrayType>(declGlobal.getSymType());
   return keptArray &&
@@ -1473,7 +1493,11 @@ bool planMerge(std::vector<Input> &inputs, const std::vector<Symbol> &symbols,
         if (adaptable(*chosen, *s)) {
           ModuleOp module = *inputs[s->input].module;
           StringAttr nameAttr = StringAttr::get(module.getContext(), name);
-          if (Operation *user = unadaptableUse(module, nameAttr)) {
+          // Only the address of a placeholder is used: `cir.throw`, `cir.try`
+          // and constants name the object, and do not depend on its type.
+          auto declGlobal = dyn_cast<cir::GlobalOp>(s->op);
+          bool addressOnly = declGlobal && isVagueObjectPlaceholder(declGlobal);
+          if (Operation *user = addressOnly ? nullptr : unadaptableUse(module, nameAttr)) {
             error() << inputs[s->input].path << ": @" << name
                     << " is declared with a less complete type than in "
                     << inputs[chosen->input].path << ", and '"

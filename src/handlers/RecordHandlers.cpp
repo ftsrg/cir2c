@@ -354,7 +354,7 @@ private:
 
     std::string opText;
     llvm::raw_string_ostream rso(opText);
-    o->print(rso);
+    o->print(rso, mlir::OpPrintingFlags().assumeVerified().useLocalScope());
     rso.flush();
 
     bool isNonnull = opText.find(" nonnull ") != std::string::npos;
