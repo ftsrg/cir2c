@@ -151,6 +151,9 @@ void Mapper::prepareFunctionNames(mlir::ModuleOp module) {
       std::string dem = demangleSymbol(mangled);
       dem = stripEmptyArgList(dem);
       std::string san = mangleLabel(dem);
+      // The suffixes below number overloads per module, so across translation
+      // units the same readable name could be another function.
+      if (tuPart_) san = mangleLabel(mangled);
       list.emplace_back(mangled, san);
     }
   });
@@ -695,6 +698,25 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
   if (isDeleteOp && !hasBodyCheck) {
     ensureMallocFreeDeclared(out);
     out << weakStub << retType << " " << outName << "(" << params << ") { free(p0); }\n";
+    return true;
+  }
+  // The guard of a function-local static, and the registration of destructors
+  // to run at exit, come from the C++ runtime. Without threads racing for the
+  // initialisation this is all a guard does; static destructors are not run.
+  if (!hasBodyCheck && mangledSym == "__cxa_guard_acquire") {
+    out << weakStub << retType << " " << outName << "(" << params << ") { return *(char*)p0 == 0; }\n";
+    return true;
+  }
+  if (!hasBodyCheck && mangledSym == "__cxa_guard_release") {
+    out << weakStub << retType << " " << outName << "(" << params << ") { *(char*)p0 = 1; }\n";
+    return true;
+  }
+  if (!hasBodyCheck && mangledSym == "__cxa_guard_abort") {
+    out << weakStub << retType << " " << outName << "(" << params << ") {}\n";
+    return true;
+  }
+  if (!hasBodyCheck && mangledSym == "__cxa_atexit") {
+    out << weakStub << retType << " " << outName << "(" << params << ") { return 0; }\n";
     return true;
   }
   // __cxa_pure_virtual fills pure-virtual vtable slots (Itanium ABI). It is a
