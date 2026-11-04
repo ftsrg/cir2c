@@ -106,10 +106,18 @@ int main(int argc, char **argv) {
   // no-op on CIR from a supported toolchain; it is kept only so text captured
   // from an older ClangIR still parses. The C emitter never inspects these
   // flags, so dropping them is safe either way.
+  // Only on allocas: the same text can be in a string literal of the program.
   for (const std::string pattern : {", cleanup_dest_slot", ", const"}) {
     std::string::size_type pos = 0;
-    while ((pos = input.find(pattern, pos)) != std::string::npos)
-      input.erase(pos, pattern.size());
+    while ((pos = input.find(pattern, pos)) != std::string::npos) {
+      std::string::size_type lineStart = input.rfind('\n', pos);
+      lineStart = lineStart == std::string::npos ? 0 : lineStart + 1;
+      if (input.compare(pos + pattern.size(), 1, "]") == 0 &&
+          input.find("cir.alloca", lineStart) < pos)
+        input.erase(pos, pattern.size());
+      else
+        pos += pattern.size();
+    }
   }
 
   llvm::SourceMgr sourceMgr;
