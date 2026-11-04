@@ -202,16 +202,20 @@ private:
     return true;
   }
 
-  // cir.modf returns the fractional part and the integral part together.
+  // cir.modf returns the fractional part and the integral part together. As an
+  // expression, since verifiers model truncation but not an output parameter.
+  // The fractional part of an infinity is 0 rather than a NaN, and that of a
+  // negative whole number is +0 where the library gives -0.
   static bool handleModf(cir::ModfOp op, Mapper &m, std::ostream &out) {
     Operation *o = op.getOperation();
     std::string ctype = m.mapTypeToC(o->getOperand(0).getType());
-    std::string fn = ctype == "float" ? "modff" : ctype == "double" ? "modf" : "modfl";
+    std::string x = m.getOrCreateName(o->getOperand(0));
+    std::string suffix = ctype == "float" ? "f" : ctype == "double" ? "" : "l";
     std::string whole = m.freshName("modf");
     std::string frac = m.freshName("modf");
-    out << "  " << ctype << " " << whole << ";\n";
-    out << "  " << ctype << " " << frac << " = " << fn << "(" << m.getOrCreateName(o->getOperand(0))
-        << ", &" << whole << ");\n";
+    out << "  " << ctype << " " << whole << " = __builtin_trunc" << suffix << "(" << x << ");\n";
+    out << "  " << ctype << " " << frac << " = " << whole << " == " << x << " ? (" << ctype
+        << ")0 : " << x << " - " << whole << ";\n";
     m.setName(o->getResult(0), frac);
     m.setName(o->getResult(1), whole);
     return true;
