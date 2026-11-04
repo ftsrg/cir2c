@@ -184,7 +184,7 @@ private:
             if (auto rt = mlir::dyn_cast<cir::RecordType>(pointee)) {
               if (!rt.isComplete()) continue;
               if (rt.getName()) {
-                std::string cn = TypeMapper::recordCName(rt.getName());
+                std::string cn = rt.getName() && !rt.getName().getValue().empty() ? TypeMapper::recordCName(rt.getName()) : m.anonRecordCName(rt);
                 if (!m.isStdStructFullyDefined(cn)) continue;
               }
             }
@@ -330,7 +330,7 @@ private:
       // (no-exception) fall-through still needs handleCleanupScope to emit the
       // same destructors at scope exit.
       std::ostringstream cleanupOut;
-      m.emitPendingCleanups(cleanupOut, 0, /*consume=*/false);
+      m.emitPendingCleanups(cleanupOut, 0, /*consume=*/false, m.currentTryCleanupBase());
       // Re-indent: the cleanups were produced at "  " indent; inside the if-block
       // we want one extra level.
       {
@@ -391,7 +391,7 @@ private:
     // evaluated but before control leaves the function.
     if (o->getNumOperands() == 0) {
       // No return value — emit cleanups, run global destructors, then return.
-      m.emitPendingCleanups(out, 0);
+      m.emitPendingCleanups(out, 0, /*consume=*/false);
       m.emitGlobalDtorsAtMainReturn(out);
       out << "  return;\n";
       return true;
@@ -405,12 +405,12 @@ private:
       std::string retTmp = m.freshName("ret_val");
       std::string ctype = m.mapTypeToC(o->getOperand(0).getType());
       out << "  " << ctype << " " << retTmp << " = " << rv << ";\n";
-      m.emitPendingCleanups(out, 0);
+      m.emitPendingCleanups(out, 0, /*consume=*/false);
       m.emitGlobalDtorsAtMainReturn(out);
       out << "  return " << retTmp << ";\n";
     } else {
       // No cleanups pending — direct return.
-      m.emitPendingCleanups(out, 0);
+      m.emitPendingCleanups(out, 0, /*consume=*/false);
       m.emitGlobalDtorsAtMainReturn(out);
       out << "  return " << rv << ";\n";
     }

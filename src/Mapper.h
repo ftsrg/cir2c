@@ -535,11 +535,18 @@ public:
   /// The set of RTTI symbols that need per-type address tags emitted.
   const std::set<std::string> &getEhTypeSymbols() const { return ehTypeSymbols_; }
   /// Push a landing-pad label for the currently-open structured cir.try body.
+  /// Where the cleanups of the innermost try begin: what is older outlives the
+  /// try, so an exception caught by it does not run those.
+  size_t currentTryCleanupBase() const {
+    return tryCleanupBases_.empty() ? 0 : tryCleanupBases_.back();
+  }
   void pushTryLandingPad(const std::string &label) {
+    tryCleanupBases_.push_back(cleanupStack_.size());
     tryLandingPadStack_.push_back(label);
   }
   /// Pop the innermost landing-pad label.
   void popTryLandingPad() {
+    tryCleanupBases_.pop_back();
     if (!tryLandingPadStack_.empty()) tryLandingPadStack_.pop_back();
   }
   /// Return the innermost landing-pad label, or empty string if none.
@@ -569,8 +576,9 @@ public:
   /// good). Pass false for a CONDITIONAL emission such as the `if
   /// (__cir_exc_active)` EH guard, where the normal (no-exception) path still
   /// falls through and must run the cleanup itself.
+  std::vector<size_t> tryCleanupBases_;
   void emitPendingCleanups(std::ostream &out, int fromDepth = 0,
-                           bool consume = true);
+                           bool consume = true, size_t fromIndex = 0);
   /// Returns true if the given cleanup region was already emitted by a
   /// previous emitPendingCleanups call (e.g. from handleGoto).
   bool isCleanupConsumed(mlir::Region *r) const {
