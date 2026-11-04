@@ -778,8 +778,9 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
     // D1/D2 destructor variants that are declaration-only in this module mean
     // the destructor body lives in an external library (e.g. libstdc++) that
     // we cannot link (we compile as plain C with -lm only).  Emit a noop stub.
-    if (mangled.find("D1E") != std::string::npos ||
-        mangled.find("D2E") != std::string::npos) {
+    // With --tu-part it may well be in another unit.
+    if (!tuPart_ && (mangled.find("D1E") != std::string::npos ||
+                     mangled.find("D2E") != std::string::npos)) {
       out << weakStub << retType << " " << outName << "(" << params << ") {}\n";
       return true;
     }
