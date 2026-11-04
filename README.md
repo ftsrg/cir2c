@@ -426,7 +426,7 @@ one input file and makes one C file. There are two merge strategies:
 | Strategy | Sequence |
 |---|---|
 | `--merge c` | Translate each file to C, then merge the C files with `scripts/merge-c.sh`. |
-| `--merge cir` | Compile each file to CIR, merge the CIR modules with `cir-merge`, then translate the merged module once. |
+| `--merge cir` | Compile each file to CIR without the calling-convention lowering, merge the CIR modules with `cir-merge`, lower the merged module once, then translate it. |
 
 To keep the translation units apart, translate each file with `--tu-part`. Its
 output keeps the C linkage of the symbols. Link the files with a C linker, or give
