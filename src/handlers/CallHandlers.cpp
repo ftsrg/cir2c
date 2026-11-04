@@ -286,7 +286,11 @@ private:
         if (!firstParam) paramTypes += ", ";
         paramTypes += "...";
       }
-      callExpr = "((" + retType + " (*)(" + paramTypes + "))" + outCallee + ")";
+      // Through a variable: verifiers dispatch calls over function-pointer
+      // variables, and cannot call the result of a cast.
+      callExpr = m.freshName("fp");
+      out << "  " << retType << " (*" << callExpr << ")(" << paramTypes << ") = (" << retType
+          << " (*)(" << paramTypes << "))" << outCallee << ";\n";
     } else {
       callExpr = outCallee;
     }

@@ -515,8 +515,8 @@ private:
   // subsequent handler does not double-destroy.
   static bool handleEndCatch(cir::EndCatchOp op, Mapper &m, std::ostream &out) {
     m.setHasExceptions();
-    out << "  if (__cir_exc_dtor) { ((void(*)(void*))__cir_exc_dtor)(__cir_exc_ptr); "
-           "__cir_exc_dtor = (void*)0; }\n";
+    out << "  if (__cir_exc_dtor) { void (*__d)(void*) = (void(*)(void*))__cir_exc_dtor; "
+           "__d(__cir_exc_ptr); __cir_exc_dtor = (void*)0; }\n";
     return true;
   }
 

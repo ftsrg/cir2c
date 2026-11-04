@@ -147,6 +147,7 @@ add_executable(cir2c
   src/handlers/Handlers.cpp
   src/handlers/HandlerModule.cpp
   src/handlers/HandlerSupport.cpp
+  src/handlers/AtomicHandlers.cpp
   src/handlers/FloatMathHandlers.cpp
   src/handlers/ComplexHandlers.cpp
   src/handlers/BuiltinHandlers.cpp

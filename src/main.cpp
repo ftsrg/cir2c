@@ -44,10 +44,11 @@ int main(int argc, char **argv) {
   std::vector<std::string> positional;
   // Issue #7: externalize all std:: calls (I/O and containers) by default.
   bool externalizeStd = true;
+  bool tuPart = false;
 
   const char *usage =
       "Usage: cir2c [--monitor-json <trace.json>] "
-      "[--[no-]externalize-std] "
+      "[--[no-]externalize-std] [--tu-part] "
       "<input.mlir> <output.c>\n";
 
   for (int i = 1; i < argc; ++i) {
@@ -58,6 +59,7 @@ int main(int argc, char **argv) {
     }
     if (arg == "--externalize-std") { externalizeStd = true; continue; }
     if (arg == "--no-externalize-std") { externalizeStd = false; continue; }
+    if (arg == "--tu-part") { tuPart = true; continue; }
     if (arg == "--monitor-json") {
       if (i + 1 >= argc) {
         llvm::errs() << usage;
@@ -123,6 +125,7 @@ int main(int argc, char **argv) {
 
   Mapper mapper;
   mapper.setExternalizeStd(externalizeStd);
+  mapper.setTuPart(tuPart);
   registerBuiltinHandlers(mapper);
 
   std::ofstream ofs(outFile);
