@@ -72,6 +72,7 @@ public:
     m.registerTypedHandler<cir::PowOp>(handlePow);
     m.registerTypedHandler<cir::ATan2Op>(handleATan2);
     m.registerTypedHandler<cir::IsFPClassOp>(handleIsFPClass);
+    m.registerTypedHandler<cir::ModfOp>(handleModf);
   }
 
 private:
@@ -198,6 +199,21 @@ private:
     std::string tmp   = m.freshName("fmuladd");
     out << "  " << ctype << " " << tmp << " = " << a << " * " << b << " + " << c << ";\n";
     m.setName(o->getResult(0), tmp);
+    return true;
+  }
+
+  // cir.modf returns the fractional part and the integral part together.
+  static bool handleModf(cir::ModfOp op, Mapper &m, std::ostream &out) {
+    Operation *o = op.getOperation();
+    std::string ctype = m.mapTypeToC(o->getOperand(0).getType());
+    std::string fn = ctype == "float" ? "modff" : ctype == "double" ? "modf" : "modfl";
+    std::string whole = m.freshName("modf");
+    std::string frac = m.freshName("modf");
+    out << "  " << ctype << " " << whole << ";\n";
+    out << "  " << ctype << " " << frac << " = " << fn << "(" << m.getOrCreateName(o->getOperand(0))
+        << ", &" << whole << ");\n";
+    m.setName(o->getResult(0), frac);
+    m.setName(o->getResult(1), whole);
     return true;
   }
 
