@@ -143,7 +143,7 @@ fi
 REQUIRE_FLAGS=()
 [[ "$FLATTEN" == true ]] && REQUIRE_FLAGS+=(--cir-opt)
 [[ "$LANG" == "c++" ]] && REQUIRE_FLAGS+=(--libcxx)
-[[ "$NUM_INPUTS" -gt 1 && "$MERGE_STRATEGY" == "cir" ]] && REQUIRE_FLAGS+=(--cir-merge)
+[[ "$NUM_INPUTS" -gt 1 && "$MERGE_STRATEGY" == "cir" ]] && REQUIRE_FLAGS+=(--cir-merge --cir-opt)
 cir_require_toolchain ${REQUIRE_FLAGS[@]+"${REQUIRE_FLAGS[@]}"} || exit 1
 
 # Temp file management
@@ -208,10 +208,14 @@ compile_to_cir() {
     local input="$1"
     local output="$2"
 
+    # Unlowered, whatever the options say: lowered modules differ from each other
+    # (the temporaries of a by-value parameter come in any order, and a parameter
+    # class that is incomplete in one unit lowers another way), so ODR-equivalent
+    # definitions would not compare equal. The merged module is lowered once.
     "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$input" -o "$output" \
         ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
         ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
-        ${CIR_CFLAGS[@]+"${CIR_CFLAGS[@]}"} ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
+        -Xclang -fno-clangir-call-conv-lowering ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
 }
 
 if [[ "$NUM_INPUTS" -eq 1 ]]; then
@@ -277,6 +281,11 @@ else
             # in README.md) instead of producing an approximate module.
             MERGED_MLIR=$(_tmpmlir "")
             "$CIR_MERGE_BIN" --output "$MERGED_MLIR" "${MLIR_FILES[@]}" || exit 5
+            if [[ ${#CIR_CFLAGS[@]} -eq 0 ]]; then
+                LOWERED_MLIR=$(_tmpmlir "")
+                "$CIR_OPT" "$MERGED_MLIR" --cir-call-conv-lowering=target=x86_64 -o "$LOWERED_MLIR" || exit 3
+                MERGED_MLIR="$LOWERED_MLIR"
+            fi
             # Preprocess the merged MLIR
             PRE_FILE=$(_tmpmlir "")
             sed -e '/cir\.alloca/s/, cleanup_dest_slot\]/\]/g' \
