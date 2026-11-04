@@ -174,8 +174,8 @@ run_single_pipeline() {
     # Step 2: Preprocess
     local pre_file
     pre_file=$(_tmpmlir "")
-    sed -e 's/, cleanup_dest_slot\]/\]/g' \
-        -e 's/, const\]/\]/g' \
+    sed -e '/cir\.alloca/s/, cleanup_dest_slot\]/\]/g' \
+        -e '/cir\.alloca/s/, const\]/\]/g' \
         "$cir_file" > "$pre_file"
 
     # Step 3: Flatten (optional)
@@ -222,8 +222,8 @@ if [[ "$NUM_INPUTS" -eq 1 ]]; then
 
     # Step 2: Preprocess
     PRE_FILE=$(_tmpmlir "")
-    sed -e 's/, cleanup_dest_slot\]/\]/g' \
-        -e 's/, const\]/\]/g' \
+    sed -e '/cir\.alloca/s/, cleanup_dest_slot\]/\]/g' \
+        -e '/cir\.alloca/s/, const\]/\]/g' \
         "$CIR_FILE" > "$PRE_FILE"
 
     # Step 3: Flatten (optional)
@@ -274,8 +274,8 @@ else
             "$CIR_MERGE_BIN" --output "$MERGED_MLIR" "${MLIR_FILES[@]}" || exit 5
             # Preprocess the merged MLIR
             PRE_FILE=$(_tmpmlir "")
-            sed -e 's/, cleanup_dest_slot\]/\]/g' \
-                -e 's/, const\]/\]/g' \
+            sed -e '/cir\.alloca/s/, cleanup_dest_slot\]/\]/g' \
+                -e '/cir\.alloca/s/, const\]/\]/g' \
                 "$MERGED_MLIR" > "$PRE_FILE"
             # Flatten (optional)
             if [[ "$FLATTEN" == true ]]; then
