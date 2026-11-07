@@ -325,6 +325,7 @@ script merges the translation units into one C program. See
 | `--no-call-conv-lowering` | Skip the ClangIR calling-convention lowering, for types that it cannot lower yet. **CAUTION:** this is not sound. An object with a move constructor is then passed as a bitwise copy, so the caller never sees it moved from and destroys it. Use it for all translation units of a program or for none. |
 | `--merge c\|cir` | Set how more than one input file is merged. `c` (the default) merges the C outputs. `cir` merges the CIR modules with `cir-merge`. |
 | `--externalize-std` | Replace the `std::` calls and the library calls with unknown values. This is the default. |
+| `--tu-part` | The output is one translation unit of several, to be linked: internal symbols are `static`, symbols that each unit may define are `weak`, functions have their symbol names, and global constructors have `__attribute__((constructor))`. See [5.6](#56-merge-translation-units). |
 | `--no-externalize-std` | Keep the bodies of the `std::` functions. **CAUTION: Read [8.2 The standard library](#82-the-standard-library) first.** |
 
 | Exit code | Meaning |
@@ -426,6 +427,11 @@ one input file and makes one C file. There are two merge strategies:
 |---|---|
 | `--merge c` | Translate each file to C, then merge the C files with `scripts/merge-c.sh`. |
 | `--merge cir` | Compile each file to CIR without the calling-convention lowering, merge the CIR modules with `cir-merge`, lower the merged module once, then translate it. |
+
+To keep the translation units apart, translate each file with `--tu-part`. Its
+output keeps the C linkage of the symbols. Link the files with a C linker, or give
+them all to a verifier that can link, such as Theta with a `.yml` file that lists
+them as `input_files`.
 
 #### The cir-merge tool
 
@@ -599,6 +605,13 @@ These usual programs are errors at the moment:
   `extern int a[];` and `int a[10];`.
 
 ---
+
+### 5.7 Operational models of the standard library
+
+`libcxx-om/c++/v1` holds small replacements for the parts of libc++ that are heavy
+or that live in its compiled library. Give it with `--include libcxx-om/c++/v1
+--no-externalize-std`. All other headers stay libc++'s. See
+[OM_DESIGN.md](OM_DESIGN.md) for what each model does and what it does not preserve.
 
 ## 6. The LLVM toolchain
 

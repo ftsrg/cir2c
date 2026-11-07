@@ -1,0 +1,54 @@
+// Part of the cir2c operational models of libc++. See OM_DESIGN.md.
+// Copyright 2025 Budapest University of Technology and Economics
+// Licensed under the Apache License, Version 2.0
+// std::map and std::multimap, see __om/assoc.h.
+#ifndef _LIBCPP_MAP
+#define _LIBCPP_MAP
+
+#include <__om/assoc.h>
+
+_LIBCPP_BEGIN_NAMESPACE_STD
+
+template <class _Key, class _Tp, class _Compare = less<_Key>, class _Allocator = allocator<pair<const _Key, _Tp> > >
+class map : public __om_map_access<_Key, _Tp, __om_assoc<pair<const _Key, _Tp>, _Key, __om_key_of_pair, _Compare, true, false> > {
+  using _Base = __om_map_access<_Key, _Tp, __om_assoc<pair<const _Key, _Tp>, _Key, __om_key_of_pair, _Compare, true, false> >;
+
+public:
+  using key_compare    = _Compare;
+  using allocator_type = _Allocator;
+  map() {}
+  explicit map(const _Compare& __c) : _Base(__c) {}
+  map(initializer_list<pair<const _Key, _Tp> > __il) { this->insert(__il); }
+  template <class _It, __enable_if_t<!is_integral<_It>::value, int> = 0>
+  map(_It __f, _It __l) { this->insert(__f, __l); }
+  _OM_ASSOC_MEMBERS(map)
+  key_compare key_comp() const { return this->__cmp_; }
+};
+
+template <class _Key, class _Tp, class _Compare = less<_Key>, class _Allocator = allocator<pair<const _Key, _Tp> > >
+class multimap : public __om_assoc<pair<const _Key, _Tp>, _Key, __om_key_of_pair, _Compare, true, true> {
+  using _Base = __om_assoc<pair<const _Key, _Tp>, _Key, __om_key_of_pair, _Compare, true, true>;
+
+public:
+  using key_compare    = _Compare;
+  using mapped_type    = _Tp;
+  using allocator_type = _Allocator;
+  multimap() {}
+  explicit multimap(const _Compare& __c) : _Base(__c) {}
+  multimap(initializer_list<pair<const _Key, _Tp> > __il) { this->insert(__il); }
+  _OM_ASSOC_MEMBERS(multimap)
+  key_compare key_comp() const { return this->__cmp_; }
+};
+
+template <class _K, class _T, class _C, class _A>
+bool operator==(const map<_K, _T, _C, _A>& __a, const map<_K, _T, _C, _A>& __b) { return __om_assoc_equal(__a, __b); }
+template <class _K, class _T, class _C, class _A>
+bool operator!=(const map<_K, _T, _C, _A>& __a, const map<_K, _T, _C, _A>& __b) { return !(__a == __b); }
+template <class _K, class _T, class _C, class _A>
+bool operator<(const map<_K, _T, _C, _A>& __a, const map<_K, _T, _C, _A>& __b) {
+  return std::lexicographical_compare(__a.begin(), __a.end(), __b.begin(), __b.end());
+}
+
+_LIBCPP_END_NAMESPACE_STD
+
+#endif
