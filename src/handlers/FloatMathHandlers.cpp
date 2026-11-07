@@ -23,6 +23,7 @@
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 
 #include <string>
+#include <vector>
 
 using namespace mlir;
 
@@ -70,6 +71,8 @@ public:
     m.registerTypedHandler<cir::FMAOp>(handleFMA);
     m.registerTypedHandler<cir::PowOp>(handlePow);
     m.registerTypedHandler<cir::ATan2Op>(handleATan2);
+    m.registerTypedHandler<cir::IsFPClassOp>(handleIsFPClass);
+    m.registerTypedHandler<cir::ModfOp>(handleModf);
   }
 
 private:
@@ -195,6 +198,65 @@ private:
     std::string c     = m.getOrCreateName(o->getOperand(2));
     std::string tmp   = m.freshName("fmuladd");
     out << "  " << ctype << " " << tmp << " = " << a << " * " << b << " + " << c << ";\n";
+    m.setName(o->getResult(0), tmp);
+    return true;
+  }
+
+  // cir.modf returns the fractional part and the integral part together. As an
+  // expression, since verifiers model truncation but not an output parameter.
+  // The fractional part of an infinity is 0 rather than a NaN, and that of a
+  // negative whole number is +0 where the library gives -0.
+  static bool handleModf(cir::ModfOp op, Mapper &m, std::ostream &out) {
+    Operation *o = op.getOperation();
+    std::string ctype = m.mapTypeToC(o->getOperand(0).getType());
+    std::string x = m.getOrCreateName(o->getOperand(0));
+    std::string suffix = ctype == "float" ? "f" : ctype == "double" ? "" : "l";
+    std::string whole = m.freshName("modf");
+    std::string frac = m.freshName("modf");
+    out << "  " << ctype << " " << whole << " = __builtin_trunc" << suffix << "(" << x << ");\n";
+    out << "  " << ctype << " " << frac << " = " << whole << " == " << x << " ? (" << ctype
+        << ")0 : " << x << " - " << whole << ";\n";
+    m.setName(o->getResult(0), frac);
+    m.setName(o->getResult(1), whole);
+    return true;
+  }
+
+  // cir.is_fp_class (from __builtin_isnan, __builtin_isfinite, ...) as a
+  // comparison per class, so verifiers need no classification builtin.
+  static bool handleIsFPClass(cir::IsFPClassOp op, Mapper &m, std::ostream &out) {
+    Operation *o = op.getOperation();
+    std::string x = m.getOrCreateName(o->getOperand(0));
+    std::string ctype = m.mapTypeToC(o->getOperand(0).getType());
+    std::string min = ctype == "float" ? "1.17549435e-38f"
+                      : ctype == "double" ? "2.2250738585072014e-308"
+                                          : "3.36210314311209350626e-4932L";
+    std::string inf = "(" + ctype + ")(1.0 / 0.0)";
+    uint32_t flags = static_cast<uint32_t>(op.getFlags());
+    std::string abs = "(" + x + " < 0 ? -" + x + " : " + x + ")";
+    std::string normal = "(" + abs + " >= " + min + " && " + abs + " < " + inf + ")";
+    std::string subnormal = "(" + abs + " > 0 && " + abs + " < " + min + ")";
+    std::string neg = "__builtin_signbit(" + x + ")";
+    std::vector<std::string> terms;
+    using T = cir::FPClassTest;
+    auto has = [&](T t) { return (flags & static_cast<uint32_t>(t)) == static_cast<uint32_t>(t); };
+    // The two NaN kinds are not told apart: C has no comparison for that.
+    if (flags & static_cast<uint32_t>(T::Nan)) terms.push_back("(" + x + " != " + x + ")");
+    if (has(T::NegativeInfinity)) terms.push_back("(" + x + " == -" + inf + ")");
+    if (has(T::PositiveInfinity)) terms.push_back("(" + x + " == " + inf + ")");
+    if (has(T::NegativeNormal) && has(T::PositiveNormal)) terms.push_back(normal);
+    else if (has(T::NegativeNormal)) terms.push_back("(" + normal + " && " + x + " < 0)");
+    else if (has(T::PositiveNormal)) terms.push_back("(" + normal + " && " + x + " > 0)");
+    if (has(T::NegativeSubnormal) && has(T::PositiveSubnormal)) terms.push_back(subnormal);
+    else if (has(T::NegativeSubnormal)) terms.push_back("(" + subnormal + " && " + x + " < 0)");
+    else if (has(T::PositiveSubnormal)) terms.push_back("(" + subnormal + " && " + x + " > 0)");
+    if (has(T::NegativeZero) && has(T::PositiveZero)) terms.push_back("(" + x + " == 0)");
+    else if (has(T::NegativeZero)) terms.push_back("(" + x + " == 0 && " + neg + ")");
+    else if (has(T::PositiveZero)) terms.push_back("(" + x + " == 0 && !" + neg + ")");
+    std::string tmp = m.freshName("fpclass");
+    out << "  _Bool " << tmp << " = ";
+    if (terms.empty()) out << "0";
+    for (size_t i = 0; i < terms.size(); ++i) out << (i ? " || " : "") << terms[i];
+    out << ";\n";
     m.setName(o->getResult(0), tmp);
     return true;
   }

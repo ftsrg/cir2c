@@ -1,0 +1,3 @@
+ok
+output-count 1 linkonce_odr comdat dso_local @_ZTV3BoxIiE =
+run 0

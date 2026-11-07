@@ -1,0 +1,5 @@
+module {
+  cir.func @g() {
+    cir.return
+  }
+}

@@ -23,10 +23,12 @@
 #   CIR_OPT        $CIR_PREFIX/bin/cir-opt
 #   CIR_LIBCXX     $CIR_PREFIX/include/c++/v1   (may not exist)
 #   CIR2C_BIN      the cir2c executable
+#   CIR_MERGE_BIN  the cir-merge executable (built next to cir2c)
 #
 # Overrides, in precedence order:
 #   $CIR2C_LLVM_PREFIX   toolchain prefix
 #   $CIR2C_BIN           cir2c executable
+#   $CIR_MERGE_BIN       cir-merge executable (default: next to cir2c)
 #   $CIR2C_BUILD_DIR     build directory to take cir2c from (default <repo>/build)
 #
 # Everything is resolved relative to $CIR2C_REPO_ROOT, which the sourcing script
@@ -63,18 +65,23 @@ if [[ -z "${CIR2C_BIN:-}" ]]; then
     CIR2C_BIN="${CIR2C_BUILD_DIR:-$CIR2C_REPO_ROOT/build}/cir2c"
 fi
 
-export CIR_PREFIX CIR_CLANG CIR_CLANGXX CIR_OPT CIR_LIBCXX CIR2C_BIN
+if [[ -z "${CIR_MERGE_BIN:-}" ]]; then
+    CIR_MERGE_BIN="$(dirname "$CIR2C_BIN")/cir-merge"
+fi
 
-# cir_require_toolchain [--cir-opt] [--libcxx]
+export CIR_PREFIX CIR_CLANG CIR_CLANGXX CIR_OPT CIR_LIBCXX CIR2C_BIN CIR_MERGE_BIN
+
+# cir_require_toolchain [--cir-opt] [--libcxx] [--cir-merge]
 #
 # Fails with an actionable message unless clang and cir2c are present (and,
-# when asked for, cir-opt and the libc++ headers).
+# when asked for, cir-opt, the libc++ headers and cir-merge).
 cir_require_toolchain() {
-    local need_libcxx=false
+    local need_libcxx=false need_merge=false
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --cir-opt) ;;   # cir-opt is required unconditionally, see below
             --libcxx)  need_libcxx=true ;;
+            --cir-merge) need_merge=true ;;
         esac
         shift
     done
@@ -109,6 +116,13 @@ EOF
         echo "Error: cir2c binary not found: $CIR2C_BIN" >&2
         echo "Build it with: cmake -B build && cmake --build build" >&2
         echo "Or set CIR2C_BIN / CIR2C_BUILD_DIR." >&2
+        return 1
+    fi
+
+    if [[ "$need_merge" == true && ! -x "$CIR_MERGE_BIN" ]]; then
+        echo "Error: cir-merge binary not found: $CIR_MERGE_BIN" >&2
+        echo "It is built with cir2c: cmake -B build && cmake --build build" >&2
+        echo "Or set CIR_MERGE_BIN." >&2
         return 1
     fi
 

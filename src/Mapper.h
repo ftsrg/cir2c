@@ -20,6 +20,7 @@
 #include "Traceability.h"
 #include "TypeMapper.h"
 
+#include <clang/CIR/Dialect/IR/CIROpsEnums.h>
 #include <mlir/IR/Operation.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/Builders.h>
@@ -113,6 +114,12 @@ public:
   /// become __VERIFIER_nondet_*() calls.  This covers both I/O and containers.
   void setExternalizeStd(bool v) { externalizeStd_ = v; }
   bool externalizeStd() const { return externalizeStd_; }
+  /// The output is one translation unit of several, so it says what linking it
+  /// needs: `static` for internal symbols, `weak` for the ones each unit may
+  /// define, and constructors that main cannot call by name.
+  void setTuPart(bool v) { tuPart_ = v; }
+  std::string tuPartLinkage(cir::GlobalLinkageKind linkage) const;
+  std::string tuPartInitAttr(const std::string &sym) const;
   /// True when the named C struct will be emitted with a full definition
   /// (not just a forward declaration). Std__ structs that are pointer-only
   /// get forward declarations only; handlers must guard sizeof on them.
@@ -343,6 +350,7 @@ private:
   std::set<std::string> forwardDeclaredFuncNames_;
   // STD externalization (issue #7). On by default.
   bool externalizeStd_ = true;
+  bool tuPart_ = false;
   bool lastCallExternalized_ = false;
   // Std__ structs that will be emitted with full definitions (not just forward
   // declarations). Populated by emitModule's pre-scan; used by handlers to
@@ -527,11 +535,18 @@ public:
   /// The set of RTTI symbols that need per-type address tags emitted.
   const std::set<std::string> &getEhTypeSymbols() const { return ehTypeSymbols_; }
   /// Push a landing-pad label for the currently-open structured cir.try body.
+  /// Where the cleanups of the innermost try begin: what is older outlives the
+  /// try, so an exception caught by it does not run those.
+  size_t currentTryCleanupBase() const {
+    return tryCleanupBases_.empty() ? 0 : tryCleanupBases_.back();
+  }
   void pushTryLandingPad(const std::string &label) {
+    tryCleanupBases_.push_back(cleanupStack_.size());
     tryLandingPadStack_.push_back(label);
   }
   /// Pop the innermost landing-pad label.
   void popTryLandingPad() {
+    tryCleanupBases_.pop_back();
     if (!tryLandingPadStack_.empty()) tryLandingPadStack_.pop_back();
   }
   /// Return the innermost landing-pad label, or empty string if none.
@@ -561,8 +576,9 @@ public:
   /// good). Pass false for a CONDITIONAL emission such as the `if
   /// (__cir_exc_active)` EH guard, where the normal (no-exception) path still
   /// falls through and must run the cleanup itself.
+  std::vector<size_t> tryCleanupBases_;
   void emitPendingCleanups(std::ostream &out, int fromDepth = 0,
-                           bool consume = true);
+                           bool consume = true, size_t fromIndex = 0);
   /// Returns true if the given cleanup region was already emitted by a
   /// previous emitPendingCleanups call (e.g. from handleGoto).
   bool isCleanupConsumed(mlir::Region *r) const {

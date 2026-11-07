@@ -1,0 +1,2 @@
+error
+unsupported top-level operation 'llvm.func' defining symbol @h
