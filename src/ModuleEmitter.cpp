@@ -644,6 +644,14 @@ void Mapper::computeReachableDefs(mlir::ModuleOp module) {
   }
 }
 
+// The body of a declaration-only operator new. A throwing new never returns
+// null: a failed allocation throws std::bad_alloc, modelled as the uncaught
+// exception's std::terminate, so a program that catches it loses that path.
+static const char *operatorNewBody(llvm::StringRef mangled) {
+  if (mangled.contains("nothrow")) return "{ return malloc(p0); }";
+  return "{ void *r = malloc(p0); if (!r) abort(); return r; }";
+}
+
 bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
   auto sym = symbolNameAttr(fop);
   if (!sym) return true;
@@ -696,7 +704,9 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
   const char *weakStub = tuPart_ ? "__attribute__((weak)) " : "";
   if (isNewOp && !hasBodyCheck) {
     ensureMallocFreeDeclared(out);
-    out << weakStub << retType << " " << outName << "(" << params << ") { return malloc(p0); }\n";
+    ensureAbortDeclared(out);
+    out << weakStub << retType << " " << outName << "(" << params << ") "
+        << operatorNewBody(mangledSym) << "\n";
     return true;
   }
   if (isDeleteOp && !hasBodyCheck) {
@@ -940,8 +950,9 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
     // For C++ operator new/delete, emit inline stubs that wrap malloc/free
     // instead of bare declarations (which would be undefined at link time).
     if (outName.rfind("operator_new", 0) == 0) {
-      out << " { return malloc(p0); }\n\n";
-      traceability.recordOperationTrace(fop->getName().getStringRef(), funcInputText, funcHeaderText + " { return malloc(p0); }\n", true);
+      std::string body = operatorNewBody(sym.getValue());
+      out << " " << body << "\n\n";
+      traceability.recordOperationTrace(fop->getName().getStringRef(), funcInputText, funcHeaderText + " " + body + "\n", true);
       return true;
     }
     if (outName.rfind("operator_delete", 0) == 0) {
