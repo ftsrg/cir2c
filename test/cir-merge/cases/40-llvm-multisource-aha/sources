@@ -1,0 +1,2 @@
+test/sources/llvm-test-suite/MultiSource/Applications/aha/aha.c
+test/sources/llvm-test-suite/MultiSource/Applications/aha/userfun.c

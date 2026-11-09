@@ -515,8 +515,8 @@ private:
   // subsequent handler does not double-destroy.
   static bool handleEndCatch(cir::EndCatchOp op, Mapper &m, std::ostream &out) {
     m.setHasExceptions();
-    out << "  if (__cir_exc_dtor) { ((void(*)(void*))__cir_exc_dtor)(__cir_exc_ptr); "
-           "__cir_exc_dtor = (void*)0; }\n";
+    out << "  if (__cir_exc_dtor) { void (*__d)(void*) = (void(*)(void*))__cir_exc_dtor; "
+           "__d(__cir_exc_ptr); __cir_exc_dtor = (void*)0; }\n";
     return true;
   }
 
@@ -564,8 +564,9 @@ private:
     // Run any RAII cleanup regions that are in scope at the throw site, mirroring
     // what handleReturn does before returning.  CIR-level unwind regions handle
     // destructor calls at the CIR layer, but cleanupStack_ tracks scopes that
-    // were pushed by the mapper itself and must always be drained.
-    m.emitPendingCleanups(out, 0);
+    // were pushed by the mapper itself and must always be drained. Not consuming:
+    // the path that does not throw still leaves these scopes normally.
+    m.emitPendingCleanups(out, 0, /*consume=*/false, m.currentTryCleanupBase());
     emitExceptionReturn(op.getOperation(), m, out);
     return true;
   }

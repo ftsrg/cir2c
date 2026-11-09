@@ -82,7 +82,7 @@ Mapper::Mapper() : counter(0) {}
 static std::string oneLineOperationText(mlir::Operation &op) {
   std::string text;
   llvm::raw_string_ostream rso(text);
-  op.print(rso);
+  op.print(rso, mlir::OpPrintingFlags().assumeVerified().useLocalScope());
   rso.flush();
 
   std::replace(text.begin(), text.end(), '\n', ' ');
@@ -117,9 +117,9 @@ void Mapper::printMonitorReport(std::ostream &out) const {
 // fromDepth.  Each cleanup body is wrapped in a C block `{ ... }` to avoid
 // name collisions when a region is emitted more than once (e.g. early-return
 // and normal fall-through both need the same cleanup).
-void Mapper::emitPendingCleanups(std::ostream &out, int fromDepth, bool consume) {
+void Mapper::emitPendingCleanups(std::ostream &out, int fromDepth, bool consume, size_t fromIndex) {
   // Walk innermost → outermost (back → front).
-  for (int i = static_cast<int>(cleanupStack_.size()) - 1; i >= 0; --i) {
+  for (int i = static_cast<int>(cleanupStack_.size()) - 1; i >= static_cast<int>(fromIndex); --i) {
     if (cleanupStack_[i].loopDepth < fromDepth) break;
     mlir::Region *cleanupRegion = cleanupStack_[i].region;
     if (!cleanupRegion || cleanupRegion->empty()) continue;

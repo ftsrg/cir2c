@@ -44,10 +44,11 @@ int main(int argc, char **argv) {
   std::vector<std::string> positional;
   // Issue #7: externalize all std:: calls (I/O and containers) by default.
   bool externalizeStd = true;
+  bool tuPart = false;
 
   const char *usage =
       "Usage: cir2c [--monitor-json <trace.json>] "
-      "[--[no-]externalize-std] "
+      "[--[no-]externalize-std] [--tu-part] "
       "<input.mlir> <output.c>\n";
 
   for (int i = 1; i < argc; ++i) {
@@ -58,6 +59,7 @@ int main(int argc, char **argv) {
     }
     if (arg == "--externalize-std") { externalizeStd = true; continue; }
     if (arg == "--no-externalize-std") { externalizeStd = false; continue; }
+    if (arg == "--tu-part") { tuPart = true; continue; }
     if (arg == "--monitor-json") {
       if (i + 1 >= argc) {
         llvm::errs() << usage;
@@ -104,10 +106,18 @@ int main(int argc, char **argv) {
   // no-op on CIR from a supported toolchain; it is kept only so text captured
   // from an older ClangIR still parses. The C emitter never inspects these
   // flags, so dropping them is safe either way.
+  // Only on allocas: the same text can be in a string literal of the program.
   for (const std::string pattern : {", cleanup_dest_slot", ", const"}) {
     std::string::size_type pos = 0;
-    while ((pos = input.find(pattern, pos)) != std::string::npos)
-      input.erase(pos, pattern.size());
+    while ((pos = input.find(pattern, pos)) != std::string::npos) {
+      std::string::size_type lineStart = input.rfind('\n', pos);
+      lineStart = lineStart == std::string::npos ? 0 : lineStart + 1;
+      if (input.compare(pos + pattern.size(), 1, "]") == 0 &&
+          input.find("cir.alloca", lineStart) < pos)
+        input.erase(pos, pattern.size());
+      else
+        pos += pattern.size();
+    }
   }
 
   llvm::SourceMgr sourceMgr;
@@ -123,6 +133,7 @@ int main(int argc, char **argv) {
 
   Mapper mapper;
   mapper.setExternalizeStd(externalizeStd);
+  mapper.setTuPart(tuPart);
   registerBuiltinHandlers(mapper);
 
   std::ofstream ofs(outFile);
