@@ -1,0 +1,431 @@
+// Part of the cir2c operational models of libc++. See OM_DESIGN.md.
+// Copyright 2025 Budapest University of Technology and Economics
+// Licensed under the Apache License, Version 2.0
+// std::basic_string as a NUL-terminated heap array, without the small string layout
+// (a union of two representations reinterpreted by a bit) and without compiled externs.
+#ifndef _LIBCPP_STRING
+#define _LIBCPP_STRING
+
+#include <__config>
+#include <__functional/hash.h>
+#include <__fwd/string.h>
+#include <__iterator/iterator_traits.h>
+#include <__iterator/reverse_iterator.h>
+#include <__memory/allocator.h>
+#include <__string/char_traits.h>
+#include <__type_traits/enable_if.h>
+#include <__type_traits/is_integral.h>
+#include <__utility/move.h>
+#include <cstddef>
+#include <initializer_list>
+#include <stdexcept>
+#include <cstdlib>
+#include <string_view>
+
+_LIBCPP_BEGIN_NAMESPACE_STD
+
+template <class _CharT, class _Traits, class _Allocator>
+class basic_string {
+  _CharT* __p_;
+  size_t __size_;
+  size_t __cap_;
+
+  static const _CharT* __empty() {
+    static const _CharT __e = _CharT();
+    return &__e;
+  }
+  void __reserve_exact(size_t __n) {
+    _CharT* __q = static_cast<_CharT*>(malloc((__n + 1) * sizeof(_CharT)));
+    if (__q == nullptr) abort();
+    for (size_t __i = 0; __i < __size_; ++__i) __q[__i] = __p_[__i];
+    __q[__size_] = _CharT();
+    free(__p_);
+    __p_ = __q;
+    __cap_ = __n;
+  }
+  void __grow_to(size_t __n) {
+    if (__p_ == nullptr || __n > __cap_) __reserve_exact(__n > 2 * __cap_ ? __n : 2 * __cap_);
+  }
+  void __set_size(size_t __n) {
+    __size_ = __n;
+    __p_[__n] = _CharT();
+  }
+  static size_t __len(const _CharT* __s) { return _Traits::length(__s); }
+  // A self-referencing argument is read before anything moves.
+  void __insert_range(size_t __pos, const _CharT* __s, size_t __n) {
+    if (__pos > __size_) std::__throw_out_of_range("basic_string");
+    if (__n == 0) return;
+    basic_string __tmp(__s, __n);
+    __grow_to(__size_ + __n);
+    for (size_t __k = __size_; __k > __pos; --__k) __p_[__k - 1 + __n] = __p_[__k - 1];
+    for (size_t __k = 0; __k < __n; ++__k) __p_[__pos + __k] = __tmp.__p_[__k];
+    __set_size(__size_ + __n);
+  }
+
+public:
+  using traits_type            = _Traits;
+  using value_type             = _CharT;
+  using allocator_type         = _Allocator;
+  using size_type              = size_t;
+  using difference_type        = ptrdiff_t;
+  using reference              = _CharT&;
+  using const_reference        = const _CharT&;
+  using pointer                = _CharT*;
+  using const_pointer          = const _CharT*;
+  using iterator               = _CharT*;
+  using const_iterator         = const _CharT*;
+  using reverse_iterator       = std::reverse_iterator<iterator>;
+  using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+  using __self_view            = basic_string_view<_CharT, _Traits>;
+  static const size_t npos     = size_t(-1);
+
+  basic_string() noexcept : __p_(nullptr), __size_(0), __cap_(0) {}
+  explicit basic_string(const _Allocator&) noexcept : basic_string() {}
+  basic_string(const _CharT* __s, const _Allocator& = _Allocator()) : basic_string() { assign(__s, __len(__s)); }
+  basic_string(const _CharT* __s, size_t __n, const _Allocator& = _Allocator()) : basic_string() { assign(__s, __n); }
+  basic_string(size_t __n, _CharT __c, const _Allocator& = _Allocator()) : basic_string() { assign(__n, __c); }
+  basic_string(const basic_string& __o) : basic_string() { assign(__o.data(), __o.__size_); }
+  basic_string(const basic_string& __o, const _Allocator&) : basic_string(__o) {}
+  basic_string(basic_string&& __o) noexcept : __p_(__o.__p_), __size_(__o.__size_), __cap_(__o.__cap_) {
+    __o.__p_ = nullptr;
+    __o.__size_ = __o.__cap_ = 0;
+  }
+  basic_string(basic_string&& __o, const _Allocator&) noexcept : basic_string(std::move(__o)) {}
+  basic_string(const basic_string& __o, size_t __pos, size_t __n = npos, const _Allocator& = _Allocator()) : basic_string() {
+    if (__pos > __o.__size_) std::__throw_out_of_range("basic_string");
+    assign(__o.data() + __pos, __n < __o.__size_ - __pos ? __n : __o.__size_ - __pos);
+  }
+  template <class _It, __enable_if_t<!is_integral<_It>::value, int> = 0>
+  basic_string(_It __f, _It __l, const _Allocator& = _Allocator()) : basic_string() { for (; __f != __l; ++__f) push_back(*__f); }
+  basic_string(initializer_list<_CharT> __il, const _Allocator& = _Allocator()) : basic_string(__il.begin(), __il.end()) {}
+  explicit basic_string(__self_view __v, const _Allocator& = _Allocator()) : basic_string() { assign(__v.data(), __v.size()); }
+  ~basic_string() { free(__p_); }
+
+  operator __self_view() const noexcept { return __self_view(data(), __size_); }
+  allocator_type get_allocator() const noexcept { return allocator_type(); }
+
+  basic_string& operator=(const basic_string& __o) { return this == &__o ? *this : assign(__o.data(), __o.__size_); }
+  basic_string& operator=(basic_string&& __o) noexcept {
+    if (this != &__o) {
+      free(__p_);
+      __p_ = __o.__p_;
+      __size_ = __o.__size_;
+      __cap_ = __o.__cap_;
+      __o.__p_ = nullptr;
+      __o.__size_ = __o.__cap_ = 0;
+    }
+    return *this;
+  }
+  basic_string& operator=(const _CharT* __s) { return assign(__s, __len(__s)); }
+  basic_string& operator=(_CharT __c) { return assign(size_t(1), __c); }
+  basic_string& operator=(initializer_list<_CharT> __il) { return assign(__il.begin(), __il.size()); }
+  basic_string& operator=(__self_view __v) { return assign(__v.data(), __v.size()); }
+
+  basic_string& assign(const _CharT* __s, size_t __n) {
+    basic_string __tmp;
+    __tmp.__grow_to(__n);
+    for (size_t __i = 0; __i < __n; ++__i) __tmp.__p_[__i] = __s[__i];
+    __tmp.__set_size(__n);
+    swap(__tmp);
+    return *this;
+  }
+  basic_string& assign(const _CharT* __s) { return assign(__s, __len(__s)); }
+  basic_string& assign(const basic_string& __o) { return *this = __o; }
+  basic_string& assign(basic_string&& __o) { return *this = std::move(__o); }
+  basic_string& assign(const basic_string& __o, size_t __pos, size_t __n = npos) { return *this = basic_string(__o, __pos, __n); }
+  basic_string& assign(size_t __n, _CharT __c) {
+    __grow_to(__n);
+    for (size_t __i = 0; __i < __n; ++__i) __p_[__i] = __c;
+    __set_size(__n);
+    return *this;
+  }
+  template <class _It, __enable_if_t<!is_integral<_It>::value, int> = 0>
+  basic_string& assign(_It __f, _It __l) { return *this = basic_string(__f, __l); }
+
+  reference operator[](size_t __i) { return __p_[__i]; }
+  const_reference operator[](size_t __i) const { return data()[__i]; }
+  reference at(size_t __i) { if (__i >= __size_) std::__throw_out_of_range("basic_string"); return __p_[__i]; }
+  const_reference at(size_t __i) const { if (__i >= __size_) std::__throw_out_of_range("basic_string"); return data()[__i]; }
+  reference front() { return __p_[0]; }
+  const_reference front() const { return data()[0]; }
+  reference back() { return __p_[__size_ - 1]; }
+  const_reference back() const { return data()[__size_ - 1]; }
+  const _CharT* data() const noexcept { return __p_ != nullptr ? __p_ : __empty(); }
+  _CharT* data() noexcept { __grow_to(__size_); return __p_; }
+  const _CharT* c_str() const noexcept { return data(); }
+
+  iterator begin() noexcept { return __p_; }
+  const_iterator begin() const noexcept { return data(); }
+  const_iterator cbegin() const noexcept { return data(); }
+  iterator end() noexcept { return __p_ + __size_; }
+  const_iterator end() const noexcept { return data() + __size_; }
+  const_iterator cend() const noexcept { return data() + __size_; }
+  reverse_iterator rbegin() noexcept { return reverse_iterator(end()); }
+  const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(end()); }
+  reverse_iterator rend() noexcept { return reverse_iterator(begin()); }
+  const_reverse_iterator rend() const noexcept { return const_reverse_iterator(begin()); }
+
+  bool empty() const noexcept { return __size_ == 0; }
+  size_t size() const noexcept { return __size_; }
+  size_t length() const noexcept { return __size_; }
+  size_t capacity() const noexcept { return __cap_; }
+  size_t max_size() const noexcept { return size_t(-1) / sizeof(_CharT) - 1; }
+  void reserve(size_t __n = 0) { if (__n > __cap_) __reserve_exact(__n); }
+  void shrink_to_fit() {}
+  void clear() noexcept { if (__p_ != nullptr) __set_size(0); }
+  void resize(size_t __n, _CharT __c = _CharT()) {
+    __grow_to(__n);
+    for (size_t __i = __size_; __i < __n; ++__i) __p_[__i] = __c;
+    __set_size(__n);
+  }
+  void push_back(_CharT __c) {
+    __grow_to(__size_ + 1);
+    __p_[__size_] = __c;
+    __set_size(__size_ + 1);
+  }
+  void pop_back() { __set_size(__size_ - 1); }
+  basic_string& append(const _CharT* __s, size_t __n) { __insert_range(__size_, __s, __n); return *this; }
+  basic_string& append(const _CharT* __s) { return append(__s, __len(__s)); }
+  basic_string& append(const basic_string& __o) { return append(__o.data(), __o.__size_); }
+  basic_string& append(const basic_string& __o, size_t __pos, size_t __n = npos) { return append(basic_string(__o, __pos, __n)); }
+  basic_string& append(size_t __n, _CharT __c) { for (size_t __i = 0; __i < __n; ++__i) push_back(__c); return *this; }
+  template <class _It, __enable_if_t<!is_integral<_It>::value, int> = 0>
+  basic_string& append(_It __f, _It __l) { for (; __f != __l; ++__f) push_back(*__f); return *this; }
+  basic_string& operator+=(const basic_string& __o) { return append(__o); }
+  basic_string& operator+=(const _CharT* __s) { return append(__s); }
+  basic_string& operator+=(_CharT __c) { push_back(__c); return *this; }
+  basic_string& operator+=(__self_view __v) { return append(__v.data(), __v.size()); }
+
+  basic_string& insert(size_t __pos, const _CharT* __s, size_t __n) { __insert_range(__pos, __s, __n); return *this; }
+  basic_string& insert(size_t __pos, const _CharT* __s) { return insert(__pos, __s, __len(__s)); }
+  basic_string& insert(size_t __pos, const basic_string& __o) { return insert(__pos, __o.data(), __o.__size_); }
+  basic_string& insert(size_t __pos, size_t __n, _CharT __c) { return insert(__pos, basic_string(__n, __c)); }
+  iterator insert(const_iterator __pos, _CharT __c) {
+    size_t __i = __pos - data();
+    __insert_range(__i, &__c, 1);
+    return __p_ + __i;
+  }
+  template <class _It, __enable_if_t<!is_integral<_It>::value, int> = 0>
+  iterator insert(const_iterator __pos, _It __f, _It __l) {
+    size_t __i = __pos - data();
+    insert(__i, basic_string(__f, __l));
+    return __p_ + __i;
+  }
+  basic_string& erase(size_t __pos = 0, size_t __n = npos) {
+    if (__pos > __size_) std::__throw_out_of_range("basic_string");
+    if (__n > __size_ - __pos) __n = __size_ - __pos;
+    if (__n != 0) {
+      for (size_t __k = __pos; __k + __n < __size_; ++__k) __p_[__k] = __p_[__k + __n];
+      __set_size(__size_ - __n);
+    }
+    return *this;
+  }
+  iterator erase(const_iterator __pos) { size_t __i = __pos - data(); erase(__i, 1); return __p_ + __i; }
+  iterator erase(const_iterator __f, const_iterator __l) { size_t __i = __f - data(); erase(__i, __l - __f); return __p_ + __i; }
+  basic_string& replace(size_t __pos, size_t __n, const _CharT* __s, size_t __m) {
+    basic_string __tmp(__s, __m);
+    erase(__pos, __n);
+    return insert(__pos, __tmp);
+  }
+  basic_string& replace(size_t __pos, size_t __n, const _CharT* __s) { return replace(__pos, __n, __s, __len(__s)); }
+  basic_string& replace(size_t __pos, size_t __n, const basic_string& __o) { return replace(__pos, __n, __o.data(), __o.__size_); }
+  basic_string substr(size_t __pos = 0, size_t __n = npos) const { return basic_string(*this, __pos, __n); }
+  size_t copy(_CharT* __s, size_t __n, size_t __pos = 0) const {
+    if (__pos > __size_) std::__throw_out_of_range("basic_string");
+    size_t __m = __n < __size_ - __pos ? __n : __size_ - __pos;
+    for (size_t __i = 0; __i < __m; ++__i) __s[__i] = data()[__pos + __i];
+    return __m;
+  }
+  void swap(basic_string& __o) noexcept {
+    _CharT* __t = __p_; __p_ = __o.__p_; __o.__p_ = __t;
+    size_t __s = __size_; __size_ = __o.__size_; __o.__size_ = __s;
+    __s = __cap_; __cap_ = __o.__cap_; __o.__cap_ = __s;
+  }
+
+  int compare(const _CharT* __s, size_t __n) const {
+    size_t __m = __size_ < __n ? __size_ : __n;
+    const _CharT* __d = data();
+    for (size_t __i = 0; __i < __m; ++__i) {
+      if (_Traits::lt(__d[__i], __s[__i])) return -1;
+      if (_Traits::lt(__s[__i], __d[__i])) return 1;
+    }
+    return __size_ < __n ? -1 : (__size_ > __n ? 1 : 0);
+  }
+  int compare(const basic_string& __o) const noexcept { return compare(__o.data(), __o.__size_); }
+  int compare(const _CharT* __s) const { return compare(__s, __len(__s)); }
+  int compare(size_t __p, size_t __n, const basic_string& __o) const { return substr(__p, __n).compare(__o); }
+  int compare(size_t __p, size_t __n, const _CharT* __s) const { return substr(__p, __n).compare(__s); }
+  int compare(size_t __p, size_t __n, const _CharT* __s, size_t __m) const { return substr(__p, __n).compare(__s, __m); }
+
+  size_t find(const _CharT* __s, size_t __pos, size_t __n) const {
+    const _CharT* __d = data();
+    for (size_t __i = __pos; __i + __n <= __size_; ++__i) {
+      size_t __k = 0;
+      while (__k < __n && _Traits::eq(__d[__i + __k], __s[__k])) ++__k;
+      if (__k == __n) return __i;
+    }
+    return npos;
+  }
+  size_t find(const basic_string& __o, size_t __pos = 0) const noexcept { return find(__o.data(), __pos, __o.__size_); }
+  size_t find(const _CharT* __s, size_t __pos = 0) const { return find(__s, __pos, __len(__s)); }
+  size_t find(_CharT __c, size_t __pos = 0) const noexcept { return find(&__c, __pos, 1); }
+  size_t rfind(const _CharT* __s, size_t __pos, size_t __n) const {
+    if (__n > __size_) return npos;
+    const _CharT* __d = data();
+    size_t __i = __pos < __size_ - __n ? __pos : __size_ - __n;
+    for (;; --__i) {
+      size_t __k = 0;
+      while (__k < __n && _Traits::eq(__d[__i + __k], __s[__k])) ++__k;
+      if (__k == __n) return __i;
+      if (__i == 0) return npos;
+    }
+  }
+  size_t rfind(const basic_string& __o, size_t __pos = npos) const noexcept { return rfind(__o.data(), __pos, __o.__size_); }
+  size_t rfind(const _CharT* __s, size_t __pos = npos) const { return rfind(__s, __pos, __len(__s)); }
+  size_t rfind(_CharT __c, size_t __pos = npos) const noexcept { return rfind(&__c, __pos, 1); }
+
+private:
+  static bool __in(_CharT __c, const _CharT* __s, size_t __n) {
+    for (size_t __i = 0; __i < __n; ++__i)
+      if (_Traits::eq(__c, __s[__i])) return true;
+    return false;
+  }
+  size_t __scan_fwd(const _CharT* __s, size_t __pos, size_t __n, bool __want) const {
+    const _CharT* __d = data();
+    for (size_t __i = __pos; __i < __size_; ++__i)
+      if (__in(__d[__i], __s, __n) == __want) return __i;
+    return npos;
+  }
+  size_t __scan_back(const _CharT* __s, size_t __pos, size_t __n, bool __want) const {
+    if (__size_ == 0) return npos;
+    const _CharT* __d = data();
+    for (size_t __i = __pos < __size_ - 1 ? __pos : __size_ - 1;; --__i) {
+      if (__in(__d[__i], __s, __n) == __want) return __i;
+      if (__i == 0) return npos;
+    }
+  }
+
+public:
+#define _OM_SCAN(_Name, _Scan, _Want, _Start)                                                                          \
+  size_t _Name(const _CharT* __s, size_t __pos, size_t __n) const { return _Scan(__s, __pos, __n, _Want); }            \
+  size_t _Name(const basic_string& __o, size_t __pos = _Start) const noexcept { return _Scan(__o.data(), __pos, __o.__size_, _Want); } \
+  size_t _Name(const _CharT* __s, size_t __pos = _Start) const { return _Scan(__s, __pos, __len(__s), _Want); }        \
+  size_t _Name(_CharT __c, size_t __pos = _Start) const noexcept { return _Scan(&__c, __pos, 1, _Want); }
+  _OM_SCAN(find_first_of, __scan_fwd, true, 0)
+  _OM_SCAN(find_first_not_of, __scan_fwd, false, 0)
+  _OM_SCAN(find_last_of, __scan_back, true, npos)
+  _OM_SCAN(find_last_not_of, __scan_back, false, npos)
+#undef _OM_SCAN
+};
+
+template <class _C, class _T, class _A>
+basic_string<_C, _T, _A> operator+(const basic_string<_C, _T, _A>& __a, const basic_string<_C, _T, _A>& __b) { basic_string<_C, _T, _A> __r(__a); __r += __b; return __r; }
+template <class _C, class _T, class _A>
+basic_string<_C, _T, _A> operator+(basic_string<_C, _T, _A>&& __a, const basic_string<_C, _T, _A>& __b) { __a += __b; return std::move(__a); }
+template <class _C, class _T, class _A>
+basic_string<_C, _T, _A> operator+(const basic_string<_C, _T, _A>& __a, basic_string<_C, _T, _A>&& __b) { basic_string<_C, _T, _A> __r(__a); __r += __b; return __r; }
+template <class _C, class _T, class _A>
+basic_string<_C, _T, _A> operator+(basic_string<_C, _T, _A>&& __a, basic_string<_C, _T, _A>&& __b) { __a += __b; return std::move(__a); }
+template <class _C, class _T, class _A>
+basic_string<_C, _T, _A> operator+(const basic_string<_C, _T, _A>& __a, const _C* __b) { basic_string<_C, _T, _A> __r(__a); __r += __b; return __r; }
+template <class _C, class _T, class _A>
+basic_string<_C, _T, _A> operator+(basic_string<_C, _T, _A>&& __a, const _C* __b) { __a += __b; return std::move(__a); }
+template <class _C, class _T, class _A>
+basic_string<_C, _T, _A> operator+(const _C* __a, const basic_string<_C, _T, _A>& __b) { basic_string<_C, _T, _A> __r(__a); __r += __b; return __r; }
+template <class _C, class _T, class _A>
+basic_string<_C, _T, _A> operator+(const basic_string<_C, _T, _A>& __a, _C __b) { basic_string<_C, _T, _A> __r(__a); __r += __b; return __r; }
+template <class _C, class _T, class _A>
+basic_string<_C, _T, _A> operator+(basic_string<_C, _T, _A>&& __a, _C __b) { __a += __b; return std::move(__a); }
+template <class _C, class _T, class _A>
+basic_string<_C, _T, _A> operator+(_C __a, const basic_string<_C, _T, _A>& __b) { basic_string<_C, _T, _A> __r(size_t(1), __a); __r += __b; return __r; }
+
+#define _OM_COMPARE(_Op)                                                                                               \
+  template <class _C, class _T, class _A>                                                                              \
+  bool operator _Op(const basic_string<_C, _T, _A>& __a, const basic_string<_C, _T, _A>& __b) noexcept { return __a.compare(__b) _Op 0; } \
+  template <class _C, class _T, class _A>                                                                              \
+  bool operator _Op(const basic_string<_C, _T, _A>& __a, const _C* __b) { return __a.compare(__b) _Op 0; }             \
+  template <class _C, class _T, class _A>                                                                              \
+  bool operator _Op(const _C* __a, const basic_string<_C, _T, _A>& __b) { return 0 _Op __b.compare(__a); }
+_OM_COMPARE(==)
+_OM_COMPARE(!=)
+_OM_COMPARE(<)
+_OM_COMPARE(>)
+_OM_COMPARE(<=)
+_OM_COMPARE(>=)
+#undef _OM_COMPARE
+
+template <class _C, class _T, class _A>
+void swap(basic_string<_C, _T, _A>& __a, basic_string<_C, _T, _A>& __b) noexcept { __a.swap(__b); }
+
+template <class _C, class _T, class _A>
+struct hash<basic_string<_C, _T, _A> > {
+  size_t operator()(const basic_string<_C, _T, _A>& __s) const noexcept {
+    size_t __h = 14695981039346656037ULL;
+    for (size_t __i = 0; __i < __s.size(); ++__i) __h = (__h ^ size_t(__s[__i])) * 1099511628211ULL;
+    return __h;
+  }
+};
+
+template <class _Int>
+string __om_int_to_string(_Int __v) {
+  char __b[32];
+  int __n = 32;
+  bool __neg = __v < _Int(0);
+  // Through unsigned, as the smallest value of a signed type has no negation.
+  unsigned long long __u = __neg ? 0ULL - (unsigned long long)__v : (unsigned long long)__v;
+  do {
+    __b[--__n] = char('0' + __u % 10);
+    __u /= 10;
+  } while (__u != 0);
+  if (__neg) __b[--__n] = '-';
+  return string(__b + __n, size_t(32 - __n));
+}
+inline string to_string(int __v) { return __om_int_to_string(__v); }
+inline string to_string(unsigned __v) { return __om_int_to_string(__v); }
+inline string to_string(long __v) { return __om_int_to_string(__v); }
+inline string to_string(unsigned long __v) { return __om_int_to_string(__v); }
+inline string to_string(long long __v) { return __om_int_to_string(__v); }
+inline string to_string(unsigned long long __v) { return __om_int_to_string(__v); }
+// Only the whole part: nothing observable depends on the digits of a printed float here.
+inline string to_string(double __v) { return __om_int_to_string((long long)__v); }
+inline string to_string(float __v) { return __om_int_to_string((long long)__v); }
+
+inline long long __om_stoll(const string& __s, size_t* __idx, int __base) {
+  size_t __i = 0;
+  while (__i < __s.size() && (__s[__i] == ' ' || __s[__i] == '\t' || __s[__i] == '\n')) ++__i;
+  bool __neg = false;
+  if (__i < __s.size() && (__s[__i] == '-' || __s[__i] == '+')) __neg = __s[__i++] == '-';
+  if (__base == 0) {
+    __base = 10;
+    if (__i + 1 < __s.size() && __s[__i] == '0') { __base = (__s[__i + 1] == 'x' || __s[__i + 1] == 'X') ? 16 : 8; if (__base == 16) __i += 2; }
+  } else if (__base == 16 && __i + 1 < __s.size() && __s[__i] == '0' && (__s[__i + 1] == 'x' || __s[__i + 1] == 'X')) {
+    __i += 2;
+  }
+  size_t __start = __i;
+  unsigned long long __v = 0;
+  for (; __i < __s.size(); ++__i) {
+    char __c = __s[__i];
+    int __d = __c >= '0' && __c <= '9' ? __c - '0' : (__c >= 'a' && __c <= 'z' ? __c - 'a' + 10 : (__c >= 'A' && __c <= 'Z' ? __c - 'A' + 10 : 99));
+    if (__d >= __base) break;
+    __v = __v * __base + __d;
+  }
+  if (__i == __start) std::__throw_invalid_argument("stoi: no conversion");
+  if (__idx != nullptr) *__idx = __i;
+  return __neg ? -(long long)__v : (long long)__v;
+}
+inline int stoi(const string& __s, size_t* __i = nullptr, int __b = 10) { return (int)__om_stoll(__s, __i, __b); }
+inline long stol(const string& __s, size_t* __i = nullptr, int __b = 10) { return (long)__om_stoll(__s, __i, __b); }
+inline unsigned long stoul(const string& __s, size_t* __i = nullptr, int __b = 10) { return (unsigned long)__om_stoll(__s, __i, __b); }
+inline long long stoll(const string& __s, size_t* __i = nullptr, int __b = 10) { return __om_stoll(__s, __i, __b); }
+inline unsigned long long stoull(const string& __s, size_t* __i = nullptr, int __b = 10) { return (unsigned long long)__om_stoll(__s, __i, __b); }
+
+inline namespace literals {
+inline namespace string_literals {
+inline string operator""s(const char* __s, size_t __n) { return string(__s, __n); }
+inline wstring operator""s(const wchar_t* __s, size_t __n) { return wstring(__s, __n); }
+} // namespace string_literals
+} // namespace literals
+
+_LIBCPP_END_NAMESPACE_STD
+
+#endif

@@ -1,0 +1,50 @@
+// Part of the cir2c operational models of libc++. See OM_DESIGN.md.
+// Copyright 2025 Budapest University of Technology and Economics
+// Licensed under the Apache License, Version 2.0
+// std::set and std::multiset, see __om/assoc.h.
+#ifndef _LIBCPP_SET
+#define _LIBCPP_SET
+
+#include <__om/assoc.h>
+
+_LIBCPP_BEGIN_NAMESPACE_STD
+
+template <class _Key, class _Compare = less<_Key>, class _Allocator = allocator<_Key> >
+class set : public __om_assoc<_Key, _Key, __om_key_of_self, _Compare, true, false> {
+  using _Base = __om_assoc<_Key, _Key, __om_key_of_self, _Compare, true, false>;
+
+public:
+  using key_compare    = _Compare;
+  using value_compare  = _Compare;
+  using allocator_type = _Allocator;
+  set() {}
+  explicit set(const _Compare& __c) : _Base(__c) {}
+  set(initializer_list<_Key> __il) { this->insert(__il); }
+  template <class _It, __enable_if_t<!is_integral<_It>::value, int> = 0>
+  set(_It __f, _It __l) { this->insert(__f, __l); }
+  _OM_ASSOC_MEMBERS(set)
+  key_compare key_comp() const { return this->__cmp_; }
+};
+
+template <class _Key, class _Compare = less<_Key>, class _Allocator = allocator<_Key> >
+class multiset : public __om_assoc<_Key, _Key, __om_key_of_self, _Compare, true, true> {
+  using _Base = __om_assoc<_Key, _Key, __om_key_of_self, _Compare, true, true>;
+
+public:
+  using key_compare    = _Compare;
+  using allocator_type = _Allocator;
+  multiset() {}
+  explicit multiset(const _Compare& __c) : _Base(__c) {}
+  multiset(initializer_list<_Key> __il) { this->insert(__il); }
+  _OM_ASSOC_MEMBERS(multiset)
+  key_compare key_comp() const { return this->__cmp_; }
+};
+
+template <class _K, class _C, class _A>
+bool operator==(const set<_K, _C, _A>& __a, const set<_K, _C, _A>& __b) { return __om_assoc_equal(__a, __b); }
+template <class _K, class _C, class _A>
+bool operator!=(const set<_K, _C, _A>& __a, const set<_K, _C, _A>& __b) { return !(__a == __b); }
+
+_LIBCPP_END_NAMESPACE_STD
+
+#endif
