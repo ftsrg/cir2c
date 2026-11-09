@@ -235,9 +235,13 @@ private:
       // pn is a pointer to the array; vn is the array lvalue (direct access).
       std::string src = (m.isDirectAccess(val) && !vn.empty() && vn[0] != '&')
                             ? ("&(" + vn + ")") : vn;
+      // The size comes from the value: ptr may point to the first element (a
+      // member array of a struct), and then *pn is one element only.
+      std::string dims;
+      std::string base = m.arrayBaseTypeAndDims(val.getType(), dims);
       m.ensureMemcpyDeclared();
       out << "  memcpy(" << pn << ", " << src
-          << ", sizeof(*" << pn << "));\n";
+          << ", sizeof(" << base << dims << "));\n";
       return true;
     }
 
