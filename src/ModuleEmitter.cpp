@@ -2155,6 +2155,38 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
             ehScan(nestedOp);
     };
     for (auto &op : module.getOps()) ehScan(op);
+
+    // Class hierarchy from the Itanium typeinfo objects: __si_class_type_info
+    // holds {vptr, name, base}, __vmi_class_type_info holds {vptr, name,
+    // flags, count, (base, offset_flags)...} where bit 1 of offset_flags marks
+    // a public base.
+    module->walk([&](cir::GlobalOp global) {
+      auto init = global.getInitialValue();
+      auto ti = init ? mlir::dyn_cast<cir::TypeInfoAttr>(*init) : nullptr;
+      if (!ti) return;
+      auto data = ti.getData();
+      auto symOf = [&](unsigned i) -> std::string {
+        if (i >= data.size()) return "";
+        auto gv = mlir::dyn_cast<cir::GlobalViewAttr>(data[i]);
+        return gv ? gv.getSymbol().getValue().str() : "";
+      };
+      std::string kind = symOf(0);
+      std::vector<std::pair<std::string, long>> bases;
+      if (kind.find("__si_class_type_info") != std::string::npos) {
+        if (!symOf(2).empty()) bases.push_back({symOf(2), 0});
+      } else if (kind.find("__vmi_class_type_info") != std::string::npos) {
+        // offset_flags: bit 0 virtual, bit 1 public, offset in the bits above 8
+        for (unsigned i = 4; i + 1 < data.size(); i += 2) {
+          auto flags = mlir::dyn_cast<cir::IntAttr>(data[i + 1]);
+          if (symOf(i).empty() || !flags || !(flags.getSInt() & 2)) continue;
+          long offset = (flags.getSInt() & 1) ? -1 : (flags.getSInt() >> 8);
+          bases.push_back({symOf(i), offset});
+        }
+      }
+      if (!bases.empty())
+        registerEhBases(global.getSymName().str(), std::move(bases));
+    });
+    if (hasExceptions_) registerDerivedEhTypes();
   }
 
   // abort() is called by our synthesised EH-termination and trap code, not
@@ -2175,6 +2207,8 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     // on any platform (a plain 'unsigned' would lose the high 32 bits on LP64).
     out << ehStateLinkage << "unsigned long __cir_exc_type_id;\n";
     out << ehStateLinkage << "int __cir_exc_active;\n";
+    if (ehHasOffsetBases_)
+      out << ehStateLinkage << "long __cir_exc_adj;\n";
     // Destructor for the in-flight exception object (set by cir.throw from its
     // dtor operand); cir.end_catch runs it on the object, mirroring the Itanium
     // ABI where __cxa_end_catch destroys the exception when the last handler
