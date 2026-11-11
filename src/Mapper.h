@@ -26,6 +26,7 @@
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/SymbolTable.h>
 
+#include <optional>
 #include <ostream>
 #include <sstream>
 #include <memory>
@@ -416,6 +417,12 @@ private:
   // distinct `static const char __cir_eh_type_<sym>[]` per symbol so the
   // generated C can compare exception types by address.
   std::set<std::string> ehTypeSymbols_;
+  // Public direct bases of each class RTTI symbol with the byte offset of the
+  // base subobject (-1: virtual base), read from the typeinfo globals.
+  std::unordered_map<std::string, std::vector<std::pair<std::string, long>>> ehBases_;
+  // Some base subobject is not at offset 0: handlers then record the offset
+  // of the caught subobject in __cir_exc_adj.
+  bool ehHasOffsetBases_ = false;
   // Stack of landing-pad labels for the currently open structured cir.try
   // bodies (innermost on top).  When a cir.throw fires inside a try body it
   // jumps to the top-of-stack label instead of returning, so the enclosing
@@ -531,6 +538,62 @@ public:
   void registerEhTypeSymbol(const std::string &sym) {
     if (!sym.empty()) ehTypeSymbols_.insert(sym);
     hasExceptions_ = true;
+  }
+  /// Record the public direct bases of a class RTTI symbol.
+  void registerEhBases(const std::string &sym,
+                       std::vector<std::pair<std::string, long>> bases) {
+    for (const auto &b : bases)
+      if (b.second != 0) ehHasOffsetBases_ = true;
+    ehBases_[sym] = std::move(bases);
+  }
+  bool ehHasOffsetBases() const { return ehHasOffsetBases_; }
+  /// Offset of the \p base subobject in a \p sym object: nullopt if \p sym
+  /// does not publicly derive from \p base, -1 if the path has a virtual base.
+  std::optional<long> ehBaseOffset(const std::string &sym,
+                                   const std::string &base) const {
+    if (sym == base) return 0;
+    auto it = ehBases_.find(sym);
+    if (it == ehBases_.end()) return std::nullopt;
+    for (const auto &[b, off] : it->second) {
+      auto rest = ehBaseOffset(b, base);
+      if (!rest) continue;
+      if (off < 0 || *rest < 0) return -1;
+      return off + *rest;
+    }
+    return std::nullopt;
+  }
+  /// Register every known class derived from a registered RTTI symbol, so a
+  /// handler can name the tags of the exceptions it catches.
+  void registerDerivedEhTypes() {
+    std::vector<std::string> derived;
+    for (const auto &[sym, bases] : ehBases_)
+      for (const auto &t : ehTypeSymbols_)
+        if (sym != t && ehBaseOffset(sym, t)) { derived.push_back(sym); break; }
+    for (const auto &sym : derived) registerEhTypeSymbol(sym);
+  }
+  /// C condition: the exception type held in \p typeExpr is caught by a
+  /// handler for \p catchSym; it also sets __cir_exc_adj when bases can be at
+  /// an offset. Empty if a match needs a cast through a virtual base, whose
+  /// offset is only known at run time.
+  std::string ehCatchMatch(const std::string &catchSym,
+                           const std::string &typeExpr) const {
+    std::string cond;
+    for (const auto &sym : ehTypeSymbols_) {
+      auto off = ehBaseOffset(sym, catchSym);
+      if (!off) continue;
+      if (*off < 0) return "";
+      std::string eq = typeExpr + " == (const void*)__cir_eh_type_" +
+                       sanitizeIdentifier(sym);
+      if (ehHasOffsetBases_)
+        eq = "(" + eq + " && ((__cir_exc_adj = " + std::to_string(*off) + "), 1))";
+      cond += (cond.empty() ? "" : " || ") + eq;
+    }
+    return cond;
+  }
+  /// The in-flight exception object as the type of the handler that caught it.
+  const char *ehCaughtPtr() const {
+    return ehHasOffsetBases_ ? "(void*)((char*)__cir_exc_ptr + __cir_exc_adj)"
+                             : "__cir_exc_ptr";
   }
   /// The set of RTTI symbols that need per-type address tags emitted.
   const std::set<std::string> &getEhTypeSymbols() const { return ehTypeSymbols_; }

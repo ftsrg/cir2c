@@ -186,9 +186,12 @@ private:
       firstClause = false;
 
       if (kind == Kind::Typed) {
-        std::string san = Mapper::sanitizeIdentifier(typeSym);
-        out << "  " << keyword << " (__cir_exc_type == (const void*)__cir_eh_type_"
-            << san << ") {\n";
+        std::string match = m.ehCatchMatch(typeSym, "__cir_exc_type");
+        if (match.empty()) {
+          llvm::errs() << ERR_EH_VIRTUAL_BASE_CATCH << "\n";
+          return false;
+        }
+        out << "  " << keyword << " (" << match << ") {\n";
         if (!emitRegionBody(handler, m, out)) return false;
         out << "  }\n";
       } else if (kind == Kind::CatchAll) {
@@ -237,9 +240,9 @@ private:
     // result is a value type, dereference through a pointer cast rather than
     // producing a pointer-as-integer.
     if (!ctype.empty() && ctype.back() == '*')
-      out << "  " << ctype << " " << tmp << " = (" << ctype << ")__cir_exc_ptr;\n";
+      out << "  " << ctype << " " << tmp << " = (" << ctype << ")" << m.ehCaughtPtr() << ";\n";
     else
-      out << "  " << ctype << " " << tmp << " = *(" << ctype << "*)__cir_exc_ptr;\n";
+      out << "  " << ctype << " " << tmp << " = *(" << ctype << "*)" << m.ehCaughtPtr() << ";\n";
     out << "  __cir_exc_active = 0;\n";
     m.setName(op->getResult(0), tmp);
     return true;
@@ -268,12 +271,12 @@ private:
 
     switch (op.getKind()) {
       case cir::InitCatchKind::Reference:
-        out << "  " << lvalue << " = (" << pointeeCType << ")__cir_exc_ptr;\n";
+        out << "  " << lvalue << " = (" << pointeeCType << ")" << m.ehCaughtPtr() << ";\n";
         break;
       case cir::InitCatchKind::Pointer:
       case cir::InitCatchKind::Scalar:
       case cir::InitCatchKind::TrivialCopy:
-        out << "  " << lvalue << " = *(" << pointeeCType << "*)__cir_exc_ptr;\n";
+        out << "  " << lvalue << " = *(" << pointeeCType << "*)" << m.ehCaughtPtr() << ";\n";
         break;
       case cir::InitCatchKind::NonTrivialCopy:
         // Copy-construction handled by cir.construct_catch_param.
@@ -305,11 +308,11 @@ private:
     if (copyFn && !copyFn->empty()) {
       std::string fn = m.getFunctionOutputName(copyFn->str());
       out << "  " << fn << "(" << destPtr << ", (" << pointeeCType
-          << "*)__cir_exc_ptr);\n";
+          << "*)" << m.ehCaughtPtr() << ");\n";
     } else {
       // No copy constructor: fall back to a by-value copy.
       std::string lvalue = m.isDirectAccess(paramAddr) ? pname : ("*" + pname);
-      out << "  " << lvalue << " = *(" << pointeeCType << "*)__cir_exc_ptr;\n";
+      out << "  " << lvalue << " = *(" << pointeeCType << "*)" << m.ehCaughtPtr() << ";\n";
     }
     return true;
   }
@@ -347,6 +350,24 @@ private:
       std::string ctype = m.mapTypeToC(op->getResult(1).getType());
       out << "  " << ctype << " " << t << " = (" << ctype
           << ")__cir_exc_type_id;\n";
+      // The selector names the first listed handler that catches the
+      // exception, which for a base-class handler differs from its own type.
+      if (auto types = op.getCatchTypeListAttr()) {
+        const char *keyword = "if";
+        for (auto attr : types) {
+          auto sym = mlir::dyn_cast<mlir::FlatSymbolRefAttr>(attr);
+          if (!sym) continue;
+          std::string name = sym.getValue().str();
+          std::string match = m.ehCatchMatch(name, "__cir_exc_type");
+          if (match.empty()) {
+            llvm::errs() << ERR_EH_VIRTUAL_BASE_CATCH << "\n";
+            return false;
+          }
+          out << "  " << keyword << " (" << match << ") " << t << " = (" << ctype << ")(unsigned long)__cir_eh_type_"
+              << Mapper::sanitizeIdentifier(name) << ";\n";
+          keyword = "else if";
+        }
+      }
       m.setName(op->getResult(1), t);
     }
     return true;
@@ -440,22 +461,20 @@ private:
     unsigned destCount = catchDests.size();
     unsigned n = std::min(typedCount, destCount);
 
-    // Known limitation: dispatch uses exact pointer equality on the RTTI tag.
-    // A `catch (Base &)` block will NOT fire for a `Derived` exception because
-    // C++ inheritance is not modelled here.  This is a deliberate approximation
-    // for verification: the miss is conservative (the handler is unreachable in
-    // the model when it would have been reachable in the real program).
     for (unsigned i = 0; i < n; ++i) {
       auto attr = catchTypes[i];
       auto gv = mlir::dyn_cast<cir::GlobalViewAttr>(attr);
       if (!gv) continue; // catch_all / unwind are encoded by default_destination
       std::string sym = gv.getSymbol().getValue().str();
       m.registerEhTypeSymbol(sym);
-      std::string san = Mapper::sanitizeIdentifier(sym);
       mlir::Block *succ = catchDests[i];
       std::string lbl = m.getOrCreateLabel(succ);
-      out << "  if (__cir_exc_type == (const void*)__cir_eh_type_" << san
-          << ") {\n";
+      std::string match = m.ehCatchMatch(sym, "__cir_exc_type");
+      if (match.empty()) {
+        llvm::errs() << ERR_EH_VIRTUAL_BASE_CATCH << "\n";
+        return false;
+      }
+      out << "  if (" << match << ") {\n";
       forwardEhToken(succ, "    ");
       out << "    goto " << lbl << ";\n";
       out << "  }\n";
@@ -500,9 +519,9 @@ private:
       std::string ctype = m.mapTypeToC(op->getResult(1).getType());
       std::string p = m.freshName("ca_exn");
       if (!ctype.empty() && ctype.back() == '*')
-        out << "  " << ctype << " " << p << " = (" << ctype << ")__cir_exc_ptr;\n";
+        out << "  " << ctype << " " << p << " = (" << ctype << ")" << m.ehCaughtPtr() << ";\n";
       else
-        out << "  " << ctype << " " << p << " = *(" << ctype << "*)__cir_exc_ptr;\n";
+        out << "  " << ctype << " " << p << " = *(" << ctype << "*)" << m.ehCaughtPtr() << ";\n";
       m.setName(op->getResult(1), p);
     }
     out << "  __cir_exc_active = 0;\n";
