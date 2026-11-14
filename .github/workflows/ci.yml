@@ -237,6 +237,13 @@ jobs:
           touch /tmp/${{ matrix.slug }}.json
           cat /tmp/${{ matrix.slug }}.json || true
 
+      - name: Multi-TU tests
+        if: matrix.slug == 'integration'
+        env:
+          CIR2C_LLVM_PREFIX: /opt/cir
+          CIR2C_BUILD_DIR: ${{ github.workspace }}/build
+        run: bash test/run_multi_tu_tests.sh
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
