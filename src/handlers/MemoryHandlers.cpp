@@ -34,6 +34,23 @@ using namespace mlir;
 
 namespace cir2c {
 
+// Whether a record holds data for argument passing. A member that is itself a
+// record holds data only when one of its own members does: clang treats a
+// record whose members are all records without data as empty for argument
+// passing, for example a wrapper that keeps only an empty function object.
+static bool recordHoldsDataForABI(cir::RecordType record) {
+  llvm::ArrayRef<mlir::Type> members = record.getMembers();
+  llvm::ArrayRef<cir::RecordMemberKind> kinds = record.getMemberKinds();
+  for (size_t i = 0; i < members.size() && i < kinds.size(); ++i) {
+    if (!cir::holdsDataForABI(members[i], kinds[i])) continue;
+    auto inner = mlir::dyn_cast<cir::RecordType>(members[i]);
+    if (inner && inner.isComplete() && !inner.isUnion() && !recordHoldsDataForABI(inner))
+      continue;
+    return true;
+  }
+  return false;
+}
+
 /// Handlers for memory allocation and basic load/store/copy operations:
 /// cir.alloca, cir.load, cir.store, cir.copy, cir.stack_save, cir.stack_restore.
 class MemoryHandlers : public HandlerModule {
@@ -92,6 +109,9 @@ private:
     // Get the allocated type (first operand type in the operation signature)
     // cir.alloca returns a pointer, but we want to declare the variable as the pointed-to type
     Type allocaTy = op.getAllocaType();
+    // The alignment of the C++ object, when the C type has a smaller one: a
+    // packed struct has the alignment 1 in C (issue #12).
+    std::string alignAttr = m.localAlignmentAttribute(allocaTy, op.getAlignmentAttr());
 
     // Variable-length array: a dynamic alloc-size operand makes this a VLA.
     // Map it to a C99 VLA `T name[n]` so its lifetime is managed by the
@@ -102,7 +122,7 @@ private:
       std::string dims;
       std::string elemCType = m.arrayBaseTypeAndDims(allocaTy, dims);
       out << "  " << qualPrefix << elemCType << " " << uniqueVarName
-          << "[" << sizeName << "]" << dims << ";\n";
+          << "[" << sizeName << "]" << dims << alignAttr << ";\n";
       for (Value res : o->getResults()) {
         m.setName(res, uniqueVarName);
         m.markAsDirectAccess(res);
@@ -110,11 +130,26 @@ private:
       return true;
     }
 
+    // A variable that the CIR also reads as another type (issue #11).
+    if (o->getNumResults() > 0 &&
+        m.emitUnionSlot(o->getResult(0), uniqueVarName, alignAttr, out))
+      return true;
+
     // Handle struct types first: use typed API instead of textual type string inspection.
     // This needs to come before array check since some struct names might contain "array"
-    if (mlir::isa<cir::RecordType>(allocaTy)) {
+    if (auto recordTy = mlir::dyn_cast<cir::RecordType>(allocaTy)) {
       std::string ctype = m.mapTypeToC(allocaTy);
-      out << "  " << qualPrefix << ctype << " " << uniqueVarName << ";\n";
+      // A record without data for argument passing, for example an empty
+      // class, leaves the arguments of a call, but the CIR still loads it from
+      // its uninitialized temporary. In C, a copy of an uninitialized local
+      // whose address is not taken is undefined (C11 6.3.2.1p2), so the
+      // variable starts as zero.
+      bool noData = recordTy.isComplete() && !recordTy.isUnion() &&
+                    !recordHoldsDataForABI(recordTy);
+      std::string init = (noData && qualPrefix.find("_Atomic") == std::string::npos)
+                             ? " = {0}"
+                             : "";
+      out << "  " << qualPrefix << ctype << " " << uniqueVarName << alignAttr << init << ";\n";
       for (Value res : o->getResults()) {
         m.setName(res, uniqueVarName);
         m.markAsDirectAccess(res);
@@ -127,7 +162,7 @@ private:
     if (auto arrayTy = llvm::dyn_cast<cir::ArrayType>(allocaTy)) {
       std::string dims;
       std::string elemCType = m.arrayBaseTypeAndDims(arrayTy, dims);
-      out << "  " << qualPrefix << elemCType << " " << uniqueVarName << dims << ";\n";
+      out << "  " << qualPrefix << elemCType << " " << uniqueVarName << dims << alignAttr << ";\n";
       for (Value res : o->getResults()) {
         m.setName(res, uniqueVarName);
         m.markAsDirectAccess(res);
@@ -141,7 +176,7 @@ private:
       ctype = m.mapTypeToC(allocaTy);
     }
 
-    out << "  " << qualPrefix << ctype << " " << uniqueVarName << ";\n";
+    out << "  " << qualPrefix << ctype << " " << uniqueVarName << alignAttr << ";\n";
     for (Value res : o->getResults()) {
       m.setName(res, uniqueVarName);
       m.markAsDirectAccess(res); // Mark alloca results as direct access
@@ -153,6 +188,10 @@ private:
     Operation *o = op.getOperation();
     if (o->getNumOperands() < 1) return false;
     Value ptr = o->getOperand(0);
+
+    // A read of a local variable as another type, member by member (issue #11).
+    if (o->getNumResults() > 0 && m.loadThroughMemberwiseView(ptr, o->getResult(0), out))
+      return true;
 
     // Vtable dispatch chain: if loading from a tracked chain value, propagate
     // the chain and emit a C declaration when the loaded value will be referenced
@@ -193,6 +232,11 @@ private:
     std::string tmp = m.freshName("t");
     std::string ctype = "int";
     if (o->getNumResults() > 0) ctype = m.mapTypeToC(o->getResult(0).getType());
+    if (o->getNumResults() > 0 &&
+        m.copyThroughUnionSlot(Value(), ptr, o->getResult(0).getType(), tmp, src, true, out)) {
+      m.setName(o->getResult(0), tmp);
+      return true;
+    }
     // Check if source is marked as direct access (alloca, array, struct)
     // Never dereference direct access values
     bool shouldDereference = !m.isDirectAccess(ptr);
@@ -214,6 +258,9 @@ private:
     if (o->getNumOperands() < 2) return false;
     Value val = o->getOperand(0);
     Value ptr = o->getOperand(1);
+
+    // A write of a local variable as another type, member by member (issue #11).
+    if (m.storeThroughMemberwiseView(ptr, val, out)) return true;
 
     // Vtable-pointer install: a constructor stores a !cir.vptr (from
     // cir.vtable.address_point, i.e. `&_ZTV[k]`) into the object's __vptr slot at
@@ -284,6 +331,8 @@ private:
     if (needAddressOf) {
       vname = "&" + vname;
     }
+    if (m.copyThroughUnionSlot(ptr, Value(), val.getType(), pname, vname, false, out))
+      return true;
     // Check if destination is marked as direct access (alloca, array, struct)
     // Never dereference direct access destinations
     bool shouldDereference = !m.isDirectAccess(ptr);
@@ -330,6 +379,9 @@ private:
     // needs `*`. Adjust each side accordingly so the assignment types match.
     std::string dstExpr = m.isDirectAccess(dst) ? dstName : ("*" + dstName);
     std::string srcExpr = m.isDirectAccess(src) ? srcName : ("*" + srcName);
+    if (dstPtrTy &&
+        m.copyThroughUnionSlot(dst, src, dstPtrTy.getPointee(), dstExpr, srcExpr, false, out))
+      return true;
     out << "  " << dstExpr << " = " << srcExpr << "; // copy\n";
     return true;
   }

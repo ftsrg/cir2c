@@ -25,11 +25,13 @@
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/SymbolTable.h>
+#include <mlir/Interfaces/DataLayoutInterfaces.h>
 
 #include <optional>
 #include <ostream>
 #include <sstream>
 #include <memory>
+#include <map>
 #include <set>
 #include <string>
 #include <functional>
@@ -103,6 +105,25 @@ public:
   /// Uses parameter types only; does not assign value names.
   bool emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out);
 
+  /// The C prototype parts of the cir.func \p fop: the return type, the output
+  /// name, and the parameter list with the parameters named p0, p1, …
+  void buildCPrototype(mlir::Operation *fop, std::string &retType,
+                       std::string &outName, std::string &params) const;
+
+  /// The C struct/union tag of a named record; see TypeMapper::planRecordNames.
+  std::string recordCName(mlir::StringAttr nameAttr) const {
+    return typeMapper_.recordCName(nameAttr);
+  }
+  std::string recordCName(llvm::StringRef raw) const {
+    return typeMapper_.recordCName(raw);
+  }
+
+  /// The C function to use where the function \p sym is called through a
+  /// pointer with a `void*` receiver: in a vtable slot, and as the destructor
+  /// of a thrown object. This is the `void*`-receiver wrapper of \p sym when it
+  /// has one, else the function itself. See emitReceiverWrappers.
+  std::string receiverTarget(const std::string &sym) const;
+
   /// Emit `extern void *malloc(unsigned long);` and `extern void free(void*);`
   /// at most once. Called before emitting an operator new/delete stub whose
   /// synthesised body calls malloc/free, in case the CIR module itself never
@@ -154,6 +175,16 @@ public:
   /// True when a function definition should be dropped: it is an inline/weak
   /// definition that is not reachable from any retained root.
   bool funcDefElided(llvm::StringRef sym) const;
+  /// True when a global has a discardable linkage and no kept function or
+  /// global refers to it, so the output does not contain it.
+  bool globalElided(llvm::StringRef sym) const;
+
+  /// Compute which functions can leave an exception in flight: a function with
+  /// a cir.throw, an indirect call that can throw, or a call that can throw to
+  /// such a function. Computed once.
+  void computeMayThrow(mlir::ModuleOp module);
+  /// True when the function with this symbol can leave an exception in flight.
+  bool mayThrow(llvm::StringRef sym) const { return mayThrowFuncs_.count(sym.str()) > 0; }
 
   /// Record `extern <ctype> __VERIFIER_nondet_<suffix>(void);` once per suffix
   /// into an internal buffer; mapModule flushes it before function bodies.
@@ -352,6 +383,19 @@ private:
   // STD externalization (issue #7). On by default.
   bool externalizeStd_ = true;
   bool tuPart_ = false;
+  // With --no-externalize-std: the symbols that the output uses without a
+  // definition, outside the C standard library (README 8.2). mapModule stops
+  // with an error when the list is not empty.
+  std::vector<std::string> undefinedSymbols_;
+  // The body of a trivial assignment operator: a copy of the data members.
+  std::string trivialAssignmentCopy(mlir::Type dstPointer, const std::string &dst,
+                                    const std::string &src);
+  void requireDefinition(const std::string &symbol, bool isObject);
+  bool usedByOutput(mlir::Operation *symbolOp) const;
+  // Function symbol -> its `void*`-receiver wrapper (issue #5).
+  std::map<std::string, mlir::Operation *> receiverWrappers_;
+  void planReceiverWrappers(mlir::ModuleOp module);
+  void emitReceiverWrappers(std::ostream &out);
   bool lastCallExternalized_ = false;
   // Std__ structs that will be emitted with full definitions (not just forward
   // declarations). Populated by emitModule's pre-scan; used by handlers to
@@ -370,9 +414,81 @@ private:
   std::set<std::string> reachableDefs_;   // function symbols to retain
   std::set<std::string> droppableDefs_;   // inline/weak defs eligible to drop
   std::set<std::string> declOnlyFuncs_;   // body-less declarations
+  std::set<std::string> droppableGlobals_; // linkonce/weak globals eligible to drop
+  bool mayThrowComputed_ = false;
+  std::set<std::string> mayThrowFuncs_;   // functions that can leave an exception
+  // Handler selection (issue #2, src/ExceptionTypes.cpp).
+  struct EhBase {
+    std::string sym;  // RTTI symbol of the base class
+    int64_t offset;   // offset of the base subobject (non-virtual bases)
+    bool isPublic;
+    bool isVirtual;
+  };
+  struct EhTypeInfo {
+    enum Kind { Unknown, Class, Pointer } kind = Unknown;
+    std::vector<EhBase> bases;  // Class
+    std::string pointee;        // Pointer: RTTI symbol of the pointee
+    unsigned quals = 0;         // Pointer: 1 const, 2 volatile, 4 restrict
+  };
+  struct EhMatch {
+    bool matches = false;
+    bool unsupported = false;  // the match goes through a virtual base
+    bool converts = false;     // a pointer conversion
+    bool nullValue = false;    // a thrown std::nullptr_t
+    int64_t offset = 0;        // of the base subobject
+  };
+  std::map<std::string, EhTypeInfo> ehTypeInfos_;
+  std::map<std::string, mlir::Type> ehThrownTypes_;  // RTTI symbol -> thrown type
+  std::set<std::string> ehMatchersPlanned_;
+  std::vector<std::string> ehMatchersPending_;
+  void planExceptionTypes(mlir::ModuleOp module);
+  // Issue #3 part 2: false, with an error message, when the output would use a
+  // virtual base class.
+  bool rejectVirtualBases(mlir::ModuleOp module);
+  EhMatch matchClass(const std::string &thrown, const std::string &handler) const;
+  EhMatch matchHandler(const std::string &thrown, const std::string &handler) const;
   // Alloca result Values that are accessed atomically / volatilely.
   llvm::DenseSet<mlir::Value> atomicAllocaValues_;
   llvm::DenseSet<mlir::Value> volatileAllocaValues_;
+
+  // Accesses through a pointer cast to another type, which C forbids (C11
+  // 6.5p7). Issue #11, src/Reinterpretation.cpp.
+  std::unique_ptr<mlir::DataLayout> dataLayout_;
+  void reportReinterpretations(mlir::ModuleOp module);
+  bool reinterpretsObject(mlir::Type object, mlir::Type view);
+  // Union slots: the calling convention in the CIR reads a local variable
+  // through a pointer to another type, so such a variable becomes a union of
+  // its types. Alloca result -> [its own type, the other types], member i is
+  // `v<i>`.
+  llvm::DenseMap<mlir::Value, std::vector<mlir::Type>> unionSlotTypes_;
+  llvm::DenseMap<mlir::Value, std::string> unionSlotNames_;
+  // The bitcasts that read a union slot as one of its members.
+  llvm::DenseSet<mlir::Operation *> unionSlotCasts_;
+  // The values whose C name is a member of a union slot.
+  llvm::DenseSet<mlir::Value> unionSlotViews_;
+  void planUnionSlots(mlir::ModuleOp module);
+  std::string memberwiseCopy(mlir::Type type, const std::string &dst,
+                             const std::string &src);
+  // Member-wise views: a read of a local variable as another type, where each
+  // scalar of the other type is exactly one scalar member of the variable
+  // (same offset, same size, same kind). The variable keeps its own type, and
+  // a load or a store through the bitcast converts the scalars one by one.
+  llvm::DenseSet<mlir::Operation *> memberwiseCasts_;
+  // The cir.get_member operations on a member-wise view; they write nothing.
+  llvm::DenseSet<mlir::Operation *> memberwiseMembers_;
+  // A member-wise view or a member of it -> the variable and the offset of the
+  // view part in it.
+  llvm::DenseMap<mlir::Value, std::pair<mlir::Value, uint64_t>> memberwiseViews_;
+  void addMemberwiseView(mlir::Value view, mlir::Value slot, uint64_t offset);
+  struct ScalarLeaf {
+    uint64_t offset;
+    mlir::Type type;
+    std::string path;  // member access from the object, for example ".a.p"
+  };
+  bool scalarLeaves(mlir::Type type, uint64_t offset, const std::string &path,
+                    std::vector<ScalarLeaf> &leaves) const;
+  bool pairScalarLeaves(mlir::Type object, mlir::Type view,
+                        std::vector<std::pair<ScalarLeaf, ScalarLeaf>> *pairs) const;
 
   // The C name of the last non-variadic parameter of the function currently
   // being mapped.  Set by mapFunc when the function is variadic (isVarArg).
@@ -417,12 +533,6 @@ private:
   // distinct `static const char __cir_eh_type_<sym>[]` per symbol so the
   // generated C can compare exception types by address.
   std::set<std::string> ehTypeSymbols_;
-  // Public direct bases of each class RTTI symbol with the byte offset of the
-  // base subobject (-1: virtual base), read from the typeinfo globals.
-  std::unordered_map<std::string, std::vector<std::pair<std::string, long>>> ehBases_;
-  // Some base subobject is not at offset 0: handlers then record the offset
-  // of the caught subobject in __cir_exc_adj.
-  bool ehHasOffsetBases_ = false;
   // Stack of landing-pad labels for the currently open structured cir.try
   // bodies (innermost on top).  When a cir.throw fires inside a try body it
   // jumps to the top-of-stack label instead of returning, so the enclosing
@@ -467,6 +577,35 @@ public:
   bool isAtomicAlloca(mlir::Value v) const { return atomicAllocaValues_.count(v) > 0; }
   /// Query whether an alloca result Value is accessed with volatile semantics.
   bool isVolatileAlloca(mlir::Value v) const { return volatileAllocaValues_.count(v) > 0; }
+
+  /// ` __attribute__((aligned(N)))` for a local variable of CIR type \p type
+  /// whose CIR alignment \p align is larger than the alignment of the C type
+  /// that cir2c writes, and "" otherwise. A packed struct has the alignment 1
+  /// in C, but its objects have the alignment of the C++ class.
+  std::string localAlignmentAttribute(mlir::Type type, mlir::IntegerAttr align);
+  /// Union slots (issue #11). Declare the alloca \p result as a union named
+  /// \p name when the pre-scan planned one. Returns false otherwise.
+  bool emitUnionSlot(mlir::Value result, const std::string &name,
+                     const std::string &alignAttr, std::ostream &out);
+  /// Name the result of \p castOp as a member of a union slot. Returns false
+  /// when the cast does not read a union slot.
+  bool mapUnionSlotView(mlir::Operation *castOp);
+  /// Write `dst = src` member by member when \p type is a struct and one of
+  /// the two addresses is a member of a union slot. Declare \p dstExpr first
+  /// when \p declareDst. Returns false and writes nothing otherwise.
+  bool copyThroughUnionSlot(mlir::Value dstAddr, mlir::Value srcAddr, mlir::Type type,
+                            const std::string &dstExpr, const std::string &srcExpr,
+                            bool declareDst, std::ostream &out);
+  /// Member-wise views (issue #11). Write a load of \p result through
+  /// \p addr, or a store of \p value through \p addr, as a conversion of
+  /// each scalar member when \p addr is a member-wise view of a local variable.
+  /// Returns false and writes nothing otherwise.
+  bool loadThroughMemberwiseView(mlir::Value addr, mlir::Value result, std::ostream &out);
+  bool storeThroughMemberwiseView(mlir::Value addr, mlir::Value value, std::ostream &out);
+  /// True when \p op is a cir.get_member on a member-wise view. It writes no C.
+  bool isMemberwiseViewMember(mlir::Operation *op) const {
+    return memberwiseMembers_.count(op) > 0;
+  }
   
   /// Returns the C name of the last named (non-variadic) parameter of the
   /// function body currently being mapped. Empty if the current function is
@@ -539,62 +678,15 @@ public:
     if (!sym.empty()) ehTypeSymbols_.insert(sym);
     hasExceptions_ = true;
   }
-  /// Record the public direct bases of a class RTTI symbol.
-  void registerEhBases(const std::string &sym,
-                       std::vector<std::pair<std::string, long>> bases) {
-    for (const auto &b : bases)
-      if (b.second != 0) ehHasOffsetBases_ = true;
-    ehBases_[sym] = std::move(bases);
-  }
-  bool ehHasOffsetBases() const { return ehHasOffsetBases_; }
-  /// Offset of the \p base subobject in a \p sym object: nullopt if \p sym
-  /// does not publicly derive from \p base, -1 if the path has a virtual base.
-  std::optional<long> ehBaseOffset(const std::string &sym,
-                                   const std::string &base) const {
-    if (sym == base) return 0;
-    auto it = ehBases_.find(sym);
-    if (it == ehBases_.end()) return std::nullopt;
-    for (const auto &[b, off] : it->second) {
-      auto rest = ehBaseOffset(b, base);
-      if (!rest) continue;
-      if (off < 0 || *rest < 0) return -1;
-      return off + *rest;
-    }
-    return std::nullopt;
-  }
-  /// Register every known class derived from a registered RTTI symbol, so a
-  /// handler can name the tags of the exceptions it catches.
-  void registerDerivedEhTypes() {
-    std::vector<std::string> derived;
-    for (const auto &[sym, bases] : ehBases_)
-      for (const auto &t : ehTypeSymbols_)
-        if (sym != t && ehBaseOffset(sym, t)) { derived.push_back(sym); break; }
-    for (const auto &sym : derived) registerEhTypeSymbol(sym);
-  }
-  /// C condition: the exception type held in \p typeExpr is caught by a
-  /// handler for \p catchSym; it also sets __cir_exc_adj when bases can be at
-  /// an offset. Empty if a match needs a cast through a virtual base, whose
-  /// offset is only known at run time.
-  std::string ehCatchMatch(const std::string &catchSym,
-                           const std::string &typeExpr) const {
-    std::string cond;
-    for (const auto &sym : ehTypeSymbols_) {
-      auto off = ehBaseOffset(sym, catchSym);
-      if (!off) continue;
-      if (*off < 0) return "";
-      std::string eq = typeExpr + " == (const void*)__cir_eh_type_" +
-                       sanitizeIdentifier(sym);
-      if (ehHasOffsetBases_)
-        eq = "(" + eq + " && ((__cir_exc_adj = " + std::to_string(*off) + "), 1))";
-      cond += (cond.empty() ? "" : " || ") + eq;
-    }
-    return cond;
-  }
-  /// The in-flight exception object as the type of the handler that caught it.
-  const char *ehCaughtPtr() const {
-    return ehHasOffsetBases_ ? "(void*)((char*)__cir_exc_ptr + __cir_exc_adj)"
-                             : "__cir_exc_ptr";
-  }
+  /// Handler selection (issue #2, src/ExceptionTypes.cpp). Writes to \p call
+  /// the C call that selects the handler of RTTI symbol \p handler, and plans
+  /// its function. Returns false, with an error message, when a thrown type
+  /// can match the handler through a virtual base class.
+  bool exceptionMatchCall(const std::string &handler, std::string &call);
+  /// True when no other thrown type of the module matches the handler.
+  bool handlerMatchesOnlyItself(const std::string &handler) const;
+  /// Write the planned handler-selection functions.
+  void emitExceptionMatchers(std::ostream &out);
   /// The set of RTTI symbols that need per-type address tags emitted.
   const std::set<std::string> &getEhTypeSymbols() const { return ehTypeSymbols_; }
   /// Push a landing-pad label for the currently-open structured cir.try body.

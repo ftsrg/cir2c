@@ -22,8 +22,12 @@
 # body for, while libc++ keeps list/map/set/deque fully header-templated. Built
 # by docker/build-llvm.sh alongside clang; there is no flag to opt out.
 #
-# Exit codes: 0 success, 2 clang failed, 3 cir-opt failed, 4 cir2c failed,
-#             5 cir-merge rejected the inputs (--merge cir)
+# With --no-externalize-std, C++ input is also compiled with the models in
+# models/ (README 8.2): C++ headers that define the parts of libc++ that libc++
+# keeps in its compiled library, so that the CIR contains their bodies.
+#
+# Exit codes: 0 success, 1 wrong arguments or no toolchain, 2 clang failed,
+# 3 cir-opt failed, 4 cir2c failed, 5 cir-merge rejected the inputs (--merge cir)
 #
 # Usage:
 #   Single file:  run-cir2c.sh [OPTIONS] <input-file> <output.c>
@@ -136,8 +140,57 @@ CLANG_BIN="$CLANG"
 STDLIB_FLAGS=()
 if [[ "$LANG" == "c++" ]]; then
     CLANG_BIN="$CLANGPP"
-    STDLIB_FLAGS=(-stdlib=libc++ -nostdinc++ -isystem "$LIBCXX_INCLUDE")
+    # The output C has one thread. Without thread-safe statics, clang guards a
+    # static local variable with a plain flag. Otherwise it calls the
+    # __cxa_guard_* functions of the C++ runtime, which the output does not have.
+    STDLIB_FLAGS=(-stdlib=libc++ -nostdinc++ -isystem "$LIBCXX_INCLUDE"
+                  -fno-threadsafe-statics)
 fi
+
+# The models for --no-externalize-std (README 8.2). A model is a directory in
+# models/ with an include/ directory, a prelude.h file, or both. clang searches
+# the -I directory of include/ before the -isystem directory of libc++, so a
+# header there replaces the libc++ header of the same name. clang reads
+# prelude.h before the first line of the program. To use other models, change
+# this list.
+MODELS=(libcxx-out-of-line ostream-sink istream-nondet)
+MODEL_FLAGS=()
+if [[ "$LANG" == "c++" && "$EXTERNALIZE_STD" == false ]]; then
+    declare -A MODEL_HEADERS=()
+    for model in "${MODELS[@]}"; do
+        dir="$SCRIPT_DIR/models/$model"
+        [[ -d "$dir" ]] || { echo "Error: model not found: $dir" >&2; exit 1; }
+        if [[ -d "$dir/include" ]]; then
+            # Two models with one header would depend on the order of the list.
+            for header in "$dir"/include/*; do
+                name=$(basename "$header")
+                if [[ -n "${MODEL_HEADERS[$name]:-}" ]]; then
+                    echo "Error: models ${MODEL_HEADERS[$name]} and $model both have <$name>" >&2
+                    exit 1
+                fi
+                MODEL_HEADERS[$name]=$model
+            done
+            MODEL_FLAGS+=(-I "$dir/include")
+        fi
+        [[ -f "$dir/prelude.h" ]] && MODEL_FLAGS+=(-include "$dir/prelude.h")
+    done
+fi
+
+# __FILE__ expands to the path of the file as clang finds it, and the output
+# keeps it, for example in the message of an assertion. Without the directory,
+# the output does not contain a local path, and it does not change with the
+# directory of the translation.
+# Each input file gets the directories of its own path.
+set_cir_gen_flags() {
+    local input="$1"
+    CIR_GEN_FLAGS=()
+    local dir
+    for dir in "$(dirname -- "$input")" "$(cd -- "$(dirname -- "$input")" && pwd -P)" \
+               "$SCRIPT_DIR/models" ${LIBCXX_INCLUDE:+"$LIBCXX_INCLUDE"}; do
+        CIR_GEN_FLAGS+=("-fmacro-prefix-map=${dir%/}/=")
+    done
+    CIR_GEN_FLAGS+=(${MODEL_FLAGS[@]+"${MODEL_FLAGS[@]}"} ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"})
+}
 
 # Validate tools
 REQUIRE_FLAGS=()
@@ -171,8 +224,9 @@ run_single_pipeline() {
     # Step 1: Generate CIR
     local cir_file
     cir_file=$(_tmpmlir "")
+    set_cir_gen_flags "$input"
     "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$input" -o "$cir_file" \
-        ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
+        "${CIR_GEN_FLAGS[@]}" \
         ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
         ${CIR_CFLAGS[@]+"${CIR_CFLAGS[@]}"} ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
 
@@ -212,8 +266,9 @@ compile_to_cir() {
     # (the temporaries of a by-value parameter come in any order, and a parameter
     # class that is incomplete in one unit lowers another way), so ODR-equivalent
     # definitions would not compare equal. The merged module is lowered once.
+    set_cir_gen_flags "$input"
     "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$input" -o "$output" \
-        ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
+        "${CIR_GEN_FLAGS[@]}" \
         ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
         -Xclang -fno-clangir-call-conv-lowering ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
 }
@@ -224,8 +279,9 @@ if [[ "$NUM_INPUTS" -eq 1 ]]; then
 
     # Step 1: Generate CIR
     CIR_FILE=$(_tmpmlir "$MLIR_OUT")
+    set_cir_gen_flags "$INPUT_FILE"
     "$CLANG_BIN" -x "$LANG" "-std=$STD" -S -emit-cir "$INPUT_FILE" -o "$CIR_FILE" \
-        ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"} \
+        "${CIR_GEN_FLAGS[@]}" \
         ${INCLUDE_FLAGS[@]+"${INCLUDE_FLAGS[@]}"} \
         ${CIR_CFLAGS[@]+"${CIR_CFLAGS[@]}"} ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} || exit 2
 

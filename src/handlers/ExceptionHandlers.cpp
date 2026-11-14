@@ -103,6 +103,10 @@ private:
       out << "  goto " << pad << ";\n";
       return;
     }
+    if (isInMain(op)) {
+      out << "  abort(); /* uncaught exception: std::terminate */\n";
+      return;
+    }
     auto func = op->getParentOfType<cir::FuncOp>();
     if (!func) {
       out << "  return;\n";
@@ -154,6 +158,8 @@ private:
     if (handlerRegions.empty()) return true;
 
     out << "  if (__cir_exc_active) {\n";
+    // A catch-all handler binds the exception object itself.
+    out << "  __cir_exc_adj = __cir_exc_ptr;\n";
 
     // Classify each handler and chain them as if / else if / else so that
     // only the first matching catch executes, mirroring C++ catch semantics.
@@ -186,11 +192,9 @@ private:
       firstClause = false;
 
       if (kind == Kind::Typed) {
-        std::string match = m.ehCatchMatch(typeSym, "__cir_exc_type");
-        if (match.empty()) {
-          llvm::errs() << ERR_EH_VIRTUAL_BASE_CATCH << "\n";
-          return false;
-        }
+        // Also a base class and a converted pointer (issue #2).
+        std::string match;
+        if (!m.exceptionMatchCall(typeSym, match)) return false;
         out << "  " << keyword << " (" << match << ") {\n";
         if (!emitRegionBody(handler, m, out)) return false;
         out << "  }\n";
@@ -240,9 +244,9 @@ private:
     // result is a value type, dereference through a pointer cast rather than
     // producing a pointer-as-integer.
     if (!ctype.empty() && ctype.back() == '*')
-      out << "  " << ctype << " " << tmp << " = (" << ctype << ")" << m.ehCaughtPtr() << ";\n";
+      out << "  " << ctype << " " << tmp << " = (" << ctype << ")__cir_exc_adj;\n";
     else
-      out << "  " << ctype << " " << tmp << " = *(" << ctype << "*)" << m.ehCaughtPtr() << ";\n";
+      out << "  " << ctype << " " << tmp << " = *(" << ctype << "*)__cir_exc_adj;\n";
     out << "  __cir_exc_active = 0;\n";
     m.setName(op->getResult(0), tmp);
     return true;
@@ -269,14 +273,37 @@ private:
     if (auto pt = mlir::dyn_cast<cir::PointerType>(paramAddr.getType()))
       pointeeCType = m.mapTypeToC(pt.getPointee());
 
+    // The type that a reference handler refers to.
+    mlir::Type referred;
+    if (auto pt = mlir::dyn_cast<cir::PointerType>(paramAddr.getType()))
+      if (auto inner = mlir::dyn_cast<cir::PointerType>(pt.getPointee()))
+        referred = inner.getPointee();
+
+    // __cir_exc_adj is the matching subobject, and __cir_exc_pval the
+    // converted pointer of a pointer handler (see ExceptionTypes.cpp).
     switch (op.getKind()) {
       case cir::InitCatchKind::Reference:
-        out << "  " << lvalue << " = (" << pointeeCType << ")" << m.ehCaughtPtr() << ";\n";
+        if (referred && mlir::isa<cir::PointerType>(referred)) {
+          // A reference to a pointer binds the exception object when the types
+          // are the same, and a converted copy otherwise ([except.handle]/3
+          // permits the conversion only for a reference to const).
+          std::string pointerCType = m.mapTypeToC(referred);
+          std::string copy = m.freshName("exc_pointer");
+          out << "  static " << pointerCType << " " << copy << ";\n";
+          out << "  if (__cir_exc_adj) " << lvalue << " = (" << pointeeCType
+              << ")__cir_exc_adj;\n";
+          out << "  else { " << copy << " = (" << pointerCType << ")__cir_exc_pval; "
+              << lvalue << " = &" << copy << "; }\n";
+          break;
+        }
+        out << "  " << lvalue << " = (" << pointeeCType << ")__cir_exc_adj;\n";
         break;
       case cir::InitCatchKind::Pointer:
+        out << "  " << lvalue << " = (" << pointeeCType << ")__cir_exc_pval;\n";
+        break;
       case cir::InitCatchKind::Scalar:
       case cir::InitCatchKind::TrivialCopy:
-        out << "  " << lvalue << " = *(" << pointeeCType << "*)" << m.ehCaughtPtr() << ";\n";
+        out << "  " << lvalue << " = *(" << pointeeCType << "*)__cir_exc_adj;\n";
         break;
       case cir::InitCatchKind::NonTrivialCopy:
         // Copy-construction handled by cir.construct_catch_param.
@@ -308,11 +335,11 @@ private:
     if (copyFn && !copyFn->empty()) {
       std::string fn = m.getFunctionOutputName(copyFn->str());
       out << "  " << fn << "(" << destPtr << ", (" << pointeeCType
-          << "*)" << m.ehCaughtPtr() << ");\n";
+          << "*)__cir_exc_adj);\n";
     } else {
       // No copy constructor: fall back to a by-value copy.
       std::string lvalue = m.isDirectAccess(paramAddr) ? pname : ("*" + pname);
-      out << "  " << lvalue << " = *(" << pointeeCType << "*)" << m.ehCaughtPtr() << ";\n";
+      out << "  " << lvalue << " = *(" << pointeeCType << "*)__cir_exc_adj;\n";
     }
     return true;
   }
@@ -350,24 +377,6 @@ private:
       std::string ctype = m.mapTypeToC(op->getResult(1).getType());
       out << "  " << ctype << " " << t << " = (" << ctype
           << ")__cir_exc_type_id;\n";
-      // The selector names the first listed handler that catches the
-      // exception, which for a base-class handler differs from its own type.
-      if (auto types = op.getCatchTypeListAttr()) {
-        const char *keyword = "if";
-        for (auto attr : types) {
-          auto sym = mlir::dyn_cast<mlir::FlatSymbolRefAttr>(attr);
-          if (!sym) continue;
-          std::string name = sym.getValue().str();
-          std::string match = m.ehCatchMatch(name, "__cir_exc_type");
-          if (match.empty()) {
-            llvm::errs() << ERR_EH_VIRTUAL_BASE_CATCH << "\n";
-            return false;
-          }
-          out << "  " << keyword << " (" << match << ") " << t << " = (" << ctype << ")(unsigned long)__cir_eh_type_"
-              << Mapper::sanitizeIdentifier(name) << ";\n";
-          keyword = "else if";
-        }
-      }
       m.setName(op->getResult(1), t);
     }
     return true;
@@ -380,6 +389,13 @@ private:
     m.setHasExceptions();
     std::string sym = op.getTypeSym().str();
     m.registerEhTypeSymbol(sym);
+    // The comparison of type ids selects only the handler type itself.
+    if (!m.handlerMatchesOnlyItself(sym)) {
+      llvm::errs() << "cir2c: error: cir.eh.typeid compares exception types exactly, "
+                      "but the handler of " << m.demangle(sym)
+                   << " also matches another thrown type (issue #2)\n";
+      return false;
+    }
     std::string san = Mapper::sanitizeIdentifier(sym);
     std::string ctype = m.mapTypeToC(op->getResult(0).getType());
     std::string tmp = m.freshName("type_id");
@@ -461,19 +477,19 @@ private:
     unsigned destCount = catchDests.size();
     unsigned n = std::min(typedCount, destCount);
 
+    // A catch-all handler binds the exception object itself.
+    out << "  __cir_exc_adj = __cir_exc_ptr;\n";
     for (unsigned i = 0; i < n; ++i) {
       auto attr = catchTypes[i];
       auto gv = mlir::dyn_cast<cir::GlobalViewAttr>(attr);
       if (!gv) continue; // catch_all / unwind are encoded by default_destination
       std::string sym = gv.getSymbol().getValue().str();
       m.registerEhTypeSymbol(sym);
+      // Also a base class and a converted pointer (issue #2).
+      std::string match;
+      if (!m.exceptionMatchCall(sym, match)) return false;
       mlir::Block *succ = catchDests[i];
       std::string lbl = m.getOrCreateLabel(succ);
-      std::string match = m.ehCatchMatch(sym, "__cir_exc_type");
-      if (match.empty()) {
-        llvm::errs() << ERR_EH_VIRTUAL_BASE_CATCH << "\n";
-        return false;
-      }
       out << "  if (" << match << ") {\n";
       forwardEhToken(succ, "    ");
       out << "    goto " << lbl << ";\n";
@@ -519,9 +535,9 @@ private:
       std::string ctype = m.mapTypeToC(op->getResult(1).getType());
       std::string p = m.freshName("ca_exn");
       if (!ctype.empty() && ctype.back() == '*')
-        out << "  " << ctype << " " << p << " = (" << ctype << ")" << m.ehCaughtPtr() << ";\n";
+        out << "  " << ctype << " " << p << " = (" << ctype << ")__cir_exc_adj;\n";
       else
-        out << "  " << ctype << " " << p << " = *(" << ctype << "*)" << m.ehCaughtPtr() << ";\n";
+        out << "  " << ctype << " " << p << " = *(" << ctype << "*)__cir_exc_adj;\n";
       m.setName(op->getResult(1), p);
     }
     out << "  __cir_exc_active = 0;\n";
@@ -534,8 +550,10 @@ private:
   // subsequent handler does not double-destroy.
   static bool handleEndCatch(cir::EndCatchOp op, Mapper &m, std::ostream &out) {
     m.setHasExceptions();
-    out << "  if (__cir_exc_dtor) { void (*__d)(void*) = (void(*)(void*))__cir_exc_dtor; "
-           "__d(__cir_exc_ptr); __cir_exc_dtor = (void*)0; }\n";
+    // The call goes through a variable of the function-pointer type, as at an
+    // indirect call (see handleCallLikeOp): Theta rejects a cast as callee.
+    out << "  if (__cir_exc_dtor) { void (*__dtor)(void*) = (void (*)(void*))__cir_exc_dtor; "
+           "__dtor(__cir_exc_ptr); __cir_exc_dtor = (void*)0; }\n";
     return true;
   }
 
@@ -561,7 +579,9 @@ private:
       // the dtor; __cxa_end_catch invokes it). A throw with no dtor (trivial type)
       // clears it.
       if (auto dtor = op.getDtorAttr()) {
-        std::string dtorName = m.getFunctionOutputName(dtor.getValue().str());
+        // cir.end_catch calls it through void (*)(void *): use the wrapper
+        // with that type (see Mapper::planReceiverWrappers).
+        std::string dtorName = m.receiverTarget(dtor.getValue().str());
         out << "  __cir_exc_dtor = (void*)&" << dtorName << ";\n";
       } else {
         out << "  __cir_exc_dtor = (void*)0;\n";
@@ -600,24 +620,34 @@ private:
     return true;
   }
 
-  // cir.alloc.exception conceptually calls __cxa_allocate_exception.  Since the
-  // allocated buffer is only ever consumed by the (unreachable) throw path, we
-  // hand out a stack buffer of the requested size cast to the result pointer
-  // type.  This keeps any in-between cir.store ops well-defined.
+  // cir.alloc.exception conceptually calls __cxa_allocate_exception. Each throw
+  // site gets a static object of the thrown type. The address must stay valid
+  // after the throwing function returns, because the catcher reads the object
+  // through __cir_exc_ptr in its own frame. A char buffer cast to the thrown
+  // type is not correct: the stores through the cast pointer access a char
+  // array as another type (C11 6.5p7), and the array has no alignment for the
+  // thrown type.
   static bool handleAllocException(cir::AllocExceptionOp op, Mapper &m, std::ostream &out) {
     if (op->getNumResults() < 1) return false;
-    uint64_t size = 0;
-    if (auto sa = op->getAttrOfType<mlir::IntegerAttr>("size"))
-      size = static_cast<uint64_t>(sa.getInt());
-    if (size == 0) size = 16;  // safety floor for any pathological 0-sized cases
+    auto ptrTy = mlir::dyn_cast<cir::PointerType>(op->getResult(0).getType());
+    mlir::Type thrownTy = ptrTy ? ptrTy.getPointee() : mlir::Type();
+    if (!thrownTy || mlir::isa<cir::VoidType>(thrownTy)) {
+      llvm::errs() << "AllocException: the thrown type is unknown, so the "
+                      "exception object cannot get its own type\n";
+      return false;
+    }
     std::string ctype = m.mapTypeToC(op->getResult(0).getType());
-    std::string buf = m.freshName("exc_buf");
+    std::string obj = m.freshName("exc_obj");
     std::string tmp = m.freshName("exc");
-    // Static storage: the address must remain valid after the throwing function
-    // returns (the catcher dereferences __cir_exc_ptr in its own frame).
-    // freshName guarantees each throw site gets its own uniquely-named static.
-    out << "  static char " << buf << "[" << size << "] = {0};\n";
-    out << "  " << ctype << " " << tmp << " = (" << ctype << ")" << buf << ";\n";
+    if (auto arrayTy = mlir::dyn_cast<cir::ArrayType>(thrownTy)) {
+      std::string dims;
+      std::string elemCType = m.arrayBaseTypeAndDims(arrayTy, dims);
+      out << "  static " << elemCType << " " << obj << dims << ";\n";
+      out << "  " << ctype << " " << tmp << " = (" << ctype << ")" << obj << ";\n";
+    } else {
+      out << "  static " << m.mapTypeToC(thrownTy) << " " << obj << ";\n";
+      out << "  " << ctype << " " << tmp << " = &" << obj << ";\n";
+    }
     m.setName(op->getResult(0), tmp);
     return true;
   }

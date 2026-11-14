@@ -400,10 +400,71 @@ run_selfchecking() {
     if [[ $actual_exit -ne $ref_exit ]]; then
         echo "MISMATCH|$test_name|ran, exit code: expected $ref_exit, got $actual_exit"; return 1
     fi
+    # With --no-externalize-std, the ostream-sink model (README 8.2) discards
+    # the output of std::cout, std::cerr and std::clog, so the stdout of such a
+    # translation cannot agree with the native run. Only the exit code is
+    # compared; a test of this kind checks its results in its exit code.
+    if [[ "$lang" == "c++" && "$EXTERNALIZE_STD_FLAG" == "--no-externalize-std" ]] &&
+       grep -qE '\b(cout|cerr|clog)\b' "$src_file"; then
+        return 0
+    fi
     if ! diff -q "$ref_out" "$actual_out" > /dev/null 2>&1; then
         echo "MISMATCH|$test_name|ran, output differs from the native reference"; return 1
     fi
     return 0
+}
+
+# A test with "cir2c-test-log-lacks:" lines passes only when the translation log
+# contains none of the texts, for example a warning of cir2c.
+log_has_unwanted_text() {
+    local src_file="$1" pipeline_log="$2" text
+    while IFS= read -r text; do
+        [[ -z "$text" ]] && continue
+        if grep -qF -- "$text" "$pipeline_log"; then
+            echo "$text"; return 0
+        fi
+    done < <(sed -n 's|^// cir2c-test-log-lacks: ||p' "$src_file")
+    return 1
+}
+
+# A test with "cir2c-test-output-lacks:" lines passes only when the output C
+# contains none of the texts.
+output_has_unwanted_text() {
+    local src_file="$1" output_c_file="$2" text
+    while IFS= read -r text; do
+        [[ -z "$text" ]] && continue
+        if grep -qF -- "$text" "$output_c_file"; then
+            echo "$text"; return 0
+        fi
+    done < <(sed -n 's|^// cir2c-test-output-lacks: ||p' "$src_file")
+    return 1
+}
+
+# A test with "cir2c-test-output-contains:" lines passes only when the output C
+# contains each of the texts.
+output_lacks_wanted_text() {
+    local src_file="$1" output_c_file="$2" text
+    while IFS= read -r text; do
+        [[ -z "$text" ]] && continue
+        if ! grep -qF -- "$text" "$output_c_file"; then
+            echo "$text"; return 0
+        fi
+    done < <(sed -n 's|^// cir2c-test-output-contains: ||p' "$src_file")
+    return 1
+}
+
+# A test with "cir2c-test-cflags:" lines passes only when the output C compiles
+# with these options, for example -Werror=uninitialized for undefined behavior that
+# clang can report. Echoes the options when the compilation fails.
+output_fails_cflags() {
+    local src_file="$1" output_c_file="$2" log="$3" flags
+    flags=$(sed -n 's|^// cir2c-test-cflags: ||p' "$src_file" | tr '\n' ' ')
+    [[ -z "${flags// /}" ]] && return 1
+    # shellcheck disable=SC2086
+    if ! "$GCC" -c -fsyntax-only $flags "$output_c_file" > "$log" 2>&1; then
+        echo "$flags" | sed 's/ *$//'; return 0
+    fi
+    return 1
 }
 
 run_c_test() {
@@ -441,6 +502,20 @@ run_c_test() {
     if ! "$GCC" -c -fsyntax-only "$output_c_file" > "$compile_log" 2>&1; then
         echo "COMPILE_FAILED|$test_name|compilation failed"; return
     fi
+    local unwanted
+    if unwanted=$(log_has_unwanted_text "$c_file" "$pipeline_log"); then
+        echo "MISMATCH|$test_name|the log contains: $unwanted"; return
+    fi
+    local cflags_log="$INTEGRATION_OUTPUT_DIR/${test_name}_cflags_log.txt" failed
+    if failed=$(output_fails_cflags "$c_file" "$output_c_file" "$cflags_log"); then
+        echo "COMPILE_FAILED|$test_name|compilation with $failed failed"; return
+    fi
+    if unwanted=$(output_has_unwanted_text "$c_file" "$output_c_file"); then
+        echo "MISMATCH|$test_name|the output contains: $unwanted"; return
+    fi
+    if missing=$(output_lacks_wanted_text "$c_file" "$output_c_file"); then
+        echo "MISMATCH|$test_name|the output does not contain: $missing"; return
+    fi
 
     run_selfchecking "$test_name" "$c_file" "$output_c_file" c || return
     echo "PASSED|$test_name|"
@@ -464,6 +539,25 @@ run_cpp_test() {
         ${inc[@]+"${inc[@]}"} \
         "$cpp_file" "$output_c_file" >"$pipeline_log" 2>&1 || pipeline_rc=$?
 
+    # A test with "cir2c-test-expect-error:" lines must fail, and the log must
+    # contain each of the texts: a rejection by cir2c or by a model (README 8.2).
+    local expected text
+    expected=$(sed -n 's|^// cir2c-test-expect-error: ||p' "$cpp_file")
+    if [[ -n "$expected" && "$EXTERNALIZE_STD_FLAG" != "--no-externalize-std" ]]; then
+        echo "SKIPPED|$test_name|the expected error is for --no-externalize-std"; return
+    fi
+    if [[ -n "$expected" ]]; then
+        if [[ $pipeline_rc -eq 0 ]]; then
+            echo "MISMATCH|$test_name|translated, but the test expects an error"; return
+        fi
+        while IFS= read -r text; do
+            if ! grep -qF -- "$text" "$pipeline_log"; then
+                echo "MISMATCH|$test_name|the error does not contain: $text"; return
+            fi
+        done <<< "$expected"
+        echo "PASSED|$test_name|"; return
+    fi
+
     if [[ $pipeline_rc -eq 124 ]]; then
         echo "TIMEDOUT|$test_name|"; return
     fi
@@ -486,6 +580,20 @@ run_cpp_test() {
     "$GCC" -c -fsyntax-only "$output_c_file" > "$compile_log" 2>&1
     if grep -qE "error:.*before '::'|error:.*before '<'" "$compile_log"; then
         echo "COMPILE_FAILED|$test_name|C++ qualified names in struct/union identifiers"; return
+    fi
+    local unwanted
+    if unwanted=$(log_has_unwanted_text "$cpp_file" "$pipeline_log"); then
+        echo "MISMATCH|$test_name|the log contains: $unwanted"; return
+    fi
+    local cflags_log="$INTEGRATION_OUTPUT_DIR/${test_name}_cflags_log.txt" failed
+    if failed=$(output_fails_cflags "$cpp_file" "$output_c_file" "$cflags_log"); then
+        echo "COMPILE_FAILED|$test_name|compilation with $failed failed"; return
+    fi
+    if unwanted=$(output_has_unwanted_text "$cpp_file" "$output_c_file"); then
+        echo "MISMATCH|$test_name|the output contains: $unwanted"; return
+    fi
+    if missing=$(output_lacks_wanted_text "$cpp_file" "$output_c_file"); then
+        echo "MISMATCH|$test_name|the output does not contain: $missing"; return
     fi
 
     run_selfchecking "$test_name" "$cpp_file" "$output_c_file" c++ || return
@@ -578,10 +686,19 @@ run_llvm_test() {
     "$binary_file" > "$actual_out_file" 2>/dev/null
     local actual_exit=$?
 
+    # As in run_selfchecking: with --no-externalize-std, the ostream-sink model
+    # discards the output of std::cout, std::cerr and std::clog, so only the
+    # exit code of a C++ program that names one of them is compared.
+    local compare_output=true
+    if [[ "$ext" == "cpp" && "$EXTERNALIZE_STD_FLAG" == "--no-externalize-std" ]] &&
+       grep -qE '\b(cout|cerr|clog)\b' "$src_file"; then
+        compare_output=false
+    fi
     local mismatch_reason=""
     if [[ $actual_exit -ne $expected_exit ]]; then
         mismatch_reason="ran, exit code: expected $expected_exit, got $actual_exit"
-    elif ! diff -q "$expected_out_file" "$actual_out_file" > /dev/null 2>&1; then
+    elif [[ $compare_output == true ]] &&
+         ! diff -q "$expected_out_file" "$actual_out_file" > /dev/null 2>&1; then
         mismatch_reason="ran, output mismatch"
     fi
     if [[ -n "$mismatch_reason" ]]; then
@@ -785,7 +902,7 @@ FPCMP="$SCRIPT_DIR/fpcmp.py"
 export MULTISOURCE_OPTIONS FPCMP
 export TIMEOUT RUNNER GCC CLANGPP INTEGRATION_OUTPUT_DIR LLVM_EVAL_DIR LLVM_EVAL_OUTPUT_DIR
 export ESBMC_EVAL_DIR ESBMC_EVAL_OUTPUT_DIR EXTERNALIZE_STD_FLAG MULTI_MERGE EXTRA_INCLUDES_STR
-export -f pipeline_stage run_selfchecking run_c_test run_cpp_test run_llvm_test run_llvm_multi_test run_esbmc_test
+export -f pipeline_stage log_has_unwanted_text output_has_unwanted_text output_lacks_wanted_text output_fails_cflags run_selfchecking run_c_test run_cpp_test run_llvm_test run_llvm_multi_test run_esbmc_test
 
 # ---------------------------------------------------------------------------
 # Preflight checks
