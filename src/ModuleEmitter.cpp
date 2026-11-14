@@ -1747,7 +1747,20 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   std::ostringstream topLevelBuf;
   std::ostream &out = isTopLevelModule ? topLevelBuf : realOut;
   // The C tags of all records of the module tree, before any code asks for one.
-  if (isTopLevelModule) typeMapper_.planRecordNames(module);
+  if (isTopLevelModule) {
+    typeMapper_.planRecordNames(module);
+    // A unit of several must give each record the tag that the other units
+    // give it, or the types of a call between units are not compatible.
+    if (tuPart_ && !typeMapper_.moduleDependentRecordNames().empty()) {
+      llvm::errs() << "cir2c: error: with --tu-part, the C tag of each record must not "
+                      "depend on the other records of the unit (README 7.5). These "
+                      "records have such a tag:\n";
+      for (const std::string &name : typeMapper_.moduleDependentRecordNames())
+        llvm::errs() << "  " << name << " -> " << typeMapper_.recordCName(llvm::StringRef(name))
+                     << "\n";
+      return false;
+    }
+  }
   // Prepare function names (demangle where possible and unique) before
   // emitting any function declarations/definitions so we can avoid name
   // collisions when demangling.

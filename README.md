@@ -962,7 +962,11 @@ source locations, it adds directories from the end of the path until the names
 differ: `lambda_at_a_util_h_100_36` and `lambda_at_b_util_h_100_36`. For other
 names, it adds a numeric suffix: `ns__X_2`. The names depend only on the set of
 records in the module. A name without such a conflict does not change. If two
-records still get one name, cir2c stops with an error.
+records still get one name, cir2c stops with an error. With `--tu-part`, cir2c
+stops with an error when a record needs a suffix or more directories: another
+unit, with other records, could give the same record another name, and C11
+6.2.7 makes two struct types of different units compatible only with the same
+tag.
 
 `operator new` and `operator delete` have no body in CIR. cir2c writes small
 functions that call `malloc` and `free`.

@@ -56,6 +56,14 @@ public:
   /// in outer->inner order.
   std::string arrayBaseTypeAndDims(mlir::Type t, std::string &dimsOut) const;
 
+  /// The records whose tags depend on the other records of the module: a
+  /// tag with a suffix or with more directories of a source location. In a
+  /// unit of several (--tu-part), another unit can give such a record another
+  /// tag (C11 6.2.7).
+  const std::vector<std::string> &moduleDependentRecordNames() const {
+    return moduleDependentRecordNames_;
+  }
+
   /// Stable unique C struct/union tag for an anonymous record type.
   std::string anonRecordCName(mlir::Type recordType) const;
 
@@ -64,6 +72,7 @@ private:
   // Record name -> its C tag, and all tags given out. "X.base" has its own tag.
   mutable std::map<std::string, std::string> recordCNames_;
   mutable std::set<std::string> usedRecordCNames_;
+  std::vector<std::string> moduleDependentRecordNames_;
 };
 
 } // namespace cir2c

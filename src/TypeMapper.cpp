@@ -114,6 +114,7 @@ std::string TypeMapper::recordCName(llvm::StringRef raw) const {
 void TypeMapper::planRecordNames(mlir::ModuleOp module) {
   recordCNames_.clear();
   usedRecordCNames_.clear();
+  moduleDependentRecordNames_.clear();
 
   // Every record name of the module: in the types of the values and of the
   // attributes (function types, the types of globals, initializers), and in
@@ -192,6 +193,7 @@ void TypeMapper::planRecordNames(mlir::ModuleOp module) {
     for (size_t i = 0; i < group.size(); ++i) {
       recordCNames_[group[i]] = chosen[i];
       usedRecordCNames_.insert(chosen[i]);
+      moduleDependentRecordNames_.push_back(group[i]);
     }
   }
 
@@ -202,6 +204,7 @@ void TypeMapper::planRecordNames(mlir::ModuleOp module) {
     std::string chosen = tag;
     for (unsigned n = 2; usedRecordCNames_.count(chosen); ++n)
       chosen = tag + "_" + std::to_string(n);
+    if (chosen != tag) moduleDependentRecordNames_.push_back(name);
     recordCNames_[name] = chosen;
     usedRecordCNames_.insert(chosen);
   }
