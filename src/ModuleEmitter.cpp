@@ -2541,6 +2541,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
             ehScan(nestedOp);
     };
     for (auto &op : module.getOps()) ehScan(op);
+    registerForeignExceptionTypes();
   }
 
   // abort() is called by our synthesised EH-termination and trap code, not

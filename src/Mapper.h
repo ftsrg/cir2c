@@ -439,6 +439,10 @@ private:
   };
   std::map<std::string, EhTypeInfo> ehTypeInfos_;
   std::map<std::string, mlir::Type> ehThrownTypes_;  // RTTI symbol -> thrown type
+  // The classes of a unit that can get an exception from another unit.
+  std::set<std::string> ehForeignClasses_;
+  // The thrown types and the classes of ehForeignClasses_.
+  std::vector<std::string> exceptionCandidates() const;
   std::set<std::string> ehMatchersPlanned_;
   std::vector<std::string> ehMatchersPending_;
   void planExceptionTypes(mlir::ModuleOp module);
@@ -685,6 +689,9 @@ public:
   bool exceptionMatchCall(const std::string &handler, std::string &call);
   /// True when no other thrown type of the module matches the handler.
   bool handlerMatchesOnlyItself(const std::string &handler) const;
+  /// Give a tag to each class of another unit's exception that a handler of
+  /// this module can match (after the handler types are registered).
+  void registerForeignExceptionTypes();
   /// Write the planned handler-selection functions.
   void emitExceptionMatchers(std::ostream &out);
   /// The set of RTTI symbols that need per-type address tags emitted.

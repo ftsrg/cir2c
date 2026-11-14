@@ -135,6 +135,16 @@ void Mapper::planExceptionTypes(mlir::ModuleOp module) {
     }
     ehTypeInfos_[sym] = info;
   });
+  // A unit of several, or a module without main(), can get an exception that
+  // another unit throws. Each class of this module is then a candidate.
+  bool definesMain = false;
+  module->walk([&](cir::FuncOp f) {
+    auto sym = symbolNameAttr(f);
+    if (sym && sym.getValue() == "main" && !f.getRegion().empty()) definesMain = true;
+  });
+  if (tuPart_ || !definesMain)
+    for (const auto &[sym, info] : ehTypeInfos_)
+      if (info.kind == EhTypeInfo::Class) ehForeignClasses_.insert(sym);
   module->walk([&](cir::ThrowOp op) {
     auto ti = op.getTypeInfoAttr();
     if (!ti || op.rethrows() || !op.getExceptionPtr()) return;
@@ -248,11 +258,11 @@ bool Mapper::exceptionMatchCall(const std::string &handler, std::string &call) {
   call = "__cir_eh_match_" + san + "()";
   if (ehMatchersPlanned_.count(handler)) return true;
   // Check the pairs now, so that an unsupported pair stops the translation.
-  for (const auto &thrown : ehThrownTypes_) {
-    EhMatch match = matchHandler(thrown.first, handler);
+  for (const std::string &thrown : exceptionCandidates()) {
+    EhMatch match = matchHandler(thrown, handler);
     if (match.unsupported) {
       llvm::errs() << "cir2c: error: the handler of " << demangle(handler)
-                   << " can match the exception " << demangle(thrown.first)
+                   << " can match the exception " << demangle(thrown)
                    << " through a virtual base class, which cir2c does not translate "
                       "(issue #3)\n";
       return false;
@@ -265,12 +275,32 @@ bool Mapper::exceptionMatchCall(const std::string &handler, std::string &call) {
 }
 
 bool Mapper::handlerMatchesOnlyItself(const std::string &handler) const {
-  for (const auto &thrown : ehThrownTypes_) {
-    if (thrown.first == handler) continue;
-    EhMatch match = matchHandler(thrown.first, handler);
+  for (const std::string &thrown : exceptionCandidates()) {
+    if (thrown == handler) continue;
+    EhMatch match = matchHandler(thrown, handler);
     if (match.matches || match.unsupported) return false;
   }
   return true;
+}
+
+std::vector<std::string> Mapper::exceptionCandidates() const {
+  std::vector<std::string> candidates;
+  for (const auto &thrown : ehThrownTypes_) candidates.push_back(thrown.first);
+  for (const std::string &cls : ehForeignClasses_)
+    if (!ehThrownTypes_.count(cls)) candidates.push_back(cls);
+  return candidates;
+}
+
+void Mapper::registerForeignExceptionTypes() {
+  // The tags are written before the functions, so each class that a handler
+  // of the module matches needs its tag now.
+  std::vector<std::string> handlers(ehTypeSymbols_.begin(), ehTypeSymbols_.end());
+  for (const std::string &cls : ehForeignClasses_)
+    for (const std::string &handler : handlers)
+      if (matchHandler(cls, handler).matches) {
+        registerEhTypeSymbol(cls);
+        break;
+      }
 }
 
 void Mapper::emitExceptionMatchers(std::ostream &out) {
@@ -285,8 +315,8 @@ void Mapper::emitExceptionMatchers(std::ostream &out) {
     out << "static int __cir_eh_match_" << sanitizeIdentifier(handler) << "(void) {\n";
     // The handler type itself first, also when the module throws it nowhere.
     std::vector<std::string> candidates = {handler};
-    for (const auto &thrown : ehThrownTypes_)
-      if (thrown.first != handler) candidates.push_back(thrown.first);
+    for (const std::string &thrown : exceptionCandidates())
+      if (thrown != handler && ehTypeSymbols_.count(thrown)) candidates.push_back(thrown);
     for (const std::string &thrown : candidates) {
       EhMatch match = matchHandler(thrown, handler);
       if (!match.matches) continue;

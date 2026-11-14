@@ -1313,9 +1313,12 @@ type, for a rethrow and for the destructor at the end of the handler.
 
 These limits apply:
 
-- cir2c knows only the types that the module throws. For a module without
-  `main()`, an exception from another part of the program matches only a
-  handler of its own type.
+- In a whole program, the candidates are the types that the module throws. A
+  module without `main()`, or with `--tu-part`, can also get an exception from
+  another part of the program. Then each class whose RTTI is in the module is
+  also a candidate. An exception of a class that the module does not know
+  matches only a handler of its own type, and a pointer that the module does
+  not throw matches only a handler of its own pointer type.
 - The offset of a virtual base class is in the vtable of the object. cir2c
   stops with an error for a program with a virtual base (see 8.1), and also
   when a handler can match a thrown type through a virtual base class.
