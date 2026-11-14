@@ -41,7 +41,7 @@ ERROR_MARKERS = (
 )
 
 # Pipeline exit codes from run-cir2c.sh
-_EXIT_STAGE = {2: "clang_failed", 3: "flatten_failed", 4: "mapper_failed"}
+_EXIT_STAGE = {2: "clang_failed", 3: "cir_opt_failed", 4: "mapper_failed"}
 
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
@@ -142,7 +142,7 @@ def extract_generated_c_failure(c_text: str) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run benchmark .yml cases through the CIR pipeline and show failures. Use --flatten to also run cir-opt -cir-flatten-cfg before the mapper."
+        description="Run benchmark .yml cases through the CIR pipeline and show failures."
     )
     parser.add_argument(
         "input_dir",
@@ -158,12 +158,6 @@ def parse_args() -> argparse.Namespace:
         "--c-mode",
         action="store_true",
         help="Use C mode (`clang -x c -std=c11`) instead of the default C++ mode (`clang++ -x c++ -std=c++11`).",
-    )
-    parser.add_argument(
-        "-f",
-        "--flatten",
-        action="store_true",
-        help="Run cir-opt -cir-flatten-cfg on the CIR before passing it to cir2c.",
     )
     parser.add_argument(
         "-o",
@@ -186,7 +180,7 @@ def log_line(handle: TextIO, message: str = "") -> None:
     handle.write(message + "\n")
     handle.flush()
 
-def benchmark_case(yml_path: Path, root_dir: Path, c_mode: bool, output_dir: Path | None, flatten: bool = False) -> dict[str, str]:
+def benchmark_case(yml_path: Path, root_dir: Path, c_mode: bool, output_dir: Path | None) -> dict[str, str]:
     relative_yml = yml_path.relative_to(root_dir)
     source_name = parse_input_file_from_yml(yml_path)
     source_path = yml_path.parent / source_name
@@ -206,8 +200,6 @@ def benchmark_case(yml_path: Path, root_dir: Path, c_mode: bool, output_dir: Pat
             runner_cmd = [str(RUNNER)]
             if c_mode:
                 runner_cmd += ["--lang", "c"]
-            if flatten:
-                runner_cmd += ["--flatten"]
             if mlir_path is not None:
                 runner_cmd += ["--mlir", str(mlir_path)]
             runner_cmd += [str(source_path), str(c_path)]
@@ -284,7 +276,7 @@ def main() -> int:
         print(f"Starting {total} benchmarks")
 
         with ThreadPoolExecutor(max_workers=DEFAULT_JOBS) as executor:
-            futures = [executor.submit(benchmark_case, yml_path, input_dir, args.c_mode, output_dir, args.flatten) for yml_path in yml_paths]
+            futures = [executor.submit(benchmark_case, yml_path, input_dir, args.c_mode, output_dir) for yml_path in yml_paths]
             completed = 0
             for future in as_completed(futures):
                 results.append(future.result())

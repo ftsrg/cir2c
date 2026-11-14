@@ -293,9 +293,8 @@ linker in one `--start-group` list. The pinned toolchain is fully static.
 
 ### 5.1 The run-cir2c.sh script
 
-The `run-cir2c.sh` script is the recommended interface. The script does all four
-steps: `clang -emit-cir`, then preprocessing, then optional flattening, then
-`cir2c`.
+The `run-cir2c.sh` script is the recommended interface. The script does all three
+steps: `clang -emit-cir`, then preprocessing, then `cir2c`.
 
 ```bash
 ./run-cir2c.sh input.c   output.c     # A C program
@@ -338,9 +337,7 @@ script merges the translation units into one C program. See
 |---|---|
 | `--lang c\|c++` | Set the input language. The default comes from the file extension. The `.cpp`, `.cxx`, `.cc` and `.C` extensions are C++. |
 | `--std STD` | Set the language standard. The default is `c23` for C and `c++23` for C++. |
-| `--flatten` | Do the `cir-opt -cir-flatten-cfg` step first. This makes flat C code with `goto` statements. |
 | `--mlir FILE` | Write the intermediate CIR to `FILE`. Use this option to find problems. |
-| `--flat-mlir FILE` | Write the flat CIR to `FILE`. This option includes `--flatten`. |
 | `--include DIR` | Add the `-I DIR` option to the CIR step. You can give this option more than one time. |
 | `--cflag FLAG` | Add `FLAG` to the CIR step, for example `-DNAME=VALUE`. You can give this option more than one time. The script adds no such flag itself. |
 | `--no-call-conv-lowering` | Skip the ClangIR calling-convention lowering, for types that it cannot lower yet. **CAUTION:** this is not sound. An object with a move constructor is then passed as a bitwise copy, so the caller never sees it moved from and destroys it. Use it for all translation units of a program or for none. |
@@ -354,7 +351,7 @@ script merges the translation units into one C program. See
 | 0 | The operation is successful. |
 | 1 | The arguments are not correct, or the script cannot find the toolchain or a model. |
 | 2 | `clang` failed. The source has an error, or ClangIR cannot process a construction. |
-| 3 | `cir-opt` failed during the `--flatten` step. |
+| 3 | `cir-opt` failed during the calling-convention lowering of `--merge cir`. |
 | 4 | `cir2c` failed. Usually the CIR contains an unsupported operation. |
 | 5 | `cir-merge` rejected the translation units (`--merge cir` only). Its messages give the symbol and the reason. |
 
@@ -369,9 +366,11 @@ By default, cir2c reads structured CIR. The `cir.for`, `cir.while`, `cir.if`,
 verification tool examines structured control flow more efficiently. The output
 is also easier to read.
 
-The `--flatten` option changes all of these operations into basic blocks and
-branches. The output C code then has labels and `goto` statements. Use this
-option when a construction does not translate in the structured form.
+The cir2c binary can also read flat CIR, in which `cir-opt -cir-flatten-cfg`
+changed these operations into basic blocks and branches. `run-cir2c.sh` does not
+offer this step: in the flat output, a caught exception ends in `abort()`
+(issue #21). For a verification task, that is unsound: the program stops at a
+point where the real program continues.
 
 ### 5.3 How the scripts find the tools
 
@@ -437,8 +436,6 @@ option, because the calculation is slow.
 4. If cir2c made C code but the code is not correct, start the binary again on
    the `.mlir` file. This removes Clang and `cir-opt` from the sequence and makes
    the work cycle quick.
-5. Try the `--flatten` option and compare the two results. A construction that
-   fails in one mode can operate in the other mode.
 
 ### 5.6 Merge translation units
 
@@ -795,12 +792,10 @@ issue when a better pin becomes available.
   CIR module (MLIR text)
      |  preprocessing of the qualifiers
      v
-  CIR module        --optional-->  cir-opt -cir-flatten-cfg  -->  flat CIR
-     |                                                              |
-     v                                                              v
-  cir2c: structured output                            cir2c: goto output
-     |                                                              |
-     +---------------------->  output.c  <--------------------------+
+  CIR module
+     |  cir2c
+     v
+  output.c
 ```
 
 Each step is a different process. Each intermediate result is text that you can
@@ -1399,9 +1394,8 @@ rounding, thus cir2c keeps the call: `fma(a, b, c)`.
 The default structured output keeps the `for`, `while` and `if` statements and
 the scopes. Most verification tools examine this form more efficiently.
 
-The two modes do not accept the same programs. A construction that fails in one
-mode can operate in the other mode. This is a limit. But it is also a useful
-test. Try the two modes when a translation fails.
+`run-cir2c.sh` makes only the structured output. The flat output of the cir2c
+binary is not correct for exceptions (issue #21, see 5.2).
 
 ### 8.7 Types
 
@@ -1682,7 +1676,6 @@ python3 test/benchmark_mapper.py <input-dir> [set-file-or-glob ...]
 | Option | Function |
 |---|---|
 | `-c`, `--c-mode` | Use C mode (`clang -x c`) and not the default C++ mode |
-| `-f`, `--flatten` | Do the `cir-opt -cir-flatten-cfg` step first |
 | `-o DIR`, `--output-dir DIR` | Keep the `.mlir` file and the `output.c` file for each task |
 
 The script writes the results to `output.txt` in the current directory.
