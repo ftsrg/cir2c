@@ -546,6 +546,13 @@ run_cpp_test() {
     if [[ -n "$expected" && "$EXTERNALIZE_STD_FLAG" != "--no-externalize-std" ]]; then
         echo "SKIPPED|$test_name|the expected error is for --no-externalize-std"; return
     fi
+    # "cir2c-test-expect-error-externalize-std:" lines: an error that only
+    # --externalize-std gives. Without that option, the test runs as usual.
+    if [[ "$EXTERNALIZE_STD_FLAG" == "--externalize-std" ]]; then
+        local expected_ext
+        expected_ext=$(sed -n 's|^// cir2c-test-expect-error-externalize-std: ||p' "$cpp_file")
+        [[ -n "$expected_ext" ]] && expected="$expected_ext"
+    fi
     if [[ -n "$expected" ]]; then
         if [[ $pipeline_rc -eq 0 ]]; then
             echo "MISMATCH|$test_name|translated, but the test expects an error"; return

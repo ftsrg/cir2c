@@ -189,6 +189,9 @@ private:
     if (o->getNumOperands() < 1) return false;
     Value ptr = o->getOperand(0);
 
+    // A vtable entry: virtual-base offset, vcall offset or offset-to-top (issue #3).
+    if (o->getNumResults() > 0 && m.isVtableView(ptr)) return m.mapVtableViewLoad(o, out);
+
     // A read of a local variable as another type, member by member (issue #11).
     if (o->getNumResults() > 0 && m.loadThroughMemberwiseView(ptr, o->getResult(0), out))
       return true;

@@ -1467,6 +1467,37 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
   // <sym>[]` arrays so constructors can install address-points into vptr fields
   // and __VERIFIER_virtual_call can index them. `_ZTC*` construction vtables are
   // used with virtual inheritance and have the same VTableAttr structure.
+  // VTT (_ZTT*): the vtable pointers that the base constructors of a class
+  // with a virtual base install (issue #3). The constructors read it as
+  // `void *` elements, so it is a `void *` array like the vtables.
+  if (rawSym.rfind("_ZTT", 0) == 0) {
+    auto iv = globalOp.getInitialValue();
+    auto array = iv ? mlir::dyn_cast<cir::ConstArrayAttr>(*iv) : cir::ConstArrayAttr();
+    auto elements = array ? mlir::dyn_cast<mlir::ArrayAttr>(array.getElts()) : mlir::ArrayAttr();
+    if (!elements) {
+      if (usedByOutput(gop)) requireDefinition(rawSym, true);
+      out << "extern void *" << name << "[];\n";
+      return true;
+    }
+    std::string body;
+    for (mlir::Attribute e : elements) {
+      auto view = mlir::dyn_cast<cir::GlobalViewAttr>(e);
+      auto indices = view ? view.getIndices() : mlir::ArrayAttr();
+      if (!indices || indices.size() != 2) {
+        llvm::errs() << "cir2c: error: the VTT " << rawSym
+                     << " has an element that is not an address point (issue #3)\n";
+        return false;
+      }
+      std::string target = view.getSymbol().getValue().str();
+      auto index = mlir::cast<mlir::IntegerAttr>(indices[0]).getInt();
+      auto offset = mlir::cast<mlir::IntegerAttr>(indices[1]).getInt();
+      body += std::string(body.empty() ? "" : ", ") + "(void*)&" + sanitizeIdentifier(target) +
+              "[" + std::to_string(vtableFlatOffset(gop, target, index, offset)) + "]";
+    }
+    out << "void *" << name << "[] = { " << body << " };\n";
+    return true;
+  }
+
   bool isVtableSym = rawSym.rfind("_ZTV", 0) == 0 || rawSym.rfind("_ZTC", 0) == 0;
   if (isVtableSym) {
     auto iv = globalOp.getInitialValue();
@@ -1489,7 +1520,8 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
           return "(void*)&" + receiverTarget(sym);
         return "(void*)0";
       }
-      return "(void*)0"; // null pointer / offset-to-top int
+      // Offset-to-top, a virtual-base or a vcall offset (issue #3).
+      return vtableIntegerEntry(e);
     };
     std::string body;
     bool first = true;
@@ -1773,7 +1805,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   computeMayThrow(module);
   if (isTopLevelModule) {
     planExceptionTypes(module);
-    if (!rejectVirtualBases(module)) return false;
+    planPrimaryVtables(module);
   }
   planReceiverWrappers(module);
 
@@ -2924,6 +2956,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   });
   // A unit of several (--tu-part) is a part of a program, also with main():
   // the other units can define its symbols.
+  if (vtableViewMisused_) return false;
   if (isTopLevelModule && isCxx && definesMain && !tuPart_ && !undefinedSymbols_.empty()) {
     llvm::errs() << "cir2c: error: with --no-externalize-std, the output must "
                     "define each function and object that it uses, outside the "

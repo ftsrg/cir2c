@@ -446,9 +446,6 @@ private:
   std::set<std::string> ehMatchersPlanned_;
   std::vector<std::string> ehMatchersPending_;
   void planExceptionTypes(mlir::ModuleOp module);
-  // Issue #3 part 2: false, with an error message, when the output would use a
-  // virtual base class.
-  bool rejectVirtualBases(mlir::ModuleOp module);
   EhMatch matchClass(const std::string &thrown, const std::string &handler) const;
   EhMatch matchHandler(const std::string &thrown, const std::string &handler) const;
   // Alloca result Values that are accessed atomically / volatilely.
@@ -503,6 +500,19 @@ private:
   // (result of get_vptr, loaded vptr, get_virtual_fn_addr result, loaded
   // fn ptr) back to the original object pointer operand.
   llvm::DenseMap<mlir::Value, mlir::Value> vtableDispatchChain;
+
+  // Virtual bases and offset-to-top (issue #3, src/VirtualBases.cpp). A value
+  // derived from a vtable pointer by casts and constant strides is a view: it
+  // emits no C, and a load from it reads the void* element at its offset.
+  struct VtableView {
+    mlir::Value vptr;
+    int64_t offset;  // in bytes from the address point
+  };
+  llvm::DenseMap<mlir::Value, VtableView> vtableViews_;
+  bool vtableViewMisused_ = false;
+  // Record name -> its vtable and the flat index of its primary address point,
+  // from the constructors that store that address point into `this`.
+  std::map<std::string, std::pair<std::string, uint64_t>> primaryVtables_;
   // Set of SSA values that are final virtual function pointers (loaded from
   // get_virtual_fn_addr result) and should trigger __VERIFIER_virtual_call
   // when used as a callee in cir.call.
@@ -632,6 +642,18 @@ public:
 
   /// Return the original object pointer associated with a dispatch chain value.
   mlir::Value getVtableDispatchObject(mlir::Value v) const;
+  /// Issue #3: find the primary vtable of each class (before the functions).
+  void planPrimaryVtables(mlir::ModuleOp module);
+  /// Issue #3: true when \p v is a view of a vtable (see vtableViews_).
+  bool isVtableView(mlir::Value v) const { return vtableViews_.count(v) > 0; }
+  /// A bitcast of a vtable pointer or of a view: a view at the same offset.
+  bool startsVtableView(mlir::Operation *castOp) const;
+  bool mapVtableViewCast(mlir::Operation *castOp);
+  bool mapVtableViewStride(mlir::Operation *strideOp);
+  bool mapVtableViewLoad(mlir::Operation *loadOp, std::ostream &out);
+  /// The C initializer of one vtable element that is not a function.
+  static std::string vtableIntegerEntry(mlir::Attribute entry);
+  bool vtableViewMisused() const { return vtableViewMisused_; }
 
   /// Mark `v` as the final virtual function pointer in a dispatch chain
   /// (loaded from the result of cir.vtable.get_virtual_fn_addr).

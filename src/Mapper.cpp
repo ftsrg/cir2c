@@ -179,6 +179,12 @@ std::string Mapper::freshName(llvm::StringRef base) {
 }
 
 std::string Mapper::getOrCreateName(Value v) {
+  // A view of a vtable has no C value (src/VirtualBases.cpp). Only a load reads it.
+  if (vtableViews_.count(v) && !vtableViewMisused_) {
+    llvm::errs() << "cir2c: error: the output uses a pointer into a vtable other than for "
+                    "a read of an entry (issue #3)\n";
+    vtableViewMisused_ = true;
+  }
   auto it = valueNames.find(v);
   if (it != valueNames.end()) return it->second;
   std::string name = freshName("v");

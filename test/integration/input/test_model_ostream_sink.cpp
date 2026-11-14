@@ -19,6 +19,12 @@
 // std::clog is lost, and only clear() and setstate() change the stream state.
 // The native run uses the real library, so equal exit codes show that the
 // model keeps the stream state and evaluates the operands as the library does.
+//
+// With --externalize-std, the model is not used. std::cout is then the object
+// of the compiled libc++, whose vtable pointer is unknown, so the conversion to
+// the virtual base std::basic_ios stops cir2c (issue #3).
+
+// cir2c-test-expect-error-externalize-std: is unknown, so its vtable entries cannot be read
 
 #include <iostream>
 #include <string>

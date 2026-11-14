@@ -16,11 +16,7 @@
 
 // Issue #3 part 2: with a virtual base, the position of the base subobject is
 // in the vtable of the object, and the constructors get the vtables through a
-// VTT. cir2c does not translate this yet (the vtables have no virtual-base
-// offsets, and the VTT is not real), so it rejects the program instead of
-// writing C that gives wrong values.
-
-// cir2c-test-expect-error: the program uses a virtual base class
+// VTT. The most-derived class initializes the virtual base.
 
 #include <cassert>
 

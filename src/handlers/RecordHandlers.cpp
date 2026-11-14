@@ -272,6 +272,8 @@ private:
   static bool handlePtrStride(cir::PtrStrideOp op, Mapper &m, std::ostream &out) {
     Operation *o = op.getOperation();
     if (o->getNumOperands() < 2) return false;
+    // The offset of a vtable entry (issue #3).
+    if (m.isVtableView(o->getOperand(0))) return m.mapVtableViewStride(o);
     Value base = o->getOperand(0);
     Value stride = o->getOperand(1);
     std::string baseName = m.getOrCreateName(base);

@@ -907,6 +907,33 @@ A pointer result of this function is `void*`, and the wrapper converts it to
 the type of the call. Thus a covariant override agrees with the slot of its
 base. The destructor of a thrown object uses the same type of function.
 
+**Virtual bases.** The position of a virtual base subobject depends on the
+most-derived class, so the object finds it through its vtable. The entries
+before the address point are integers: the virtual-base offsets, the vcall
+offsets of the virtual thunks, and offset-to-top. cir2c writes them into the
+`void*` array as integer constants (C11 6.6p9):
+
+```c
+void *_ZTV1D[] = { (void*)16UL, (void*)0, (void*)0, (void*)8UL, (void*)0xfffffffffffffff8UL /* -8 */, (void*)0 };
+```
+
+The CIR reads such an entry through casts and constant strides from the vtable
+pointer, as bytes or as 64-bit integers. cir2c writes no C for these steps, only
+the read of the `void*` element, converted back to an integer (C11 6.3.2.3p5 and
+p6, implementation-defined):
+
+```c
+long vt12 = (long)(unsigned long)((void**)v10)[-3];
+```
+
+Any other use of a pointer into a vtable stops cir2c with an error. For a local
+or global variable of a class type, the object is complete, so its vtable
+pointer holds the primary address point of the vtable of its class. The entry
+is then a constant, and the output does not read the vtable pointer. The
+`_ZTT…` array (the VTT) holds the address points that the complete-object
+constructor gives to the base constructors (`&_ZTT1D[1]`), also from the
+construction vtables `_ZTC…`.
+
 **Pointer arithmetic.** C++ defines a null pointer plus 0, and a null pointer
 minus a null pointer. C does not, and libc++ does both with an empty container.
 Where the offset is not a constant and the pointer can be null, cir2c writes
@@ -1089,7 +1116,8 @@ incorrect code. The corpus tests ignore these constructions. The
 | Floating-point classification | `cir.is_fp_class` | There is no portable C function. |
 | 128-bit integers | `cir.int<s,128>`, `cir.int<u,128>` | Not supported. This also stops cir2c. |
 | MSVC SEH | `cir.eh.setjmp`, `cir.eh.longjmp` | This control flow has no model here. |
-| Virtual base classes | `cir.vtt.address_point`, a VTT or construction vtable (`_ZTT…`, `_ZTC…`), a vtable of a class with a virtual base | The vtables have no virtual-base offsets yet, and the VTT is not real (issue #3). cir2c stops with an error instead of a translation that gives wrong values. The blocklist does not contain this construction: cir2c gives the error. |
+| A handler that matches through a virtual base | a `catch` of a virtual base class of the thrown class | The handler selection decides each pair during the translation (8.3), but the offset of a virtual base is in the vtable of the object, at run time. |
+| A vtable entry of a library object, with `--externalize-std` | a read of a virtual-base offset or offset-to-top through the vtable pointer of a `std::` object | The constructor of the object is unknown, so its vtable pointer is unknown. libc++ instantiates its streams in its compiled library, so their vtables are not in the module either. |
 | Computed goto | `cir.indirect_br` | The GNU `&&label` and `goto *p` extensions have no ISO C equivalent. A sound translation must change the function into a switch statement on a label number. cir2c does not do this yet. |
 
 Clang cannot make CIR for some other constructions. In this condition,
@@ -1319,8 +1347,8 @@ These limits apply:
   matches only a handler of its own type, and a pointer that the module does
   not throw matches only a handler of its own pointer type.
 - The offset of a virtual base class is in the vtable of the object. cir2c
-  stops with an error for a program with a virtual base (see 8.1), and also
-  when a handler can match a thrown type through a virtual base class.
+  stops with an error when a handler can match a thrown type through a virtual
+  base class (see 8.1).
 
 The global-variable model has these other effects:
 
@@ -1569,7 +1597,9 @@ the translation fails and its log contains each of these texts. The
 `test_reject_*.cpp` tests examine the rejections of
 [8.2](#82-the-standard-library) in this way. These rejections occur only with
 the `--no-externalize-std` option. With the `--externalize-std` option, the
-runner skips such a test.
+runner skips such a test. A line that starts with
+`// cir2c-test-expect-error-externalize-std: ` gives an error that only the
+`--externalize-std` option causes. Without that option, the test runs as usual.
 
 A test can also forbid a text in the log of the translation, for example a
 warning of cir2c. Write the text in a line that starts with

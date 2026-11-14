@@ -61,6 +61,9 @@ private:
     if (o->getNumOperands() < 1) return false;
     Value operand = o->getOperand(0);
 
+    // A cast of a vtable pointer: the start of a read of a vtable entry (issue #3).
+    if (m.startsVtableView(o)) return m.mapVtableViewCast(o);
+
     // A read of a local variable as another type (issue #11).
     if (m.mapUnionSlotView(o)) return true;
 

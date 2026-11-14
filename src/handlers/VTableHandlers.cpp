@@ -112,23 +112,25 @@ private:
     return true;
   }
 
-  // cir.vtt.address_point retrieves a !cir.ptr<!cir.ptr<!void>> element from a
-  // VTT (virtual table table) and is consumed by base-class constructors so
-  // they can install the appropriate __vptr in virtually-inherited subobjects.
-  // We do not model vtables faithfully; the only downstream effect that
-  // matters is the eventual cir.store of a !cir.vptr into a __vptr field,
-  // which handleStore already suppresses.  To keep the intermediate C valid
-  // (the result is passed by name into a constructor call that dereferences
-  // it), point at a fresh static !void* slot initialised to null.  Reads
-  // through the chain then yield 0 — a benign null vptr that the suppressed
-  // store discards.
+  // cir.vtt.address_point: an element of a VTT (issue #3). The complete-object
+  // constructor of a class with a virtual base gives each base constructor a
+  // part of its VTT, the `void *` array of the vtable pointers that the base
+  // constructor installs: `@_ZTT, offset = k` is &_ZTT[k], and `%vtt, offset = k`
+  // is element k of the part that the constructor got.
   static bool handleVTTAddrPoint(cir::VTTAddrPointOp op, Mapper &m, std::ostream &out) {
     if (op->getNumResults() < 1) return false;
     std::string ctype = m.mapTypeToC(op->getResult(0).getType());
-    std::string target = m.freshName("vtt_slot");
-    std::string tmp    = m.freshName("vtt");
-    out << "  static void *" << target << " = 0;\n";
-    out << "  " << ctype << " " << tmp << " = (" << ctype << ")&" << target << ";\n";
+    std::string tmp = m.freshName("vtt");
+    std::string offset = std::to_string(op.getOffset());
+    if (auto name = op.getNameAttr()) {
+      out << "  " << ctype << " " << tmp << " = (" << ctype << ")&"
+          << Mapper::sanitizeIdentifier(name.getValue().str()) << "[" << offset << "];\n";
+    } else if (op.getSymAddr()) {
+      out << "  " << ctype << " " << tmp << " = (" << ctype << ")((void**)"
+          << m.getOrCreateName(op.getSymAddr()) << " + " << offset << ");\n";
+    } else {
+      return false;
+    }
     m.setName(op->getResult(0), tmp);
     return true;
   }
