@@ -341,7 +341,7 @@ script merges the translation units into one C program. See
 | `--include DIR` | Add the `-I DIR` option to the CIR step. You can give this option more than one time. |
 | `--cflag FLAG` | Add `FLAG` to the CIR step, for example `-DNAME=VALUE`. You can give this option more than one time. The script adds no such flag itself. |
 | `--no-call-conv-lowering` | Skip the ClangIR calling-convention lowering, for types that it cannot lower yet. **CAUTION:** this is not sound. An object with a move constructor is then passed as a bitwise copy, so the caller never sees it moved from and destroys it. Use it for all translation units of a program or for none. |
-| `--merge c\|cir` | Set how more than one input file is merged. `c` (the default) merges the C outputs. `cir` merges the CIR modules with `cir-merge`. |
+| `--merge c\|cir` | Set how more than one input file is merged. `c` (the default) merges the C outputs. `cir` merges the CIR modules with `cir-merge`. **Use `cir`**: `c` can drop a definition or keep the wrong one of two different definitions, without an error (issue #20, see 5.6). |
 | `--externalize-std` | Replace the `std::` calls and the library calls with unknown values. This is the default. |
 | `--tu-part` | The output is one translation unit of several, to be linked: internal symbols are `static`, symbols that each unit may define are `weak`, functions have their symbol names, and global constructors have `__attribute__((constructor))`. See [5.6](#56-merge-translation-units). |
 | `--no-externalize-std` | Keep the bodies of the `std::` functions. For C++ input, the script also compiles the models of [8.2](#82-the-standard-library) with the program. **CAUTION: Read [8.2 The standard library](#82-the-standard-library) first.** |
@@ -444,7 +444,7 @@ one input file and makes one C file. There are two merge strategies:
 
 | Strategy | Sequence |
 |---|---|
-| `--merge c` | Translate each file to C, then merge the C files with `scripts/merge-c.sh`. For C++ input, this is not possible with `--no-externalize-std`: the definition check of [8.2](#82-the-standard-library) needs the whole program, and each file alone uses the symbols of the other files. The script stops with exit code 1. |
+| `--merge c` | **Not reliable (issue #20)**: `scripts/merge-c.sh` finds the definitions by text patterns and keeps the first definition of each name. It can drop a definition, or keep one of two different definitions for both files, without an error. Translate each file to C, then merge the C files with `scripts/merge-c.sh`. For C++ input, this is not possible with `--no-externalize-std`: the definition check of [8.2](#82-the-standard-library) needs the whole program, and each file alone uses the symbols of the other files. The script stops with exit code 1. |
 | `--merge cir` | Compile each file to CIR without the calling-convention lowering, merge the CIR modules with `cir-merge`, lower the merged module once, then translate it. |
 
 To keep the translation units apart, translate each file with `--tu-part`. Its
