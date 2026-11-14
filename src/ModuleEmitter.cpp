@@ -2908,7 +2908,9 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     if (sym && sym.getValue() == "main" && !f.getRegion().empty())
       definesMain = true;
   });
-  if (isTopLevelModule && isCxx && definesMain && !undefinedSymbols_.empty()) {
+  // A unit of several (--tu-part) is a part of a program, also with main():
+  // the other units can define its symbols.
+  if (isTopLevelModule && isCxx && definesMain && !tuPart_ && !undefinedSymbols_.empty()) {
     llvm::errs() << "cir2c: error: with --no-externalize-std, the output must "
                     "define each function and object that it uses, outside the "
                     "C standard library (README 8.2). These have no "

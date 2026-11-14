@@ -1279,7 +1279,8 @@ These conditions apply:
 
 - The rule is for a C++ program, that is a module from C++ source with a
   `main()` function. A module without `main()` is a part of a program, and the
-  other parts can define its symbols. A C program has no models, and it can
+  other parts can define its symbols. A module that cir2c translates with
+  `--tu-part` is also a part, also when it has `main()`. A C program has no models, and it can
   use POSIX functions, which the link of its output supplies.
 - A use counts only if it is in the output. A call in a function that the
   output does not contain does not count. A function attribute, for example
