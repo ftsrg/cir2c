@@ -192,6 +192,14 @@ set_cir_gen_flags() {
     CIR_GEN_FLAGS+=(${MODEL_FLAGS[@]+"${MODEL_FLAGS[@]}"} ${STDLIB_FLAGS[@]+"${STDLIB_FLAGS[@]}"})
 }
 
+# --merge c translates each unit alone, so the unit with main() would fail the
+# definition check of --no-externalize-std for each symbol that another unit
+# defines (README 8.2). --merge cir checks the merged module.
+if [[ "$NUM_INPUTS" -gt 1 && "$MERGE_STRATEGY" == "c" && "$LANG" == "c++" && "$EXTERNALIZE_STD" == false ]]; then
+    echo "Error: --merge c cannot check the definitions of --no-externalize-std for C++ input. Use --merge cir." >&2
+    exit 1
+fi
+
 # Validate tools
 REQUIRE_FLAGS=()
 [[ "$FLATTEN" == true ]] && REQUIRE_FLAGS+=(--cir-opt)

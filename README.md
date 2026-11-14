@@ -447,7 +447,7 @@ one input file and makes one C file. There are two merge strategies:
 
 | Strategy | Sequence |
 |---|---|
-| `--merge c` | Translate each file to C, then merge the C files with `scripts/merge-c.sh`. |
+| `--merge c` | Translate each file to C, then merge the C files with `scripts/merge-c.sh`. For C++ input, this is not possible with `--no-externalize-std`: the definition check of [8.2](#82-the-standard-library) needs the whole program, and each file alone uses the symbols of the other files. The script stops with exit code 1. |
 | `--merge cir` | Compile each file to CIR without the calling-convention lowering, merge the CIR modules with `cir-merge`, lower the merged module once, then translate it. |
 
 To keep the translation units apart, translate each file with `--tu-part`. Its
