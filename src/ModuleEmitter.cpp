@@ -2363,6 +2363,11 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     classScan = [&](mlir::Operation &op) {
       if (auto al = mlir::dyn_cast<cir::AllocaOp>(&op))
         classifyType(al.getAllocaType(), true);
+      // A throw writes its object into a static variable of the thrown type.
+      else if (auto exc = mlir::dyn_cast<cir::AllocExceptionOp>(&op)) {
+        if (auto ptr = mlir::dyn_cast<cir::PointerType>(exc.getType()))
+          classifyType(ptr.getPointee(), true);
+      }
       else if (auto g = mlir::dyn_cast<cir::GlobalOp>(&op)) {
         // A global of non-pointer struct type needs a complete definition: even
         // an extern declaration may have sizeof applied to it (e.g. the void
