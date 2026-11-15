@@ -227,13 +227,27 @@ private:
     Operation *o = op.getOperation();
     std::string x = m.getOrCreateName(o->getOperand(0));
     std::string ctype = m.mapTypeToC(o->getOperand(0).getType());
-    std::string min = ctype == "float" ? "1.17549435e-38f"
-                      : ctype == "double" ? "2.2250738585072014e-308"
-                                          : "3.36210314311209350626e-4932L";
-    std::string inf = "(" + ctype + ")(1.0 / 0.0)";
+    // The smallest normal and the largest finite value of the type (long double:
+    // the 80-bit format of x86-64). A value above the largest finite one is an
+    // infinity, so no infinity constant (and no division by zero) is needed.
+    std::string min, max;
+    if (ctype == "float") {
+      min = "1.17549435e-38f";
+      max = "3.40282347e+38f";
+    } else if (ctype == "double") {
+      min = "2.2250738585072014e-308";
+      max = "1.7976931348623157e+308";
+    } else if (ctype == "long double") {
+      min = "3.36210314311209350626e-4932L";
+      max = "1.18973149535723176502e+4932L";
+    } else {
+      llvm::errs() << "cir2c: error: cir.is_fp_class on " << ctype
+                   << ", which has no limits in cir2c (README 8.1)\n";
+      return false;
+    }
     uint32_t flags = static_cast<uint32_t>(op.getFlags());
     std::string abs = "(" + x + " < 0 ? -" + x + " : " + x + ")";
-    std::string normal = "(" + abs + " >= " + min + " && " + abs + " < " + inf + ")";
+    std::string normal = "(" + abs + " >= " + min + " && " + abs + " <= " + max + ")";
     std::string subnormal = "(" + abs + " > 0 && " + abs + " < " + min + ")";
     std::string neg = "__builtin_signbit(" + x + ")";
     std::vector<std::string> terms;
@@ -248,8 +262,8 @@ private:
       return false;
     }
     if (has(T::Nan)) terms.push_back("(" + x + " != " + x + ")");
-    if (has(T::NegativeInfinity)) terms.push_back("(" + x + " == -" + inf + ")");
-    if (has(T::PositiveInfinity)) terms.push_back("(" + x + " == " + inf + ")");
+    if (has(T::NegativeInfinity)) terms.push_back("(" + x + " < -" + max + ")");
+    if (has(T::PositiveInfinity)) terms.push_back("(" + x + " > " + max + ")");
     if (has(T::NegativeNormal) && has(T::PositiveNormal)) terms.push_back(normal);
     else if (has(T::NegativeNormal)) terms.push_back("(" + normal + " && " + x + " < 0)");
     else if (has(T::PositiveNormal)) terms.push_back("(" + normal + " && " + x + " > 0)");

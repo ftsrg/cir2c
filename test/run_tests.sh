@@ -56,7 +56,6 @@ BLOCKLIST_OPS=(
     "cir.asm"                          # inline assembly — not mappable
     "cir.vec."                         # SIMD vector ops (create/splat/extract/insert/cmp/…)
     "!cir.vector<"                     # SIMD vector types
-    "cir.is_fp_class"                  # FP classification — no portable C builtin
     "cir.int<s, 128>"                  # 128-bit integers (__int128) — unsupported (also crashes the mapper)
     "cir.int<u, 128>"                  # 128-bit integers (__int128) — unsupported (also crashes the mapper)
     "cir.eh.setjmp"                    # MSVC-SEH / __builtin_setjmp — not modellable
