@@ -1449,6 +1449,15 @@ binary is not correct for exceptions (issue #21, see 5.2).
 
 ### 8.7 Types
 
+**Wide floating-point constants.** clang writes a `long double` constant into
+the CIR as the shortest decimal for the 80-bit format, for example
+`#cir.fp<1.000000e-01>` for `0.1L`. The CIR parser reads a decimal as a
+`double`, which loses the extra bits of the mantissa and each value outside the
+range of `double` (`LDBL_MAX` becomes an infinity, `LDBL_TRUE_MIN` becomes 0).
+Before the parse, cir2c replaces each such decimal (80-bit and 128-bit types)
+with its exact bit pattern, which the parser reads without loss
+(`src/main.cpp`).
+
 - The `long double` type becomes the nearest C type on the host. The
   `x86_fp80`, `bf16` and `fp16` types are in the output. But the bits are not
   always the same as in the source.
