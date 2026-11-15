@@ -1106,15 +1106,18 @@ Two words have an exact meaning in this section:
 ### 8.1 Constructions that cir2c does not translate
 
 For these constructions, cir2c stops with an error. cir2c does not write
-incorrect code. The corpus tests ignore these constructions. The
-`BLOCKLIST_OPS` list in `test/run_tests.sh` contains them.
+incorrect code. The corpus tests skip the programs with the CIR operations of
+the `BLOCKLIST_OPS` list in `test/run_tests.sh`. That list is only for the
+tests: `run-cir2c.sh` itself stops with the error.
 
 | Construction | CIR operation | Cause |
 |---|---|---|
 | Inline assembly | `cir.asm` | There is no C equivalent. |
 | SIMD vectors | `cir.vec.*`, `!cir.vector<…>` | There is no portable C model. |
 | Floating-point classification | `cir.is_fp_class` | There is no portable C function. |
-| 128-bit integers | `cir.int<s,128>`, `cir.int<u,128>` | Not supported. This also stops cir2c. |
+| Integers wider than 64 bits | `cir.int<s,128>`, `cir.int<u,100>` (`__int128`, `_BitInt(100)`) | C has no such type. |
+| Arithmetic on an integer of another width than 8, 16, 32 or 64 bits | for example `cir.add` on `!cir.int<u,24>` (`_BitInt(24)`) | Such a value travels in the next wider type. That keeps its bits when the output only stores, loads or passes it, for example a record of 3 bytes that the calling convention coerces to `!cir.int<u,24>`. The arithmetic of the wider type would not wrap at the width. |
+| Other types without a C type | for example a vector member outside the vector operations, or a half-precision MLIR float | `mapTypeToC` writes a marker for the type. cir2c stops when the finished output contains a marker, so a type in a function that the output does not contain does not stop it. A pointer to such a type becomes a pointer to an incomplete struct: the output can store and pass it, but not read through it. |
 | MSVC SEH | `cir.eh.setjmp`, `cir.eh.longjmp` | This control flow has no model here. |
 | A handler that matches through a virtual base | a `catch` of a virtual base class of the thrown class | The handler selection decides each pair during the translation (8.3), but the offset of a virtual base is in the vtable of the object, at run time. |
 | A vtable entry of a library object, with `--externalize-std` | a read of a virtual-base offset or offset-to-top through the vtable pointer of a `std::` object | The constructor of the object is unknown, so its vtable pointer is unknown. libc++ instantiates its streams in its compiled library, so their vtables are not in the module either. |

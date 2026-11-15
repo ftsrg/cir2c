@@ -25,6 +25,7 @@
 
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/StringRef.h>
+#include <llvm/Support/raw_ostream.h>
 
 #include <algorithm>
 #include <functional>
@@ -219,6 +220,16 @@ std::string TypeMapper::anonRecordCName(mlir::Type recordType) const {
   return name;
 }
 
+std::string TypeMapper::unsupportedType(mlir::Type t) const {
+  std::string text;
+  llvm::raw_string_ostream os(text);
+  t.print(os);
+  auto it = std::find(unsupportedTypes_.begin(), unsupportedTypes_.end(), os.str());
+  size_t index = it - unsupportedTypes_.begin();
+  if (it == unsupportedTypes_.end()) unsupportedTypes_.push_back(os.str());
+  return kUnsupportedTypeMarker + std::to_string(index);
+}
+
 std::string TypeMapper::mapTypeToC(mlir::Type t) const {
   // Handle MLIR built-in integer types
   if (auto it = mlir::dyn_cast<mlir::IntegerType>(t)) {
@@ -235,7 +246,7 @@ std::string TypeMapper::mapTypeToC(mlir::Type t) const {
     case 64:
       return "long";
     default:
-      return "long";
+      return unsupportedType(t);
     }
   }
 
@@ -243,18 +254,15 @@ std::string TypeMapper::mapTypeToC(mlir::Type t) const {
   if (auto ft = mlir::dyn_cast<mlir::FloatType>(t)) {
     unsigned w = ft.getWidth();
     switch (w) {
-    case 16:
-      return "float"; // half precision, approximate as float
     case 32:
       return "float";
     case 64:
       return "double";
     case 80:
       return "long double"; // x87 extended precision
-    case 128:
-      return "long double"; // quad precision, approximate as long double
     default:
-      return "double";
+      // Half and quad precision have no C type with their rounding.
+      return unsupportedType(t);
     }
   }
 
@@ -297,9 +305,15 @@ std::string TypeMapper::mapTypeToC(mlir::Type t) const {
     // width above 32 was silently truncated, and a struct passed by value lost
     // its top bytes. Widths at or below 32 keep the historical "int" so this
     // stays a fix for the truncating cases only.
+    // The wider type keeps the bits of a value that is only loaded, stored or
+    // passed. Mapper::mapOperation stops at any other operation on such a
+    // value, because its arithmetic would not wrap at the width.
     if (width > 32 && width <= 64)
       return isSigned ? "long" : "unsigned long";
-    return "int"; // fallback (widths <= 32; wider than needed but lossless)
+    if (width < 32)
+      return "int";
+    // Wider than 64 bits, for example _BitInt(100) or __int128: no C type.
+    return unsupportedType(t);
   }
 
   // Handle CIR floating-point types
@@ -366,6 +380,12 @@ std::string TypeMapper::mapTypeToC(mlir::Type t) const {
 
     // For other pointer types, recursively map the pointee and add *
     std::string pointeeType = mapTypeToC(pointee);
+    // A pointer to a type without a C type points to an incomplete struct: it
+    // can be stored and passed, and a read through it or arithmetic on it does
+    // not compile.
+    llvm::StringRef marker(kUnsupportedTypeMarker);
+    if (llvm::StringRef(pointeeType).starts_with(marker))
+      return "struct __cir2c_opaque_" + pointeeType.substr(marker.size()) + "*";
     return pointeeType + "*";
   }
 
@@ -396,8 +416,14 @@ std::string TypeMapper::mapTypeToC(mlir::Type t) const {
     return mapTypeToC(elemType);
   }
 
-  // Conservative default for unknown types
-  return "int";
+  // The tokens of the exception handling have no values in the output, only
+  // names that the handlers write and read.
+  if (mlir::isa<cir::CatchTokenType, cir::CleanupTokenType, cir::EhTokenType>(t))
+    return "int";
+
+  // For example a vector (outside the blocklist of the tests), a member
+  // pointer that the calling-convention lowering left, or a CUDA type.
+  return unsupportedType(t);
 }
 
 std::string TypeMapper::arrayBaseTypeAndDims(mlir::Type t, std::string &dimsOut) const {

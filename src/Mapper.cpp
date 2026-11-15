@@ -235,8 +235,41 @@ std::string Mapper::lookupFieldName(const std::string &recordName, int index) co
 
 std::string Mapper::arrayBaseTypeAndDims(mlir::Type t, std::string &dimsOut) const { return typeMapper_.arrayBaseTypeAndDims(t, dimsOut); }
 
+namespace {
+
+// An integer of a width that C has no type for, which travels in the next
+// wider standard type (TypeMapper::mapTypeToC).
+bool hasOddWidth(mlir::Type t) {
+  auto integer = mlir::dyn_cast<cir::IntType>(t);
+  if (!integer) return false;
+  unsigned w = integer.getWidth();
+  return w != 8 && w != 16 && w != 32 && w != 64;
+}
+
+// Operations that only move a value keep its bits in the wider type.
+bool movesValueOnly(mlir::Operation *op) {
+  if (mlir::isa<cir::LoadOp, cir::StoreOp, cir::AllocaOp, cir::CallOp, cir::TryCallOp,
+                cir::ReturnOp, cir::YieldOp>(op))
+    return true;
+  auto cast = mlir::dyn_cast<cir::CastOp>(op);
+  return cast && cast.getKind() == cir::CastKind::bitcast;
+}
+
+} // namespace
+
 bool Mapper::mapOperation(mlir::Operation *op, std::ostream &out) {
   auto opName = op->getName().getStringRef();
+  if (!movesValueOnly(op)) {
+    std::vector<mlir::Type> types(op->getOperandTypes().begin(), op->getOperandTypes().end());
+    types.insert(types.end(), op->getResultTypes().begin(), op->getResultTypes().end());
+    for (mlir::Type t : types)
+      if (hasOddWidth(t)) {
+        llvm::errs() << "cir2c: error: " << opName << " computes with a "
+                     << mlir::cast<cir::IntType>(t).getWidth()
+                     << "-bit integer, which C has no type for (README 8.1)\n";
+        return false;
+      }
+  }
   std::string inputText = oneLineOperationText(*op);
   traceability.recordOperationVisit(opName);
 

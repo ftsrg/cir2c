@@ -2971,6 +2971,35 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     return false;
   }
 
+  // A type without a C type, in the part of the module that the output contains
+  // (TypeMapper::unsupportedTypes).
+  if (isTopLevelModule) {
+    std::string body = topLevelBuf.str();
+    const std::vector<std::string> &unsupported = typeMapper_.unsupportedTypes();
+    std::vector<std::string> used;
+    for (size_t i = 0; i < unsupported.size(); ++i) {
+      std::string marker = TypeMapper::kUnsupportedTypeMarker + std::to_string(i);
+      for (size_t at = body.find(marker); at != std::string::npos; at = body.find(marker, at + 1)) {
+        char next = at + marker.size() < body.size() ? body[at + marker.size()] : ' ';
+        if (!std::isdigit(static_cast<unsigned char>(next))) {
+          size_t begin = body.rfind('\n', at);
+          begin = begin == std::string::npos ? 0 : begin + 1;
+          size_t end = body.find('\n', at);
+          std::string line = body.substr(begin, end == std::string::npos ? std::string::npos
+                                                                          : end - begin);
+          used.push_back(unsupported[i] + ", first in: " + line.substr(0, 160));
+          break;
+        }
+      }
+    }
+    if (!used.empty()) {
+      llvm::errs() << "cir2c: error: the output uses a type that C has no type for "
+                      "(README 8.1):\n";
+      for (const std::string &type : used) llvm::errs() << "  " << type << "\n";
+      return false;
+    }
+  }
+
   // Top-level module: the body is now fully buffered (so every emission-time
   // flag is set). Emit the header/manifest, then flush the body after it.
   if (isTopLevelModule) {

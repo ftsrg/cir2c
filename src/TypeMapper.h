@@ -64,6 +64,13 @@ public:
     return moduleDependentRecordNames_;
   }
 
+  /// The types that have no C type (README 8.1). mapTypeToC writes the marker
+  /// `__cir2c_unsupported_type_<index>` for each of them, and cir2c stops when
+  /// the output contains a marker. A type in a function that the output does
+  /// not contain thus does not stop the translation.
+  const std::vector<std::string> &unsupportedTypes() const { return unsupportedTypes_; }
+  static constexpr const char *kUnsupportedTypeMarker = "__cir2c_unsupported_type_";
+
   /// Stable unique C struct/union tag for an anonymous record type.
   std::string anonRecordCName(mlir::Type recordType) const;
 
@@ -72,6 +79,8 @@ private:
   // Record name -> its C tag, and all tags given out. "X.base" has its own tag.
   mutable std::map<std::string, std::string> recordCNames_;
   mutable std::set<std::string> usedRecordCNames_;
+  mutable std::vector<std::string> unsupportedTypes_;
+  std::string unsupportedType(mlir::Type t) const;
   std::vector<std::string> moduleDependentRecordNames_;
 };
 
