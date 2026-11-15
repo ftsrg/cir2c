@@ -1119,7 +1119,7 @@ tests: `run-cir2c.sh` itself stops with the error.
 |---|---|---|
 | Inline assembly | `cir.asm` | There is no C equivalent. |
 | SIMD vectors | `cir.vec.*`, `!cir.vector<…>` | There is no portable C model. |
-| Floating-point classification | `cir.is_fp_class` | There is no portable C function. |
+| A floating-point class test that tells a quiet NaN from a signaling NaN | `cir.is_fp_class` with only one of the two NaN flags (`__builtin_issignaling`, `__builtin_isfpclass`) | The output tests the classes with comparisons (`x != x` for a NaN), and no comparison tells the two kinds apart. The other class tests (`isnan`, `isinf`, `isfinite`, `isnormal`, `fpclassify`) translate. The blocklist of the tests still contains `cir.is_fp_class`. |
 | Integers wider than 64 bits | `cir.int<s,128>`, `cir.int<u,100>` (`__int128`, `_BitInt(100)`) | C has no such type. |
 | Arithmetic on an integer of another width than 8, 16, 32 or 64 bits | for example `cir.add` on `!cir.int<u,24>` (`_BitInt(24)`) | Such a value travels in the next wider type. That keeps its bits when the output only stores, loads or passes it, for example a record of 3 bytes that the calling convention coerces to `!cir.int<u,24>`. The arithmetic of the wider type would not wrap at the width. |
 | Other types without a C type | for example a vector member outside the vector operations, or a half-precision MLIR float | `mapTypeToC` writes a marker for the type. cir2c stops when the finished output contains a marker, so a type in a function that the output does not contain does not stop it. A pointer to such a type becomes a pointer to an incomplete struct: the output can store and pass it, but not read through it. |

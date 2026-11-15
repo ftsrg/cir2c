@@ -239,8 +239,15 @@ private:
     std::vector<std::string> terms;
     using T = cir::FPClassTest;
     auto has = [&](T t) { return (flags & static_cast<uint32_t>(t)) == static_cast<uint32_t>(t); };
-    // The two NaN kinds are not told apart: C has no comparison for that.
-    if (flags & static_cast<uint32_t>(T::Nan)) terms.push_back("(" + x + " != " + x + ")");
+    // A comparison cannot tell a quiet NaN from a signaling one, so a test that
+    // takes only one kind (__builtin_issignaling, or __builtin_isfpclass with
+    // one of fcQNan and fcSNan) would match each NaN.
+    if (has(T::SignalingNaN) != has(T::QuietNaN)) {
+      llvm::errs() << "cir2c: error: cir.is_fp_class tells a quiet NaN from a signaling NaN, "
+                      "which the comparisons of the output cannot do (README 8.1)\n";
+      return false;
+    }
+    if (has(T::Nan)) terms.push_back("(" + x + " != " + x + ")");
     if (has(T::NegativeInfinity)) terms.push_back("(" + x + " == -" + inf + ")");
     if (has(T::PositiveInfinity)) terms.push_back("(" + x + " == " + inf + ")");
     if (has(T::NegativeNormal) && has(T::PositiveNormal)) terms.push_back(normal);
