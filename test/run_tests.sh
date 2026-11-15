@@ -119,6 +119,8 @@ SKIP_GNUEXT_TESTS=0     # CIR gen: GNU/MSVC extension not in strict ISO mode
 SKIP_TYPE_TESTS=0       # CIR gen: unknown type name
 SKIP_OTHER_TESTS=0      # CIR gen: other parse/compile error
 SKIP_UPSTREAM_TESTS=0   # clang's own -fclangir also diverges (upstream ClangIR bug)
+SKIP_MULTITU_TESTS=0    # an esbmc-eval task with several source files (multi-TU)
+SKIP_MODEL_TESTS=0      # CIR gen: a part of libc++ that the C++ models do not cover
 TIMEDOUT_TESTS=0
 interrupted=0
 
@@ -128,6 +130,11 @@ count_skip() {
     SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
     case "$1" in
         *"upstream ClangIR"*)    SKIP_UPSTREAM_TESTS=$((SKIP_UPSTREAM_TESTS + 1)) ;;
+        *"several translation units"*) SKIP_MULTITU_TESTS=$((SKIP_MULTITU_TESTS + 1)) ;;
+        # The models of README 8.2 stop the compilation of a header that they do
+        # not cover (#error "... is not modeled"). A missing std:: member can
+        # also be an error of the program, so it stays an other CIR-gen error.
+        *"is not modeled"*)      SKIP_MODEL_TESTS=$((SKIP_MODEL_TESTS + 1)) ;;
         *"blocklisted op"*)      SKIP_BLOCKLIST_TESTS=$((SKIP_BLOCKLIST_TESTS + 1)) ;;
         *"file not found"*)      SKIP_HEADER_TESTS=$((SKIP_HEADER_TESTS + 1)) ;;
         *"Not Yet Implemented"*) SKIP_NYI_TESTS=$((SKIP_NYI_TESTS + 1)) ;;
@@ -171,6 +178,8 @@ print_summary() {
     echo -e "  CIR not implemented:${YELLOW}$SKIP_NYI_TESTS${NC}   (ClangIR feature NYI)"
     echo -e "  other CIR-gen error:${YELLOW}$SKIP_OTHER_TESTS${NC}   (parse/compile error)"
     echo -e "  upstream ClangIR:   ${YELLOW}$SKIP_UPSTREAM_TESTS${NC}   (clang -fclangir also wrong — not our bug)"
+    echo -e "  several TUs:        ${YELLOW}$SKIP_MULTITU_TESTS${NC}   (esbmc-eval task with several source files)"
+    echo -e "  C++ model limit:    ${YELLOW}$SKIP_MODEL_TESTS${NC}   (CIR gen: not covered by models/)"
     echo -e "Timed out:          ${YELLOW}$TIMEDOUT_TESTS${NC}"
     echo -e "Failed:             ${RED}$FAILED_TESTS${NC}"
     echo -e "  mapper failed:      ${RED}$MAPPER_FAILED_TESTS${NC}"
@@ -868,6 +877,14 @@ run_esbmc_test() {
     # Include the test's own directory so any sibling header files are found.
     local src_dir
     src_dir=$(cd "$(dirname "$src_file")" 2>/dev/null && pwd)
+
+    # A task with several source files is a program of several translation
+    # units. The suite translates one file, so such a task is not in scope.
+    local sources
+    sources=$(find "$src_dir" -maxdepth 1 \( -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' \) | wc -l)
+    if [[ $sources -gt 1 ]]; then
+        echo "SKIPPED|$test_id|several translation units ($sources source files)"; return
+    fi
     timeout "$TIMEOUT" "$RUNNER" "$EXTERNALIZE_STD_FLAG" \
         --mlir "$mlir_file" \
         --include "$src_dir" \

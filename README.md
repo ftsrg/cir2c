@@ -1721,7 +1721,7 @@ in agreement.
 | Output mismatch | The program ran and gave an incorrect result. **This is an error.** |
 | Mapper failed | cir2c made no C code. |
 | Compile failed | cir2c made incorrect C code. **This is an error.** |
-| Skipped | A blocklisted operation, a Clang failure, or a known ClangIR difference. |
+| Skipped | A blocklisted operation, a Clang failure, or a known ClangIR difference. Two reasons have their own counter: "several TUs", an esbmc-eval task with more than one source file, which the suite does not translate (one translation unit for each task), and "C++ model limit", the `#error` of a header that the models of [8.2](#82-the-standard-library) do not cover (only with `--no-externalize-std`). |
 | Timed out | The test used more than 60 seconds. |
 
 Always examine the "Output mismatch" category and the "Compile failed" category.
