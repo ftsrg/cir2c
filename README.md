@@ -990,8 +990,13 @@ unit, with other records, could give the same record another name, and C11
 6.2.7 makes two struct types of different units compatible only with the same
 tag.
 
-`operator new` and `operator delete` have no body in CIR. cir2c writes small
-functions that call `malloc` and `free`.
+`operator new` and `operator delete` have no body in CIR, because libc++ keeps
+them in its compiled library. With `--no-externalize-std`, the
+libcxx-out-of-line model defines them (8.2, issue #17), so a throwing `new`
+throws `std::bad_alloc` when `malloc` fails. With `--externalize-std`, cir2c
+writes small functions that call `malloc` and `free`. A throwing `new` there
+calls `abort()` when `malloc` fails, so a program that catches `std::bad_alloc`
+loses that path.
 
 **Trivial assignment.** CIR marks a trivial default copy operator or move
 operator with `func_info<#cir.cxx_assign<…, trivial true>>`. The body is almost
@@ -1198,7 +1203,7 @@ script stops.
 |---|---|---|
 | `ostream-sink` | `std::cout`, `std::cerr` and `std::clog` discard all output. | An abstraction. The model uses only names from the C++ standard. |
 | `istream-nondet` | `std::cin` gives an unknown value for each arithmetic extraction. | An abstraction. The model uses only names from the C++ standard and the SV-COMP functions `__VERIFIER_nondet_*`. |
-| `libcxx-out-of-line` | The members of six exception classes, and `std::nothrow`, that libc++ keeps in its compiled library. The libc++ headers use them, for example in `vector::at` and `std::stable_sort`. | The same behavior and the same `what()` texts as libc++. The model uses two private libc++ names. |
+| `libcxx-out-of-line` | The members of six exception classes, `std::nothrow` and the replaceable allocation functions (`operator new`, `operator delete`), that libc++ keeps in its compiled library. The libc++ headers use them, for example in `vector::at` and `std::stable_sort`, and each `new` expression calls an allocation function. | The same behavior and the same `what()` texts as libc++. The model uses two private libc++ names. |
 
 **The ostream-sink model.** The model replaces the `<ios>`, `<ostream>` and
 `<iostream>` headers. The library's `<iosfwd>` declares `ios_base`,
@@ -1271,6 +1276,10 @@ program uses.
 | The constructor, the destructor and `what()` of `bad_array_new_length` | Empty. `what()` returns `"bad_array_new_length"`. |
 | `logic_error(const char*)`, `~logic_error()`, `logic_error::what()` | The constructor copies the message, `what()` returns the copy, and the destructor releases it. |
 | `~length_error()`, `~out_of_range()` | Empty. |
+| `operator new`, `operator new[]` | `malloc` of the size, or of 1 byte for 0 bytes. When `malloc` gives a null pointer, `throw std::bad_alloc()`. |
+| The `std::nothrow_t` forms of `new` | The result of `malloc`, also a null pointer. |
+| The `std::align_val_t` forms of `new` | `aligned_alloc`, with the size rounded up to a multiple of the alignment (C11 7.22.3.1). |
+| All forms of `operator delete` | `free`. |
 
 The libcxx-out-of-line model has these limits:
 
@@ -1282,6 +1291,16 @@ The libcxx-out-of-line model has these limits:
   `logic_error`. Thus each message has one owner.
 - When `malloc` fails during the copy of a message, the model throws
   `std::bad_alloc`, as the `operator new` of libc++ does.
+- libc++ calls the new handler of `std::set_new_handler` before it throws
+  `bad_alloc`. The model does not. `set_new_handler` is in the compiled
+  library, so cir2c rejects a program that uses it (an undefined symbol).
+- The allocation functions of the model are `inline`, so that each translation
+  unit has one definition that `cir-merge` can merge, and the output contains
+  only the forms that the program uses. C++ forbids `inline` replacements
+  ([replacement.functions]/3, no diagnostic required). clang accepts them with
+  a warning, and the model turns the warning off.
+- A program that defines its own `operator new` does not compile with the
+  model: two definitions of one function.
 - Other members are not in the model, for example the constructors of
   `std::runtime_error` and `logic_error(const std::string&)`. cir2c rejects a
   program that uses one of them (see the next paragraph).

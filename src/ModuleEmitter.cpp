@@ -818,6 +818,9 @@ void Mapper::computeReachableDefs(mlir::ModuleOp module) {
 // The body of a declaration-only operator new. A throwing new never returns
 // null: a failed allocation throws std::bad_alloc, modelled as the uncaught
 // exception's std::terminate, so a program that catches it loses that path.
+// Only --externalize-std uses this body: with --no-externalize-std, the model
+// libcxx-out-of-line defines the allocation functions (issue #17), and a
+// throwing operator new without a body is an undefined symbol (README 8.2).
 static const char *operatorNewBody(llvm::StringRef mangled) {
   if (mangled.contains("nothrow")) return "{ return malloc(p0); }";
   return "{ void *r = malloc(p0); if (!r) abort(); return r; }";
@@ -932,6 +935,7 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
   // Stubs written here exist in every unit that needs them.
   const char *weakStub = tuPart_ ? "__attribute__((weak)) " : "";
   if (isNewOp && !hasBodyCheck) {
+    if (usedByOutput(fop)) requireDefinition(mangledSym, false);
     ensureMallocFreeDeclared(out);
     ensureAbortDeclared(out);
     out << weakStub << retType << " " << outName << "(" << params << ") "
@@ -1227,6 +1231,7 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
     // For C++ operator new/delete, emit inline stubs that wrap malloc/free
     // instead of bare declarations (which would be undefined at link time).
     if (outName.rfind("operator_new", 0) == 0) {
+      if (usedByOutput(fop)) requireDefinition(sym.getValue().str(), false);
       std::string body = operatorNewBody(sym.getValue());
       out << " " << body << "\n\n";
       traceability.recordOperationTrace(fop->getName().getStringRef(), funcInputText, funcHeaderText + " " + body + "\n", true);

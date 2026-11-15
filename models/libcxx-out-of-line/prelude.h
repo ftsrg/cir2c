@@ -19,7 +19,8 @@
 // libc++ keeps some members and objects in its compiled library, so ClangIR
 // sees only their declarations. libc++'s own header code uses them: std::vector
 // throws length_error and out_of_range, std::allocator throws
-// bad_array_new_length, and std::stable_sort uses std::nothrow. This file
+// bad_array_new_length, std::stable_sort uses std::nothrow, and each new
+// expression calls an allocation function. This file
 // defines them as libc++ does, with the same what() texts. It is not an
 // abstraction.
 //
@@ -76,5 +77,79 @@ inline const char *std::logic_error::what() const noexcept { return __imp_.c_str
 
 inline std::length_error::~length_error() noexcept {}
 inline std::out_of_range::~out_of_range() noexcept {}
+
+// The replaceable allocation functions ([new.delete], issue #17). libc++ keeps
+// them in its compiled library. A throwing operator new never returns a null
+// pointer: when malloc fails, it throws std::bad_alloc. Each call, also for 0
+// bytes, gives another pointer. The forms with std::nothrow_t return the null
+// pointer instead. The forms with std::align_val_t use aligned_alloc, whose
+// size must be a multiple of the alignment (C11 7.22.3.1), and free releases
+// both kinds of memory.
+//
+// libc++ calls the new handler of std::set_new_handler again and again before
+// it throws. This model does not: set_new_handler is in the compiled library,
+// so a program that uses it has an undefined symbol and cir2c rejects it.
+//
+// [replacement.functions]/3 forbids inline replacements (no diagnostic is
+// required). Clang accepts them with a warning. Here inline gives one
+// definition in each translation unit that cir-merge can merge, and a
+// definition in the output only for the forms that the program uses.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winline-new-delete"
+inline void *operator new(std::size_t size) {
+  void *p = std::malloc(size ? size : 1);
+  if (!p)
+    throw std::bad_alloc();
+  return p;
+}
+inline void *operator new[](std::size_t size) { return ::operator new(size); }
+inline void *operator new(std::size_t size, const std::nothrow_t &) noexcept {
+  return std::malloc(size ? size : 1);
+}
+inline void *operator new[](std::size_t size, const std::nothrow_t &) noexcept {
+  return std::malloc(size ? size : 1);
+}
+inline void *operator new(std::size_t size, std::align_val_t alignment) {
+  std::size_t align = static_cast<std::size_t>(alignment);
+  std::size_t bytes = size ? size : 1;
+  void *p = bytes <= static_cast<std::size_t>(-1) - align
+                ? std::aligned_alloc(align, (bytes + align - 1) / align * align)
+                : nullptr;
+  if (!p)
+    throw std::bad_alloc();
+  return p;
+}
+inline void *operator new[](std::size_t size, std::align_val_t alignment) {
+  return ::operator new(size, alignment);
+}
+inline void *operator new(std::size_t size, std::align_val_t alignment,
+                          const std::nothrow_t &) noexcept {
+  std::size_t align = static_cast<std::size_t>(alignment);
+  std::size_t bytes = size ? size : 1;
+  return bytes <= static_cast<std::size_t>(-1) - align
+             ? std::aligned_alloc(align, (bytes + align - 1) / align * align)
+             : nullptr;
+}
+inline void *operator new[](std::size_t size, std::align_val_t alignment,
+                            const std::nothrow_t &tag) noexcept {
+  return ::operator new(size, alignment, tag);
+}
+inline void operator delete(void *p) noexcept { std::free(p); }
+inline void operator delete[](void *p) noexcept { std::free(p); }
+inline void operator delete(void *p, std::size_t) noexcept { std::free(p); }
+inline void operator delete[](void *p, std::size_t) noexcept { std::free(p); }
+inline void operator delete(void *p, const std::nothrow_t &) noexcept { std::free(p); }
+inline void operator delete[](void *p, const std::nothrow_t &) noexcept { std::free(p); }
+inline void operator delete(void *p, std::align_val_t) noexcept { std::free(p); }
+inline void operator delete[](void *p, std::align_val_t) noexcept { std::free(p); }
+inline void operator delete(void *p, std::size_t, std::align_val_t) noexcept { std::free(p); }
+inline void operator delete[](void *p, std::size_t, std::align_val_t) noexcept { std::free(p); }
+inline void operator delete(void *p, std::align_val_t, const std::nothrow_t &) noexcept {
+  std::free(p);
+}
+inline void operator delete[](void *p, std::align_val_t, const std::nothrow_t &) noexcept {
+  std::free(p);
+}
+#pragma clang diagnostic pop
 
 #endif
