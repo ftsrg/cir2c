@@ -246,20 +246,33 @@ bool hasOddWidth(mlir::Type t) {
   return w != 8 && w != 16 && w != 32 && w != 64;
 }
 
-// Operations that only move a value keep its bits in the wider type.
-bool movesValueOnly(mlir::Operation *op) {
+// Operations whose result in the wider type is that of the odd width: moves
+// of the value, the overflow builtins (they compute with the exact values),
+// and integral casts that keep the value when they go into an odd width.
+bool keepsOddWidthValue(mlir::Operation *op) {
   if (mlir::isa<cir::LoadOp, cir::StoreOp, cir::AllocaOp, cir::CallOp, cir::TryCallOp,
-                cir::ReturnOp, cir::YieldOp>(op))
+                cir::ReturnOp, cir::YieldOp, cir::AddOverflowOp, cir::SubOverflowOp,
+                cir::MulOverflowOp>(op))
     return true;
   auto cast = mlir::dyn_cast<cir::CastOp>(op);
-  return cast && cast.getKind() == cir::CastKind::bitcast;
+  if (!cast) return false;
+  if (cast.getKind() == cir::CastKind::bitcast) return true;
+  if (cast.getKind() != cir::CastKind::integral) return false;
+  auto from = mlir::dyn_cast<cir::IntType>(cast.getSrc().getType());
+  auto to = mlir::dyn_cast<cir::IntType>(cast.getType());
+  if (!from || !to) return false;
+  // Into a standard type, the C conversion of the exact value gives the
+  // result of the CIR cast (modulo 2^N for a narrower type).
+  if (!hasOddWidth(to)) return true;
+  // Into an odd width, only a cast that keeps each value.
+  return to.getWidth() > from.getWidth() && (to.isSigned() || !from.isSigned());
 }
 
 } // namespace
 
 bool Mapper::mapOperation(mlir::Operation *op, std::ostream &out) {
   auto opName = op->getName().getStringRef();
-  if (!movesValueOnly(op)) {
+  if (!keepsOddWidthValue(op)) {
     std::vector<mlir::Type> types(op->getOperandTypes().begin(), op->getOperandTypes().end());
     types.insert(types.end(), op->getResultTypes().begin(), op->getResultTypes().end());
     for (mlir::Type t : types)
