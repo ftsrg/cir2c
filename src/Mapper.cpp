@@ -178,6 +178,40 @@ std::string Mapper::freshName(llvm::StringRef base) {
   return s;
 }
 
+std::optional<std::string> Mapper::constantStringLiteral(mlir::Value v) const {
+  while (auto cast = v.getDefiningOp<cir::CastOp>()) v = cast.getSrc();
+  // The address of the global: cir.get_global, or a cir.const global view of
+  // its first byte (__FILE__).
+  mlir::Operation *use = v.getDefiningOp();
+  mlir::FlatSymbolRefAttr symbol;
+  if (auto get = v.getDefiningOp<cir::GetGlobalOp>()) {
+    symbol = get.getNameAttr();
+  } else if (auto c = v.getDefiningOp<cir::ConstantOp>()) {
+    auto view = mlir::dyn_cast<cir::GlobalViewAttr>(c.getValue());
+    if (!view) return std::nullopt;
+    if (auto indices = view.getIndices()) {
+      for (mlir::Attribute index : indices) {
+        auto i = mlir::dyn_cast<cir::IntAttr>(index);
+        auto j = mlir::dyn_cast<mlir::IntegerAttr>(index);
+        if (!(i && i.getValue().isZero()) && !(j && j.getInt() == 0)) return std::nullopt;
+      }
+    }
+    symbol = view.getSymbol();
+  }
+  if (!use || !symbol) return std::nullopt;
+  auto global = mlir::SymbolTable::lookupNearestSymbolFrom<cir::GlobalOp>(use, symbol);
+  if (!global || !global.getConstant()) return std::nullopt;
+  auto init = global.getInitialValue();
+  auto array = init ? mlir::dyn_cast<cir::ConstArrayAttr>(*init) : cir::ConstArrayAttr();
+  auto text = array ? mlir::dyn_cast<mlir::StringAttr>(array.getElts()) : mlir::StringAttr();
+  if (!text) return std::nullopt;
+  std::string bytes = text.getValue().str();
+  while (!bytes.empty() && bytes.back() == '\0') bytes.pop_back();
+  // A literal ends at its first null character; such text stays a variable.
+  if (bytes.find('\0') != std::string::npos) return std::nullopt;
+  return '"' + ConstantEmitter::escapeCString(bytes) + '"';
+}
+
 std::string Mapper::getOrCreateName(Value v) {
   // A view of a vtable has no C value (src/VirtualBases.cpp). Only a load reads it.
   if (vtableViews_.count(v) && !vtableViewMisused_) {

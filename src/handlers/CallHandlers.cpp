@@ -255,6 +255,17 @@ private:
         continue;
       }
 
+      // CBMC's goto-cc needs string constants as the text arguments of
+      // __assert_fail (invariant "expected string constant"). assert() passes
+      // literals, which the CIR loads from constant string globals.
+      if (!isIndirectCall && callee == "__assert_fail") {
+        if (auto literal = m.constantStringLiteral(argV)) {
+          argList.push_back(*literal);
+          args += argList.back();
+          continue;
+        }
+      }
+
       // pointerOperandExpr takes the address of a direct-access scalar lvalue but
       // leaves an array/VLA name to decay (a VLA alloca is CIR ptr<scalar>, so a
       // naive pointee-array check would wrongly emit `&v` = pointer-to-VLA).

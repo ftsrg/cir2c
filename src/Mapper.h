@@ -642,6 +642,9 @@ public:
 
   /// Return the original object pointer associated with a dispatch chain value.
   mlir::Value getVtableDispatchObject(mlir::Value v) const;
+  /// The C string literal of a value that is a constant string global, through
+  /// casts; empty for any other value.
+  std::optional<std::string> constantStringLiteral(mlir::Value v) const;
   /// Issue #3: find the primary vtable of each class (before the functions).
   void planPrimaryVtables(mlir::ModuleOp module);
   /// Issue #3: true when \p v is a view of a vtable (see vtableViews_).

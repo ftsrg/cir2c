@@ -51,9 +51,9 @@ public:
   /// of its type.
   static std::string formatIntLiteral(mlir::Attribute intAttr);
 
-private:
   /// Escape raw bytes for a C string literal. Uses 3-digit octal for
   /// non-printing bytes (a \xHH escape greedily eats following hex digits).
+  /// Also used by Mapper::constantStringLiteral.
   static std::string escapeCString(const std::string &bytes);
 };
 
