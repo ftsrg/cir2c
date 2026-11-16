@@ -56,7 +56,6 @@ BLOCKLIST_OPS=(
     "cir.asm"                          # inline assembly — not mappable
     "cir.vec."                         # SIMD vector ops (create/splat/extract/insert/cmp/…)
     "!cir.vector<"                     # SIMD vector types
-    "cir.is_fp_class"                  # FP classification — no portable C builtin
     "cir.int<s, 128>"                  # 128-bit integers (__int128) — unsupported (also crashes the mapper)
     "cir.int<u, 128>"                  # 128-bit integers (__int128) — unsupported (also crashes the mapper)
     "cir.eh.setjmp"                    # MSVC-SEH / __builtin_setjmp — not modellable
@@ -95,6 +94,8 @@ ESBMC_EVAL_DIR="${ESBMC_EVAL_DIR:-$SCRIPT_DIR/sources/esbmc-eval/}"
 ESBMC_EVAL_OUTPUT_DIR="$SCRIPT_DIR/esbmc-eval/output"
 RUN_ESBMC=${RUN_ESBMC:-0}
 RUN_LLVM=${RUN_LLVM:-0}
+RUN_LLVM_MULTI=${RUN_LLVM_MULTI:-0}
+MULTI_MERGE=${MULTI_MERGE:-c}      # MultiSource merge strategy: c or cir
 RUN_INTEGRATION=${RUN_INTEGRATION:-1}
 
 # ---------------------------------------------------------------------------
@@ -118,6 +119,8 @@ SKIP_GNUEXT_TESTS=0     # CIR gen: GNU/MSVC extension not in strict ISO mode
 SKIP_TYPE_TESTS=0       # CIR gen: unknown type name
 SKIP_OTHER_TESTS=0      # CIR gen: other parse/compile error
 SKIP_UPSTREAM_TESTS=0   # clang's own -fclangir also diverges (upstream ClangIR bug)
+SKIP_MULTITU_TESTS=0    # an esbmc-eval task with several source files (multi-TU)
+SKIP_MODEL_TESTS=0      # CIR gen: a part of libc++ that the C++ models do not cover
 TIMEDOUT_TESTS=0
 interrupted=0
 
@@ -127,6 +130,11 @@ count_skip() {
     SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
     case "$1" in
         *"upstream ClangIR"*)    SKIP_UPSTREAM_TESTS=$((SKIP_UPSTREAM_TESTS + 1)) ;;
+        *"several translation units"*) SKIP_MULTITU_TESTS=$((SKIP_MULTITU_TESTS + 1)) ;;
+        # The models of README 8.2 stop the compilation of a header that they do
+        # not cover (#error "... is not modeled"). A missing std:: member can
+        # also be an error of the program, so it stays an other CIR-gen error.
+        *"is not modeled"*)      SKIP_MODEL_TESTS=$((SKIP_MODEL_TESTS + 1)) ;;
         *"blocklisted op"*)      SKIP_BLOCKLIST_TESTS=$((SKIP_BLOCKLIST_TESTS + 1)) ;;
         *"file not found"*)      SKIP_HEADER_TESTS=$((SKIP_HEADER_TESTS + 1)) ;;
         *"Not Yet Implemented"*) SKIP_NYI_TESTS=$((SKIP_NYI_TESTS + 1)) ;;
@@ -170,6 +178,8 @@ print_summary() {
     echo -e "  CIR not implemented:${YELLOW}$SKIP_NYI_TESTS${NC}   (ClangIR feature NYI)"
     echo -e "  other CIR-gen error:${YELLOW}$SKIP_OTHER_TESTS${NC}   (parse/compile error)"
     echo -e "  upstream ClangIR:   ${YELLOW}$SKIP_UPSTREAM_TESTS${NC}   (clang -fclangir also wrong — not our bug)"
+    echo -e "  several TUs:        ${YELLOW}$SKIP_MULTITU_TESTS${NC}   (esbmc-eval task with several source files)"
+    echo -e "  C++ model limit:    ${YELLOW}$SKIP_MODEL_TESTS${NC}   (CIR gen: not covered by models/)"
     echo -e "Timed out:          ${YELLOW}$TIMEDOUT_TESTS${NC}"
     echo -e "Failed:             ${RED}$FAILED_TESTS${NC}"
     echo -e "  mapper failed:      ${RED}$MAPPER_FAILED_TESTS${NC}"
@@ -191,15 +201,21 @@ print_summary() {
 
 JSON_OUT=""              # set via --json-out FILE
 EXTERNALIZE_STD_FLAG="--no-externalize-std"   # default; override with --externalize-std
+EXTRA_INCLUDES=()         # extra --include DIR flags forwarded to the runner
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --json-out)           JSON_OUT="$2"; shift 2 ;;
         --externalize-std)    EXTERNALIZE_STD_FLAG="--externalize-std";    shift ;;
         --no-externalize-std) EXTERNALIZE_STD_FLAG="--no-externalize-std"; shift ;;
+        --include)            EXTRA_INCLUDES+=("$2"); shift 2 ;;
         *) break ;;
     esac
 done
 export EXTERNALIZE_STD_FLAG
+# Bash arrays cannot be exported to parallel worker subshells, so flatten to a
+# newline-delimited scalar that workers can reconstruct.
+EXTRA_INCLUDES_STR=$(printf '%s\n' "${EXTRA_INCLUDES[@]}" 2>/dev/null || true)
+export EXTRA_INCLUDES_STR
 
 # Write a JSON file summarising the run (used by the GitHub Actions workflow to
 # build the PR comment table without fragile text parsing).
@@ -392,10 +408,71 @@ run_selfchecking() {
     if [[ $actual_exit -ne $ref_exit ]]; then
         echo "MISMATCH|$test_name|ran, exit code: expected $ref_exit, got $actual_exit"; return 1
     fi
+    # With --no-externalize-std, the ostream-sink model (README 8.2) discards
+    # the output of std::cout, std::cerr and std::clog, so the stdout of such a
+    # translation cannot agree with the native run. Only the exit code is
+    # compared; a test of this kind checks its results in its exit code.
+    if [[ "$lang" == "c++" && "$EXTERNALIZE_STD_FLAG" == "--no-externalize-std" ]] &&
+       grep -qE '\b(cout|cerr|clog)\b' "$src_file"; then
+        return 0
+    fi
     if ! diff -q "$ref_out" "$actual_out" > /dev/null 2>&1; then
         echo "MISMATCH|$test_name|ran, output differs from the native reference"; return 1
     fi
     return 0
+}
+
+# A test with "cir2c-test-log-lacks:" lines passes only when the translation log
+# contains none of the texts, for example a warning of cir2c.
+log_has_unwanted_text() {
+    local src_file="$1" pipeline_log="$2" text
+    while IFS= read -r text; do
+        [[ -z "$text" ]] && continue
+        if grep -qF -- "$text" "$pipeline_log"; then
+            echo "$text"; return 0
+        fi
+    done < <(sed -n 's|^// cir2c-test-log-lacks: ||p' "$src_file")
+    return 1
+}
+
+# A test with "cir2c-test-output-lacks:" lines passes only when the output C
+# contains none of the texts.
+output_has_unwanted_text() {
+    local src_file="$1" output_c_file="$2" text
+    while IFS= read -r text; do
+        [[ -z "$text" ]] && continue
+        if grep -qF -- "$text" "$output_c_file"; then
+            echo "$text"; return 0
+        fi
+    done < <(sed -n 's|^// cir2c-test-output-lacks: ||p' "$src_file")
+    return 1
+}
+
+# A test with "cir2c-test-output-contains:" lines passes only when the output C
+# contains each of the texts.
+output_lacks_wanted_text() {
+    local src_file="$1" output_c_file="$2" text
+    while IFS= read -r text; do
+        [[ -z "$text" ]] && continue
+        if ! grep -qF -- "$text" "$output_c_file"; then
+            echo "$text"; return 0
+        fi
+    done < <(sed -n 's|^// cir2c-test-output-contains: ||p' "$src_file")
+    return 1
+}
+
+# A test with "cir2c-test-cflags:" lines passes only when the output C compiles
+# with these options, for example -Werror=uninitialized for undefined behavior that
+# clang can report. Echoes the options when the compilation fails.
+output_fails_cflags() {
+    local src_file="$1" output_c_file="$2" log="$3" flags
+    flags=$(sed -n 's|^// cir2c-test-cflags: ||p' "$src_file" | tr '\n' ' ')
+    [[ -z "${flags// /}" ]] && return 1
+    # shellcheck disable=SC2086
+    if ! "$GCC" -c -fsyntax-only $flags "$output_c_file" > "$log" 2>&1; then
+        echo "$flags" | sed 's/ *$//'; return 0
+    fi
+    return 1
 }
 
 run_c_test() {
@@ -433,6 +510,20 @@ run_c_test() {
     if ! "$GCC" -c -fsyntax-only "$output_c_file" > "$compile_log" 2>&1; then
         echo "COMPILE_FAILED|$test_name|compilation failed"; return
     fi
+    local unwanted
+    if unwanted=$(log_has_unwanted_text "$c_file" "$pipeline_log"); then
+        echo "MISMATCH|$test_name|the log contains: $unwanted"; return
+    fi
+    local cflags_log="$INTEGRATION_OUTPUT_DIR/${test_name}_cflags_log.txt" failed
+    if failed=$(output_fails_cflags "$c_file" "$output_c_file" "$cflags_log"); then
+        echo "COMPILE_FAILED|$test_name|compilation with $failed failed"; return
+    fi
+    if unwanted=$(output_has_unwanted_text "$c_file" "$output_c_file"); then
+        echo "MISMATCH|$test_name|the output contains: $unwanted"; return
+    fi
+    if missing=$(output_lacks_wanted_text "$c_file" "$output_c_file"); then
+        echo "MISMATCH|$test_name|the output does not contain: $missing"; return
+    fi
 
     run_selfchecking "$test_name" "$c_file" "$output_c_file" c || return
     echo "PASSED|$test_name|"
@@ -456,6 +547,32 @@ run_cpp_test() {
         ${inc[@]+"${inc[@]}"} \
         "$cpp_file" "$output_c_file" >"$pipeline_log" 2>&1 || pipeline_rc=$?
 
+    # A test with "cir2c-test-expect-error:" lines must fail, and the log must
+    # contain each of the texts: a rejection by cir2c or by a model (README 8.2).
+    local expected text
+    expected=$(sed -n 's|^// cir2c-test-expect-error: ||p' "$cpp_file")
+    if [[ -n "$expected" && "$EXTERNALIZE_STD_FLAG" != "--no-externalize-std" ]]; then
+        echo "SKIPPED|$test_name|the expected error is for --no-externalize-std"; return
+    fi
+    # "cir2c-test-expect-error-externalize-std:" lines: an error that only
+    # --externalize-std gives. Without that option, the test runs as usual.
+    if [[ "$EXTERNALIZE_STD_FLAG" == "--externalize-std" ]]; then
+        local expected_ext
+        expected_ext=$(sed -n 's|^// cir2c-test-expect-error-externalize-std: ||p' "$cpp_file")
+        [[ -n "$expected_ext" ]] && expected="$expected_ext"
+    fi
+    if [[ -n "$expected" ]]; then
+        if [[ $pipeline_rc -eq 0 ]]; then
+            echo "MISMATCH|$test_name|translated, but the test expects an error"; return
+        fi
+        while IFS= read -r text; do
+            if ! grep -qF -- "$text" "$pipeline_log"; then
+                echo "MISMATCH|$test_name|the error does not contain: $text"; return
+            fi
+        done <<< "$expected"
+        echo "PASSED|$test_name|"; return
+    fi
+
     if [[ $pipeline_rc -eq 124 ]]; then
         echo "TIMEDOUT|$test_name|"; return
     fi
@@ -478,6 +595,20 @@ run_cpp_test() {
     "$GCC" -c -fsyntax-only "$output_c_file" > "$compile_log" 2>&1
     if grep -qE "error:.*before '::'|error:.*before '<'" "$compile_log"; then
         echo "COMPILE_FAILED|$test_name|C++ qualified names in struct/union identifiers"; return
+    fi
+    local unwanted
+    if unwanted=$(log_has_unwanted_text "$cpp_file" "$pipeline_log"); then
+        echo "MISMATCH|$test_name|the log contains: $unwanted"; return
+    fi
+    local cflags_log="$INTEGRATION_OUTPUT_DIR/${test_name}_cflags_log.txt" failed
+    if failed=$(output_fails_cflags "$cpp_file" "$output_c_file" "$cflags_log"); then
+        echo "COMPILE_FAILED|$test_name|compilation with $failed failed"; return
+    fi
+    if unwanted=$(output_has_unwanted_text "$cpp_file" "$output_c_file"); then
+        echo "MISMATCH|$test_name|the output contains: $unwanted"; return
+    fi
+    if missing=$(output_lacks_wanted_text "$cpp_file" "$output_c_file"); then
+        echo "MISMATCH|$test_name|the output does not contain: $missing"; return
     fi
 
     run_selfchecking "$test_name" "$cpp_file" "$output_c_file" c++ || return
@@ -508,6 +639,10 @@ run_llvm_test() {
 
     local -a inc=(); local _d
     while IFS= read -r _d; do [ -n "$_d" ] && inc+=(--include "$_d"); done < <(compute_includes "$src_file")
+    # Add extra include directories passed on the command line (e.g. libcxx-om).
+    if [ -n "${EXTRA_INCLUDES_STR:-}" ]; then
+        while IFS= read -r _d; do [ -n "$_d" ] && inc+=(--include "$_d"); done <<< "$EXTRA_INCLUDES_STR"
+    fi
     # shellcheck disable=SC2086
     timeout "$TIMEOUT" "$RUNNER" $lang_flag "$EXTERNALIZE_STD_FLAG" \
         --mlir "$mlir_file" \
@@ -566,10 +701,19 @@ run_llvm_test() {
     "$binary_file" > "$actual_out_file" 2>/dev/null
     local actual_exit=$?
 
+    # As in run_selfchecking: with --no-externalize-std, the ostream-sink model
+    # discards the output of std::cout, std::cerr and std::clog, so only the
+    # exit code of a C++ program that names one of them is compared.
+    local compare_output=true
+    if [[ "$ext" == "cpp" && "$EXTERNALIZE_STD_FLAG" == "--no-externalize-std" ]] &&
+       grep -qE '\b(cout|cerr|clog)\b' "$src_file"; then
+        compare_output=false
+    fi
     local mismatch_reason=""
     if [[ $actual_exit -ne $expected_exit ]]; then
         mismatch_reason="ran, exit code: expected $expected_exit, got $actual_exit"
-    elif ! diff -q "$expected_out_file" "$actual_out_file" > /dev/null 2>&1; then
+    elif [[ $compare_output == true ]] &&
+         ! diff -q "$expected_out_file" "$actual_out_file" > /dev/null 2>&1; then
         mismatch_reason="ran, output mismatch"
     fi
     if [[ -n "$mismatch_reason" ]]; then
@@ -579,6 +723,133 @@ run_llvm_test() {
         if clangir_also_diverges "$src_file" "$ext" "$expected_out_file" "$expected_exit"; then
             echo "SKIPPED|$test_id|upstream ClangIR bug ($mismatch_reason)"; return
         fi
+        echo "MISMATCH|$test_id|$mismatch_reason"; return
+    fi
+
+    echo "PASSED|$test_id|"
+}
+
+# ---------------------------------------------------------------------------
+# Worker: esbmc-eval test
+# Pass condition: the mapper produces a C file that COMPILES (no reference
+# output exists, so we cannot check run behaviour). Linking is attempted but
+# only used to produce a NOTRUN soft-pass, not a failure.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Worker: LLVM MultiSource test (multi-TU, output comparison)
+# ---------------------------------------------------------------------------
+run_llvm_multi_test() {
+    local test_dir="$1"
+    local pipeline_rc=0
+
+    # Collect all .c and .cpp source files in the directory
+    local -a src_files=()
+    while IFS= read -r f; do
+        src_files+=("$f")
+    done < <(find "$test_dir" -maxdepth 1 \( -name '*.c' -o -name '*.cpp' \) -type f | sort)
+
+    [ ${#src_files[@]} -eq 0 ] && return
+
+    # Determine language from the first source file
+    local lang_flag=""
+    case "${src_files[0]}" in
+        *.cpp) lang_flag="" ;;
+        *) lang_flag="--lang c" ;;
+    esac
+
+    # Find the reference output file
+    local ref_file=""
+    for f in "$test_dir"/*.reference_output; do
+        [ -f "$f" ] && { ref_file="$f"; break; }
+    done
+    [ -z "$ref_file" ] && return
+
+    # Test ID from the directory path
+    local rel_path="${test_dir#$LLVM_EVAL_DIR}"
+    local test_id="${rel_path//\//__}"
+    test_id="${test_id#/}"  # strip leading slash
+
+    local output_c_file="$LLVM_EVAL_OUTPUT_DIR/${test_id}_output.c"
+    local pipeline_log="$LLVM_EVAL_OUTPUT_DIR/${test_id}_pipeline_log.txt"
+
+    # Build include flags from the first source file
+    local -a inc=(); local _d
+    while IFS= read -r _d; do [ -n "$_d" ] && inc+=(--include "$_d"); done < <(compute_includes "${src_files[0]}")
+
+    # The program's own settings from llvm-test-suite: standard, defines,
+    # run arguments, stdin, numeric tolerance (see llvm-multisource-options.sh)
+    # shellcheck source=test/llvm-multisource-options.sh
+    source "$MULTISOURCE_OPTIONS"
+    multisource_options "${test_dir#*/MultiSource/}"
+    local -a opts=(); local _f
+    [[ -n "$MS_STD" ]] && opts+=(--std "$MS_STD")
+    for _f in ${MS_CFLAGS[@]+"${MS_CFLAGS[@]}"}; do opts+=(--cflag "$_f"); done
+
+    # Run the multi-file pipeline with the merge strategy MULTI_MERGE selects
+    # (c: merge the C outputs, cir: merge the CIR modules with cir-merge)
+    # shellcheck disable=SC2086
+    timeout "$TIMEOUT" "$RUNNER" $lang_flag "$EXTERNALIZE_STD_FLAG" \
+        ${inc[@]+"${inc[@]}"} ${opts[@]+"${opts[@]}"} --merge "${MULTI_MERGE:-c}" \
+        "${src_files[@]}" "$output_c_file" >"$pipeline_log" 2>&1 || pipeline_rc=$?
+
+    if [[ $pipeline_rc -eq 124 ]]; then
+        echo "TIMEDOUT|$test_id|"; return
+    fi
+    if [[ $pipeline_rc -eq 2 ]]; then
+        echo "SKIPPED|$test_id|CIR generation failed: $(skip_reason "$pipeline_log")"; return
+    fi
+    if [[ $pipeline_rc -eq 5 ]]; then
+        echo "SKIPPED|$test_id|cir-merge rejected: $(grep -m1 'cir-merge: error' "$pipeline_log" | sed 's/^cir-merge: error: [^:]*: //')"; return
+    fi
+    if [[ $pipeline_rc -ne 0 ]] || [ ! -f "$output_c_file" ]; then
+        echo "MAPPER_FAILED|$test_id|$(pipeline_stage "$pipeline_rc") failed"; return
+    fi
+
+    # Compile the merged C
+    local obj_file="$LLVM_EVAL_OUTPUT_DIR/${test_id}.o"
+    local gcc_log="$LLVM_EVAL_OUTPUT_DIR/${test_id}_gcc_log.txt"
+    if ! "$GCC" -c "$output_c_file" -o "$obj_file" > "$gcc_log" 2>&1; then
+        echo "COMPILE_FAILED|$test_id|compilation failed"; return
+    fi
+
+    # Link
+    local binary_file="$LLVM_EVAL_OUTPUT_DIR/${test_id}_binary"
+    local link_log="$LLVM_EVAL_OUTPUT_DIR/${test_id}_link_log.txt"
+    if ! "$GCC" "$obj_file" -o "$binary_file" -lm > "$link_log" 2>&1; then
+        echo "NOTRUN|$test_id|valid C, could not link"; return
+    fi
+
+    # Extract expected output and exit code from reference file
+    local expected_exit
+    expected_exit=$(awk 'END{ if (match($0, /exit [0-9]+$/)) print substr($0, RSTART + 5, RLENGTH - 5) + 0; else print 0 }' "$ref_file")
+    local expected_out_file="$LLVM_EVAL_OUTPUT_DIR/${test_id}_expected.txt"
+    awk 'NR==1{prev=$0;next}{print prev;prev=$0}END{sub(/exit [0-9]+$/,"",prev);printf "%s",prev}' \
+        "$ref_file" > "$expected_out_file"
+
+    # Run the program in its directory, where its input files are, with its
+    # arguments and stdin. The reference outputs hold stdout and stderr.
+    local out_dir_abs
+    out_dir_abs=$(cd "$LLVM_EVAL_OUTPUT_DIR" && pwd)
+    local actual_out_file="$out_dir_abs/${test_id}_actual.txt"
+    local stdin_file=/dev/null
+    [[ -n "$MS_STDIN" ]] && stdin_file="$test_dir/$MS_STDIN"
+    (cd "$test_dir" && timeout "$TIMEOUT" "$out_dir_abs/${test_id}_binary" \
+        ${MS_RUN_ARGS[@]+"${MS_RUN_ARGS[@]}"} <"$stdin_file" >"$actual_out_file" 2>&1)
+    local actual_exit=$?
+    if [[ $actual_exit -eq 124 ]]; then
+        echo "TIMEDOUT|$test_id|"; return
+    fi
+
+    local mismatch_reason=""
+    if [[ $actual_exit -ne $expected_exit ]]; then
+        mismatch_reason="ran, exit code: expected $expected_exit, got $actual_exit"
+    elif [[ -n "$MS_FP_TOLERANCE" ]]; then
+        python3 "$FPCMP" "$MS_FP_TOLERANCE" "$expected_out_file" "$actual_out_file" ||
+            mismatch_reason="ran, output mismatch (relative tolerance $MS_FP_TOLERANCE)"
+    elif ! diff -q "$expected_out_file" "$actual_out_file" > /dev/null 2>&1; then
+        mismatch_reason="ran, output mismatch"
+    fi
+    if [[ -n "$mismatch_reason" ]]; then
         echo "MISMATCH|$test_id|$mismatch_reason"; return
     fi
 
@@ -606,6 +877,14 @@ run_esbmc_test() {
     # Include the test's own directory so any sibling header files are found.
     local src_dir
     src_dir=$(cd "$(dirname "$src_file")" 2>/dev/null && pwd)
+
+    # A task with several source files is a program of several translation
+    # units. The suite translates one file, so such a task is not in scope.
+    local sources
+    sources=$(find "$src_dir" -maxdepth 1 \( -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' \) | wc -l)
+    if [[ $sources -gt 1 ]]; then
+        echo "SKIPPED|$test_id|several translation units ($sources source files)"; return
+    fi
     timeout "$TIMEOUT" "$RUNNER" "$EXTERNALIZE_STD_FLAG" \
         --mlir "$mlir_file" \
         --include "$src_dir" \
@@ -641,9 +920,12 @@ run_esbmc_test() {
 }
 
 # Export everything workers need
+MULTISOURCE_OPTIONS="$SCRIPT_DIR/llvm-multisource-options.sh"
+FPCMP="$SCRIPT_DIR/fpcmp.py"
+export MULTISOURCE_OPTIONS FPCMP
 export TIMEOUT RUNNER GCC CLANGPP INTEGRATION_OUTPUT_DIR LLVM_EVAL_DIR LLVM_EVAL_OUTPUT_DIR
-export ESBMC_EVAL_DIR ESBMC_EVAL_OUTPUT_DIR EXTERNALIZE_STD_FLAG
-export -f pipeline_stage run_selfchecking run_c_test run_cpp_test run_llvm_test run_esbmc_test
+export ESBMC_EVAL_DIR ESBMC_EVAL_OUTPUT_DIR EXTERNALIZE_STD_FLAG MULTI_MERGE EXTRA_INCLUDES_STR
+export -f pipeline_stage log_has_unwanted_text output_has_unwanted_text output_lacks_wanted_text output_fails_cflags run_selfchecking run_c_test run_cpp_test run_llvm_test run_llvm_multi_test run_esbmc_test
 
 # ---------------------------------------------------------------------------
 # Preflight checks
@@ -829,7 +1111,9 @@ else
         while IFS= read -r f; do
             ext="${f##*.}"; base="${f%.$ext}"
             [ -f "${base}.reference_output" ] && echo "$f"
-        done < <(find "$LLVM_EVAL_DIR" \( -name "*.cpp" -o -name "*.c" \) | sort)
+        # MultiSource programs are tested as wholes by RUN_LLVM_MULTI.
+        done < <(find "$LLVM_EVAL_DIR" -path "${LLVM_EVAL_DIR%/}/MultiSource" -prune \
+                     -o \( -name "*.cpp" -o -name "*.c" \) -print | sort)
     )
     printf "\r%-30s\r" ""  # clear the scanning line
     llvm_total=${#llvm_files[@]}
@@ -886,6 +1170,95 @@ else
 fi
 
 fi   # end RUN_LLVM
+
+[[ $interrupted -eq 1 ]] && exit 130
+echo ""
+
+# ---------------------------------------------------------------------------
+# LLVM MultiSource Tests (multi-TU, output comparison)
+# ---------------------------------------------------------------------------
+if [[ "${RUN_LLVM_MULTI:-0}" -eq 0 ]]; then
+    echo -e "${YELLOW}Skipping LLVM MultiSource tests (RUN_LLVM_MULTI=0).${NC}"
+else
+echo "======================================"
+echo "  Running LLVM MultiSource Tests"
+echo "======================================"
+echo ""
+
+multi_src_dir="$LLVM_EVAL_DIR/MultiSource"
+if [ ! -d "$multi_src_dir" ]; then
+    echo -e "${YELLOW}SKIPPED: MultiSource directory not found at $multi_src_dir${NC}"
+elif [ ! -f "$CLANGPP" ]; then
+    echo -e "${YELLOW}SKIPPED: clang++ not found at $CLANGPP${NC}"
+else
+    mkdir -p "$LLVM_EVAL_OUTPUT_DIR"
+
+    # Discover multi-TU test directories: those containing a .reference_output
+    # file alongside .c/.cpp source files, within the MultiSource subdirectory.
+    printf "  Scanning test directories..."
+    mapfile -t multi_dirs < <(
+        find "$multi_src_dir" -name '*.reference_output' -print0 | \
+        while IFS= read -r -d '' ref; do
+            dir=$(dirname "$ref")
+            src_count=$(find "$dir" -maxdepth 1 \( -name '*.c' -o -name '*.cpp' \) -type f | wc -l)
+            [ "$src_count" -gt 0 ] && echo "$dir"
+        done | sort -u
+    )
+    printf "\r%-30s\r" ""
+    multi_total=${#multi_dirs[@]}
+    multi_cur=0
+
+    if [[ $multi_total -gt 0 ]]; then
+        bar_draw 0 "$multi_total"
+
+        while IFS='|' read -r result test_id message; do
+            multi_cur=$((multi_cur + 1))
+            TOTAL_TESTS=$((TOTAL_TESTS + 1))
+            bar_draw "$multi_cur" "$multi_total"
+
+            case "$result" in
+                PASSED)
+                    PASSED_TESTS=$((PASSED_TESTS + 1))
+                    ;;
+                NOTRUN)
+                    NOTRUN_TESTS=$((NOTRUN_TESTS + 1))
+                    ;;
+                MISMATCH)
+                    bar_println "$multi_cur" "$multi_total" \
+                        "$(printf "  ${RED}MISMATCH${NC}   %s (%s)" "$test_id" "$message")"
+                    MISMATCH_TESTS=$((MISMATCH_TESTS + 1))
+                    FAILED_TESTS=$((FAILED_TESTS + 1))
+                    ;;
+                TIMEDOUT)
+                    bar_println "$multi_cur" "$multi_total" \
+                        "$(printf "  ${YELLOW}TIMED OUT${NC} %s" "$test_id")"
+                    TIMEDOUT_TESTS=$((TIMEDOUT_TESTS + 1))
+                    ;;
+                SKIPPED)
+                    bar_println "$multi_cur" "$multi_total" \
+                        "$(printf "  ${YELLOW}SKIPPED${NC}  %s (%s)" "$test_id" "$message")"
+                    count_skip "$message"
+                    ;;
+                MAPPER_FAILED)
+                    bar_println "$multi_cur" "$multi_total" \
+                        "$(printf "  ${RED}MAPPER FAIL${NC} %s (%s)" "$test_id" "$message")"
+                    FAILED_TESTS=$((FAILED_TESTS + 1))
+                    MAPPER_FAILED_TESTS=$((MAPPER_FAILED_TESTS + 1))
+                    ;;
+                COMPILE_FAILED)
+                    bar_println "$multi_cur" "$multi_total" \
+                        "$(printf "  ${RED}COMPILE FAIL${NC} %s (%s)" "$test_id" "$message")"
+                    FAILED_TESTS=$((FAILED_TESTS + 1))
+                    COMPILE_FAILED_TESTS=$((COMPILE_FAILED_TESTS + 1))
+                    ;;
+            esac
+        done < <(parallel --will-cite --line-buffer -j "$JOBS" run_llvm_multi_test ::: "${multi_dirs[@]}")
+
+        printf "\n"  # move past the bar line
+    fi
+fi
+
+fi   # end RUN_LLVM_MULTI
 
 # ---------------------------------------------------------------------------
 # ESBMC-eval Tests

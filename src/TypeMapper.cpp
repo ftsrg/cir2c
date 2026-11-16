@@ -23,26 +23,192 @@
 
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 
+#include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/StringRef.h>
+#include <llvm/Support/raw_ostream.h>
+
+#include <algorithm>
+#include <functional>
+#include <vector>
 
 using namespace mlir;
 
 namespace cir2c {
 
-// Strip CIR's ".base" suffix before sanitizing a record type name.
-// CIR emits "X.base" as the internal name for the base subobject layout of
-// class X when it is embedded in a derived class. Stripping it ensures the
-// generated C reuses the same struct tag as the complete class, which is
-// correct because: (a) the '.' character is impossible in any user-defined
-// C++ class name so there is no ambiguity, and (b) the base subobject layout
-// is layout-compatible with the complete type for verification purposes.
+// Clang names an unnamed class by its source location, for example
+// "(lambda at /home/user/llvm/include/c++/v1/list:1276:48)". The directory is
+// that of the machine that ran clang, so a name keeps only the last `depth`
+// components of the path: with depth 1, only the file name.
+static std::string keepLocationTail(llvm::StringRef raw, unsigned depth) {
+  std::string out;
+  size_t pos = 0;
+  while (true) {
+    size_t at = raw.find(" at ", pos);
+    if (at == llvm::StringRef::npos) break;
+    size_t close = raw.find(')', at);
+    if (close == llvm::StringRef::npos) break;
+    llvm::StringRef location = raw.slice(at + 4, close);
+    size_t cut = llvm::StringRef::npos;
+    unsigned slashes = 0;
+    for (size_t i = location.size(); i-- > 0;)
+      if (location[i] == '/' && ++slashes == depth) {
+        cut = i;
+        break;
+      }
+    out += raw.slice(pos, at + 4).str();
+    out += (cut == llvm::StringRef::npos ? location : location.drop_front(cut + 1)).str();
+    pos = close;
+  }
+  out += raw.drop_front(pos).str();
+  return out;
+}
+
+// The number of path components of the longest source location in `raw`.
+static unsigned locationDepth(llvm::StringRef raw) {
+  unsigned depth = 0;
+  for (size_t at = raw.find(" at "); at != llvm::StringRef::npos;
+       at = raw.find(" at ", at + 4)) {
+    size_t close = raw.find(')', at);
+    if (close == llvm::StringRef::npos) break;
+    depth = std::max<unsigned>(depth, raw.slice(at + 4, close).count('/') + 1);
+  }
+  return depth;
+}
+
+// CIR names the layout of class X as a base subobject "X.base" when it differs
+// from the layout of a complete X: a base subobject has no tail padding,
+// because a derived class can place its own members there (Itanium C++ ABI).
+// For example, the value of a std::set<int> node lies in the tail padding of
+// __tree_node_base. The C output needs both layouts, so "X.base" gets its own
+// struct tag, "<tag of X>__base" (issue #4). A '.' cannot occur in a C++ class
+// name, so the suffix identifies the base layout.
+static bool isBaseLayout(llvm::StringRef raw) { return raw.ends_with(".base"); }
+static llvm::StringRef withoutBase(llvm::StringRef raw) {
+  return isBaseLayout(raw) ? raw.drop_back(5) : raw;
+}
+
 /*static*/
-std::string TypeMapper::recordCName(mlir::StringAttr nameAttr) {
+std::string TypeMapper::plainCName(llvm::StringRef raw) {
+  return Mapper::sanitizeIdentifier(keepLocationTail(withoutBase(raw), 1));
+}
+
+std::string TypeMapper::recordCName(mlir::StringAttr nameAttr) const {
   if (!nameAttr || nameAttr.getValue().empty()) return "anon_struct";
-  llvm::StringRef raw = nameAttr.getValue();
-  if (raw.ends_with(".base"))
-    raw = raw.drop_back(5);
-  return Mapper::sanitizeIdentifier(raw.str());
+  return recordCName(nameAttr.getValue());
+}
+
+std::string TypeMapper::recordCName(llvm::StringRef raw) const {
+  std::string key = raw.str();
+  auto it = recordCNames_.find(key);
+  if (it != recordCNames_.end()) return it->second;
+  // A record that planRecordNames did not see gets a free tag now.
+  std::string base = isBaseLayout(raw) ? recordCName(withoutBase(raw)) + "__base"
+                                       : plainCName(raw);
+  std::string name = base;
+  for (unsigned n = 2; usedRecordCNames_.count(name); ++n)
+    name = base + "_" + std::to_string(n);
+  usedRecordCNames_.insert(name);
+  recordCNames_[key] = name;
+  return name;
+}
+
+void TypeMapper::planRecordNames(mlir::ModuleOp module) {
+  recordCNames_.clear();
+  usedRecordCNames_.clear();
+  moduleDependentRecordNames_.clear();
+
+  // Every record name of the module: in the types of the values and of the
+  // attributes (function types, the types of globals, initializers), and in
+  // the members of the records found.
+  std::set<std::string> names, baseNames;
+  llvm::DenseSet<mlir::Type> seen;
+  std::function<void(mlir::Type)> visit = [&](mlir::Type t) {
+    if (!t || !seen.insert(t).second) return;
+    if (auto rec = mlir::dyn_cast<cir::RecordType>(t)) {
+      if (rec.getName() && !rec.getName().getValue().empty()) {
+        llvm::StringRef name = rec.getName().getValue();
+        names.insert(withoutBase(name).str());
+        if (isBaseLayout(name)) baseNames.insert(name.str());
+      }
+      if (rec.isComplete())
+        for (mlir::Type member : rec.getMembers()) visit(member);
+    } else if (auto ptr = mlir::dyn_cast<cir::PointerType>(t)) {
+      visit(ptr.getPointee());
+    } else if (auto arr = mlir::dyn_cast<cir::ArrayType>(t)) {
+      visit(arr.getElementType());
+    } else if (auto fn = mlir::dyn_cast<cir::FuncType>(t)) {
+      for (mlir::Type input : fn.getInputs()) visit(input);
+      visit(fn.getReturnType());
+    } else if (auto cx = mlir::dyn_cast<cir::ComplexType>(t)) {
+      visit(cx.getElementType());
+    }
+  };
+  module->walk([&](mlir::Operation *op) {
+    for (mlir::Type t : op->getResultTypes()) visit(t);
+    for (mlir::Type t : op->getOperandTypes()) visit(t);
+    for (mlir::Region &region : op->getRegions())
+      for (mlir::Block &block : region)
+        for (mlir::BlockArgument arg : block.getArguments()) visit(arg.getType());
+    op->getAttrDictionary().walk([&](mlir::Type t) { visit(t); });
+  });
+
+  // Group the names by their plain tag. A name alone in its group keeps it.
+  std::map<std::string, std::vector<std::string>> groups;
+  for (const std::string &name : names) groups[plainCName(name)].push_back(name);
+  for (auto &[tag, group] : groups)
+    if (group.size() == 1) {
+      recordCNames_[group.front()] = tag;
+      usedRecordCNames_.insert(tag);
+    }
+  for (auto &[tag, group] : groups) {
+    if (group.size() == 1) continue;
+    // Names that differ only in the directories of their source locations
+    // keep more components of the path, until they differ. The tail of a
+    // path does not depend on the machine.
+    std::vector<std::string> chosen;
+    unsigned maxDepth = 0;
+    for (const std::string &name : group)
+      maxDepth = std::max(maxDepth, locationDepth(name));
+    for (unsigned depth = 2; depth <= maxDepth && chosen.empty(); ++depth) {
+      std::vector<std::string> candidate;
+      std::set<std::string> distinct;
+      for (const std::string &name : group) {
+        candidate.push_back(Mapper::sanitizeIdentifier(keepLocationTail(name, depth)));
+        distinct.insert(candidate.back());
+      }
+      bool free = distinct.size() == group.size();
+      for (const std::string &c : candidate) free = free && !usedRecordCNames_.count(c);
+      if (free) chosen = candidate;
+    }
+    // Other names, for example `ns::X` and `ns__X`: a numeric suffix in the
+    // order of the names, as for functions with one name.
+    if (chosen.empty())
+      for (size_t i = 0; i < group.size(); ++i) {
+        std::string name = tag;
+        for (unsigned n = 2; usedRecordCNames_.count(name) ||
+                             std::count(chosen.begin(), chosen.end(), name);
+             ++n)
+          name = tag + "_" + std::to_string(n);
+        chosen.push_back(name);
+      }
+    for (size_t i = 0; i < group.size(); ++i) {
+      recordCNames_[group[i]] = chosen[i];
+      usedRecordCNames_.insert(chosen[i]);
+      moduleDependentRecordNames_.push_back(group[i]);
+    }
+  }
+
+  // The base-subobject layouts last, so that each complete record keeps the
+  // tag that it has without them.
+  for (const std::string &name : baseNames) {
+    std::string tag = recordCNames_.at(withoutBase(name).str()) + "__base";
+    std::string chosen = tag;
+    for (unsigned n = 2; usedRecordCNames_.count(chosen); ++n)
+      chosen = tag + "_" + std::to_string(n);
+    if (chosen != tag) moduleDependentRecordNames_.push_back(name);
+    recordCNames_[name] = chosen;
+    usedRecordCNames_.insert(chosen);
+  }
 }
 
 std::string TypeMapper::anonRecordCName(mlir::Type recordType) const {
@@ -52,6 +218,16 @@ std::string TypeMapper::anonRecordCName(mlir::Type recordType) const {
   std::string name = "anon_struct_" + std::to_string(anonRecordNames_.size());
   anonRecordNames_[recordType] = name;
   return name;
+}
+
+std::string TypeMapper::unsupportedType(mlir::Type t) const {
+  std::string text;
+  llvm::raw_string_ostream os(text);
+  t.print(os);
+  auto it = std::find(unsupportedTypes_.begin(), unsupportedTypes_.end(), os.str());
+  size_t index = it - unsupportedTypes_.begin();
+  if (it == unsupportedTypes_.end()) unsupportedTypes_.push_back(os.str());
+  return kUnsupportedTypeMarker + std::to_string(index);
 }
 
 std::string TypeMapper::mapTypeToC(mlir::Type t) const {
@@ -70,7 +246,7 @@ std::string TypeMapper::mapTypeToC(mlir::Type t) const {
     case 64:
       return "long";
     default:
-      return "long";
+      return unsupportedType(t);
     }
   }
 
@@ -78,18 +254,15 @@ std::string TypeMapper::mapTypeToC(mlir::Type t) const {
   if (auto ft = mlir::dyn_cast<mlir::FloatType>(t)) {
     unsigned w = ft.getWidth();
     switch (w) {
-    case 16:
-      return "float"; // half precision, approximate as float
     case 32:
       return "float";
     case 64:
       return "double";
     case 80:
       return "long double"; // x87 extended precision
-    case 128:
-      return "long double"; // quad precision, approximate as long double
     default:
-      return "double";
+      // Half and quad precision have no C type with their rounding.
+      return unsupportedType(t);
     }
   }
 
@@ -132,9 +305,15 @@ std::string TypeMapper::mapTypeToC(mlir::Type t) const {
     // width above 32 was silently truncated, and a struct passed by value lost
     // its top bytes. Widths at or below 32 keep the historical "int" so this
     // stays a fix for the truncating cases only.
+    // The wider type keeps the bits of a value that is only loaded, stored or
+    // passed. Mapper::mapOperation stops at any other operation on such a
+    // value, because its arithmetic would not wrap at the width.
     if (width > 32 && width <= 64)
       return isSigned ? "long" : "unsigned long";
-    return "int"; // fallback (widths <= 32; wider than needed but lossless)
+    if (width < 32)
+      return "int";
+    // Wider than 64 bits, for example _BitInt(100) or __int128: no C type.
+    return unsupportedType(t);
   }
 
   // Handle CIR floating-point types
@@ -201,6 +380,12 @@ std::string TypeMapper::mapTypeToC(mlir::Type t) const {
 
     // For other pointer types, recursively map the pointee and add *
     std::string pointeeType = mapTypeToC(pointee);
+    // A pointer to a type without a C type points to an incomplete struct: it
+    // can be stored and passed, and a read through it or arithmetic on it does
+    // not compile.
+    llvm::StringRef marker(kUnsupportedTypeMarker);
+    if (llvm::StringRef(pointeeType).starts_with(marker))
+      return "struct __cir2c_opaque_" + pointeeType.substr(marker.size()) + "*";
     return pointeeType + "*";
   }
 
@@ -231,8 +416,14 @@ std::string TypeMapper::mapTypeToC(mlir::Type t) const {
     return mapTypeToC(elemType);
   }
 
-  // Conservative default for unknown types
-  return "int";
+  // The tokens of the exception handling have no values in the output, only
+  // names that the handlers write and read.
+  if (mlir::isa<cir::CatchTokenType, cir::CleanupTokenType, cir::EhTokenType>(t))
+    return "int";
+
+  // For example a vector (outside the blocklist of the tests), a member
+  // pointer that the calling-convention lowering left, or a CUDA type.
+  return unsupportedType(t);
 }
 
 std::string TypeMapper::arrayBaseTypeAndDims(mlir::Type t, std::string &dimsOut) const {

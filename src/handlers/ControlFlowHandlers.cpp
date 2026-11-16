@@ -200,22 +200,21 @@ private:
       case cir::CaseOpKind::Equal:
         for (auto attr : values) {
           auto intAttr = llvm::cast<cir::IntAttr>(attr);
-          out << "  case " << intAttr.getValue().getSExtValue() << ": ;\n";
+          out << "  case " << ConstantEmitter::formatIntLiteral(intAttr) << ": ;\n";
         }
         break;
       case cir::CaseOpKind::Anyof:
         // Multiple discrete values that all map to the same body.
         for (auto attr : values) {
           auto intAttr = llvm::cast<cir::IntAttr>(attr);
-          out << "  case " << intAttr.getValue().getSExtValue() << ": ;\n";
+          out << "  case " << ConstantEmitter::formatIntLiteral(intAttr) << ": ;\n";
         }
         break;
       case cir::CaseOpKind::Range:
         // GCC extension: "case lo ... hi:".  values[0] = lo, values[1] = hi.
         if (values.size() == 2) {
-          int64_t lo = llvm::cast<cir::IntAttr>(values[0]).getValue().getSExtValue();
-          int64_t hi = llvm::cast<cir::IntAttr>(values[1]).getValue().getSExtValue();
-          out << "  case " << lo << " ... " << hi << ": ;\n";
+          out << "  case " << ConstantEmitter::formatIntLiteral(values[0]) << " ... "
+              << ConstantEmitter::formatIntLiteral(values[1]) << ": ;\n";
         }
         break;
       }
@@ -252,7 +251,7 @@ private:
       for (unsigned i = 0; i < numCases && i + 1 < o->getNumSuccessors(); ++i) {
         if (auto intAttr = llvm::dyn_cast<mlir::IntegerAttr>(caseVals[i])) {
           std::string label = m.getOrCreateLabel(o->getSuccessors()[i + 1]);
-          out << "    case " << intAttr.getValue().getSExtValue() << ": goto " << label << ";\n";
+          out << "    case " << ConstantEmitter::formatIntLiteral(intAttr) << ": goto " << label << ";\n";
         }
       }
     }

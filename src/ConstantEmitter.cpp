@@ -26,6 +26,7 @@
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 
 #include <llvm/ADT/APFloat.h>
+#include <cstdint>
 
 using namespace mlir;
 
@@ -34,6 +35,31 @@ namespace cir2c {
 // Format an APFloat as a C literal, normalising the +Inf/-Inf/+NaN/-NaN spellings
 // that APFloat::toString() emits (which are not valid C) into builtins.
 /*static*/
+// A decimal literal without a suffix has a signed type. Thus the signed reading
+// of an unsigned value with the top bit set is negative, which is correct only
+// through the conversion at the assignment, and -9223372036854775808 is not a
+// constant at all: 9223372036854775808 fits in no signed type (C11 6.4.4p2).
+// gcc and clang take it as unsigned with a warning, which -Werror stops.
+std::string ConstantEmitter::formatIntLiteral(const llvm::APInt &v, bool isUnsigned) {
+  if (isUnsigned && v.getActiveBits() <= 64) {
+    uint64_t u = v.getZExtValue();
+    return std::to_string(u) + (u > uint64_t(INT64_MAX) ? "UL" : "");
+  }
+  int64_t s = v.getSExtValue();
+  if (s == INT64_MIN) return "(-9223372036854775807L - 1)";
+  return std::to_string(s);
+}
+
+std::string ConstantEmitter::formatIntLiteral(mlir::Attribute intAttr) {
+  if (auto ia = mlir::dyn_cast<cir::IntAttr>(intAttr)) {
+    auto it = mlir::dyn_cast<cir::IntType>(ia.getType());
+    return formatIntLiteral(ia.getValue(), it && it.isUnsigned());
+  }
+  auto ia = mlir::cast<mlir::IntegerAttr>(intAttr);
+  auto it = mlir::dyn_cast<mlir::IntegerType>(ia.getType());
+  return formatIntLiteral(ia.getValue(), it && it.isUnsigned());
+}
+
 std::string ConstantEmitter::formatFpLiteral(const llvm::APFloat &v,
                                              const std::string &ctype) {
   auto pick = [&](const char *f, const char *l, const char *d) -> std::string {
@@ -96,8 +122,8 @@ std::string ConstantEmitter::formatConstInit(const Mapper &ctx,
       return "{0}";
     return "0";
   }
-  if (auto ia = mlir::dyn_cast<cir::IntAttr>(attr))
-    return std::to_string(ia.getValue().getSExtValue());
+  if (mlir::isa<cir::IntAttr>(attr))
+    return formatIntLiteral(attr);
   if (auto ba = mlir::dyn_cast<cir::BoolAttr>(attr))
     return ba.getValue() ? "1" : "0";
   if (auto fp = mlir::dyn_cast<cir::FPAttr>(attr))
@@ -171,7 +197,7 @@ std::string ConstantEmitter::formatConstInit(const Mapper &ctx,
           curType = at.getElementType();
         } else if (auto rt = mlir::dyn_cast_if_present<cir::RecordType>(curType)) {
           std::string recN = rt.getName() && !rt.getName().getValue().empty()
-                                 ? TypeMapper::recordCName(rt.getName()) : ctx.anonRecordCName(rt);
+                                 ? ctx.recordCName(rt.getName()) : ctx.anonRecordCName(rt);
           std::string fn = ctx.lookupFieldName(recN, (int)idx);
           access += "." + (fn.empty() ? ("__field" + std::to_string(idx)) : fn);
           curType = (idx >= 0 && (size_t)idx < rt.getMembers().size())

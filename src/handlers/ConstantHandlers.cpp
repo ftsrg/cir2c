@@ -103,12 +103,8 @@ private:
     // Try to find literals: integers, floats, or bools
     for (NamedAttribute a : o->getAttrs()) {
       // Integer literals
-      if (auto ia = llvm::dyn_cast<mlir::IntegerAttr>(a.getValue())) {
-        litVal = std::to_string(ia.getValue().getSExtValue());
-        break;
-      }
-      if (auto cia = llvm::dyn_cast<cir::IntAttr>(a.getValue())) {
-        litVal = std::to_string(static_cast<int64_t>(cia.getValue().getSExtValue()));
+      if (mlir::isa<mlir::IntegerAttr, cir::IntAttr>(a.getValue())) {
+        litVal = ConstantEmitter::formatIntLiteral(a.getValue());
         break;
       }
       // Boolean literals
@@ -218,6 +214,15 @@ private:
         m.setName(o->getResult(0), tmp);
         m.markAsDirectAccess(o->getResult(0));
       }
+      return true;
+    }
+
+    // A record of size 0 (only a zero-length array, a GNU extension) has no
+    // value, and clang rejects `{0}` for it.
+    if (literal == "{0}" && resultType && mlir::isa<cir::RecordType>(resultType) &&
+        mlir::DataLayout::closest(o).getTypeSize(resultType) == 0) {
+      out << "  " << ctype << " " << tmp << ";\n";
+      if (o->getNumResults() > 0) m.setName(o->getResult(0), tmp);
       return true;
     }
 

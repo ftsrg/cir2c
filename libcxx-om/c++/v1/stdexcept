@@ -1,0 +1,55 @@
+// Part of the cir2c operational models of libc++. See OM_DESIGN.md.
+// Copyright 2025 Budapest University of Technology and Economics
+// Licensed under the Apache License, Version 2.0
+// std::logic_error and friends holding the message by pointer. libc++ defines them in
+// the compiled library around a reference-counted string.
+#ifndef _LIBCPP_STDEXCEPT
+#define _LIBCPP_STDEXCEPT
+
+#include <__config>
+#include <__exception/exception.h>
+#include <__fwd/string.h>
+
+_LIBCPP_BEGIN_NAMESPACE_STD
+
+class __om_message_error : public exception {
+  const char* __msg_;
+
+protected:
+  explicit __om_message_error(const char* __m) noexcept : __msg_(__m) {}
+
+public:
+  const char* what() const noexcept override { return __msg_; }
+};
+
+#define _OM_ERROR(_Name, _Base)                                                                                        \
+  class _Name : public _Base {                                                                                         \
+  public:                                                                                                              \
+    explicit _Name(const char* __m) noexcept : _Base(__m) {}                                                           \
+    template <class _S, class = decltype(static_cast<_S*>(nullptr)->c_str())>                                          \
+    explicit _Name(const _S& __s) noexcept : _Base(__s.c_str()) {}                                                     \
+  };
+_OM_ERROR(logic_error, __om_message_error)
+_OM_ERROR(runtime_error, __om_message_error)
+_OM_ERROR(domain_error, logic_error)
+_OM_ERROR(invalid_argument, logic_error)
+_OM_ERROR(length_error, logic_error)
+_OM_ERROR(out_of_range, logic_error)
+_OM_ERROR(range_error, runtime_error)
+_OM_ERROR(overflow_error, runtime_error)
+_OM_ERROR(underflow_error, runtime_error)
+#undef _OM_ERROR
+
+[[noreturn]] inline void __throw_runtime_error(const char* __m) { throw runtime_error(__m); }
+[[noreturn]] inline void __throw_logic_error(const char* __m) { throw logic_error(__m); }
+[[noreturn]] inline void __throw_domain_error(const char* __m) { throw domain_error(__m); }
+[[noreturn]] inline void __throw_invalid_argument(const char* __m) { throw invalid_argument(__m); }
+[[noreturn]] inline void __throw_length_error(const char* __m) { throw length_error(__m); }
+[[noreturn]] inline void __throw_out_of_range(const char* __m) { throw out_of_range(__m); }
+[[noreturn]] inline void __throw_range_error(const char* __m) { throw range_error(__m); }
+[[noreturn]] inline void __throw_overflow_error(const char* __m) { throw overflow_error(__m); }
+[[noreturn]] inline void __throw_underflow_error(const char* __m) { throw underflow_error(__m); }
+
+_LIBCPP_END_NAMESPACE_STD
+
+#endif

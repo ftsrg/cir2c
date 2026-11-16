@@ -19,6 +19,7 @@
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Types.h>
 #include <llvm/ADT/APFloat.h>
+#include <llvm/ADT/APInt.h>
 #include <string>
 
 namespace cir2c {
@@ -43,9 +44,16 @@ public:
   static std::string formatFpLiteral(const llvm::APFloat &v,
                                      const std::string &ctype);
 
-private:
+  /// Format an integer constant as a C literal with the value of the constant
+  /// in its CIR type (unsigned or signed). Also used by the cir.const handler.
+  static std::string formatIntLiteral(const llvm::APInt &v, bool isUnsigned);
+  /// The same for a cir::IntAttr or an mlir::IntegerAttr, with the signedness
+  /// of its type.
+  static std::string formatIntLiteral(mlir::Attribute intAttr);
+
   /// Escape raw bytes for a C string literal. Uses 3-digit octal for
   /// non-printing bytes (a \xHH escape greedily eats following hex digits).
+  /// Also used by Mapper::constantStringLiteral.
   static std::string escapeCString(const std::string &bytes);
 };
 

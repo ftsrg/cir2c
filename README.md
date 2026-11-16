@@ -84,7 +84,7 @@ of these intrinsics in the output file.
 | Construction | Form in the output |
 |---|---|
 | Unknown value | `__VERIFIER_nondet_<type>()`, `__VERIFIER_nondet_memory(p, n)` |
-| Virtual dispatch | `__VERIFIER_virtual_call_<sig>(obj, slot, …)` with a vtable |
+| Virtual dispatch | `__VERIFIER_virtual_call_<sig>(obj, slot, first, …)` with a vtable |
 | `throw`, `try`, `catch` | The `__cir_exc_*` global variables and a comparison of the RTTI tag |
 | Static initialization | Calls to the global constructors at the start of `main` |
 | C++ names | Demangled and made safe: `ns::f(int)` becomes `ns__f_int` |
@@ -293,9 +293,8 @@ linker in one `--start-group` list. The pinned toolchain is fully static.
 
 ### 5.1 The run-cir2c.sh script
 
-The `run-cir2c.sh` script is the recommended interface. The script does all four
-steps: `clang -emit-cir`, then preprocessing, then optional flattening, then
-`cir2c`.
+The `run-cir2c.sh` script is the recommended interface. The script does all three
+steps: `clang -emit-cir`, then preprocessing, then `cir2c`.
 
 ```bash
 ./run-cir2c.sh input.c   output.c     # A C program
@@ -304,27 +303,57 @@ steps: `clang -emit-cir`, then preprocessing, then optional flattening, then
 
 The script makes the output directory if it is not there.
 
+The script gives these options to `clang`, in addition to the options of the
+table below. Each option changes the CIR, so record them with a result.
+
+| Option | Input | Function |
+|---|---|---|
+| `-fmacro-prefix-map=<dir>/=` | C and C++ | Removes the directory from `__FILE__`. The script gives one option for the directory of the input file, one for `models/`, and one for the libc++ headers. Thus the message of an assertion contains `main.cpp`, not `/home/user/tasks/main.cpp`, and the output does not change with the directory of the translation. |
+| `-stdlib=libc++ -nostdinc++ -isystem <libc++>` | C++ | Uses the libc++ headers of the toolchain (see [8.2](#82-the-standard-library)). |
+| `-fno-threadsafe-statics` | C++ | A plain flag guards the initialization of a static local variable, for example `static int v = f();`. Without this option, clang calls `__cxa_guard_acquire` and `__cxa_guard_release` of the C++ runtime, which lock the variable against other threads. The output does not contain these functions. For a program with one thread, the two forms have the same behavior: the initializer runs once, and when it throws, the next call runs it again. |
+| `-I`, `-include` of the models | C++, `--no-externalize-std` | See [8.2](#82-the-standard-library). |
+
+**Programs with threads.** The output of a C++ program has one thread. The
+`-fno-threadsafe-statics` option and the exception state of
+[7.5](#75-the-c-models-of-the-c-constructions) (plain global variables) are not
+correct for more than one thread. Thus cir2c stops with an error when the output
+of a C++ program calls `pthread_create` or `thrd_create`. `std::thread` and
+`std::async` start their threads with `pthread_create`. With the
+`--no-externalize-std` option, `<thread>` does not compile with the models (see
+[8.2](#82-the-standard-library)). cir2c does not stop for a C program with
+threads: C has no exceptions, and the script gives `-fno-threadsafe-statics`
+only for C++.
+
 ```
 run-cir2c.sh [OPTIONS] <input-file> <output.c>
+run-cir2c.sh [OPTIONS] --merge c|cir <input1> <input2> [...] <output.c>
 ```
+
+Give the options before the input files. With more than one input file, the
+script merges the translation units into one C program. See
+[5.6 Merge translation units](#56-merge-translation-units).
 
 | Option | Function |
 |---|---|
 | `--lang c\|c++` | Set the input language. The default comes from the file extension. The `.cpp`, `.cxx`, `.cc` and `.C` extensions are C++. |
 | `--std STD` | Set the language standard. The default is `c23` for C and `c++23` for C++. |
-| `--flatten` | Do the `cir-opt -cir-flatten-cfg` step first. This makes flat C code with `goto` statements. |
 | `--mlir FILE` | Write the intermediate CIR to `FILE`. Use this option to find problems. |
-| `--flat-mlir FILE` | Write the flat CIR to `FILE`. This option includes `--flatten`. |
 | `--include DIR` | Add the `-I DIR` option to the CIR step. You can give this option more than one time. |
+| `--cflag FLAG` | Add `FLAG` to the CIR step, for example `-DNAME=VALUE`. You can give this option more than one time. The script adds no such flag itself. |
+| `--no-call-conv-lowering` | Skip the ClangIR calling-convention lowering, for types that it cannot lower yet. **CAUTION:** this is not sound. An object with a move constructor is then passed as a bitwise copy, so the caller never sees it moved from and destroys it. Use it for all translation units of a program or for none. |
+| `--merge c\|cir` | Set how more than one input file is merged. `c` (the default) merges the C outputs. `cir` merges the CIR modules with `cir-merge`. **Use `cir`**: `c` can drop a definition or keep the wrong one of two different definitions, without an error (issue #20, see 5.6). |
 | `--externalize-std` | Replace the `std::` calls and the library calls with unknown values. This is the default. |
-| `--no-externalize-std` | Keep the bodies of the `std::` functions. **CAUTION: Read [8.2 The standard library](#82-the-standard-library) first.** |
+| `--tu-part` | The output is one translation unit of several, to be linked: internal symbols are `static`, symbols that each unit may define are `weak`, functions have their symbol names, and global constructors have `__attribute__((constructor))`. See [5.6](#56-merge-translation-units). |
+| `--no-externalize-std` | Keep the bodies of the `std::` functions. For C++ input, the script also compiles the models of [8.2](#82-the-standard-library) with the program. **CAUTION: Read [8.2 The standard library](#82-the-standard-library) first.** |
 
 | Exit code | Meaning |
 |---|---|
 | 0 | The operation is successful. |
+| 1 | The arguments are not correct, or the script cannot find the toolchain or a model. |
 | 2 | `clang` failed. The source has an error, or ClangIR cannot process a construction. |
-| 3 | `cir-opt` failed during the `--flatten` step. |
+| 3 | `cir-opt` failed during the calling-convention lowering of `--merge cir`. |
 | 4 | `cir2c` failed. Usually the CIR contains an unsupported operation. |
+| 5 | `cir-merge` rejected the translation units (`--merge cir` only). Its messages give the symbol and the reason. |
 
 Exit code 2 is important. It shows that Clang made no CIR. This is a limit of
 ClangIR and not a limit of cir2c.
@@ -337,9 +366,11 @@ By default, cir2c reads structured CIR. The `cir.for`, `cir.while`, `cir.if`,
 verification tool examines structured control flow more efficiently. The output
 is also easier to read.
 
-The `--flatten` option changes all of these operations into basic blocks and
-branches. The output C code then has labels and `goto` statements. Use this
-option when a construction does not translate in the structured form.
+The cir2c binary can also read flat CIR, in which `cir-opt -cir-flatten-cfg`
+changed these operations into basic blocks and branches. `run-cir2c.sh` does not
+offer this step: in the flat output, a caught exception ends in `abort()`
+(issue #21). For a verification task, that is unsound: the program stops at a
+point where the real program continues.
 
 ### 5.3 How the scripts find the tools
 
@@ -405,10 +436,201 @@ option, because the calculation is slow.
 4. If cir2c made C code but the code is not correct, start the binary again on
    the `.mlir` file. This removes Clang and `cir-opt` from the sequence and makes
    the work cycle quick.
-5. Try the `--flatten` option and compare the two results. A construction that
-   fails in one mode can operate in the other mode.
+
+### 5.6 Merge translation units
+
+A program can have more than one source file. `run-cir2c.sh` accepts more than
+one input file and makes one C file. There are two merge strategies:
+
+| Strategy | Sequence |
+|---|---|
+| `--merge c` | **Not reliable (issue #20)**: `scripts/merge-c.sh` finds the definitions by text patterns and keeps the first definition of each name. It can drop a definition, or keep one of two different definitions for both files, without an error. Translate each file to C, then merge the C files with `scripts/merge-c.sh`. For C++ input, this is not possible with `--no-externalize-std`: the definition check of [8.2](#82-the-standard-library) needs the whole program, and each file alone uses the symbols of the other files. The script stops with exit code 1. |
+| `--merge cir` | Compile each file to CIR without the calling-convention lowering, merge the CIR modules with `cir-merge`, lower the merged module once, then translate it. |
+
+To keep the translation units apart, translate each file with `--tu-part`. Its
+output keeps the C linkage of the symbols. Link the files with a C linker, or give
+them all to a verifier that can link, such as Theta with a `.yml` file that lists
+them as `input_files`.
+
+#### The cir-merge tool
+
+`cir-merge` is a C++ program in `tools/cir-merge/`. The build makes it next to
+the `cir2c` binary. It uses the MLIR parser, the MLIR verifier and the MLIR
+printer of the same LLVM build as `cir2c`. It does not parse CIR text itself.
+
+```
+cir-merge --output merged.cir input-a.cir input-b.cir [...]
+```
+
+| Option | Function |
+|---|---|
+| `--output FILE`, `-o FILE` | Write the merged module to `FILE`. |
+| `--dump-symbols` | Print the symbol inventory (input, kind, definition or declaration, linkage, name). |
+| `--verbose` | Print the decision for each symbol. |
+
+`cir-merge` is conservative. **If an input is outside the supported subset,
+`cir-merge` stops with an error. It does not make an approximate module.** A
+merged module is a module that passes these checks. It is not a proof that the
+C++ program obeys the One Definition Rule.
+
+The steps are:
+
+1. Parse and verify each input in a separate MLIR context. Record the
+   definition of each record (struct, class, union).
+2. Give the anonymous records their names in the merged module, and compare
+   the named record definitions of all inputs.
+3. Parse all inputs into one context.
+4. Rename the translation-unit-local symbols whose names collide (see below).
+5. Check the module attributes.
+6. Make the symbol inventory of all inputs.
+7. Make the merge plan for all symbols. The plan is complete before any change,
+   so the result does not depend on the order of the inputs.
+8. Make the merged module. Verify it, check that each symbol reference
+   resolves, print it, and parse the printed text again.
+9. Write the output to a temporary file, then rename it. A failed merge does
+   not leave an output file.
+
+#### The supported subset
+
+Only `cir.func` and `cir.global` operations can be at the top level. Another
+top-level operation is an error, because its meaning across translation units
+is not known.
+
+| Symbols with the same name | Result |
+|---|---|
+| The symbol is in one input only | Keep it |
+| Compatible declarations only | Keep the first declaration with a complete type |
+| Compatible declarations and one definition | Keep the definition |
+| Two or more equivalent definitions with `linkonce_odr`, `weak_odr` or `available_externally` linkage | Keep one (see below) |
+| C tentative definitions with `common` linkage (`-fcommon`), and at most one regular definition | Keep the regular definition, else one common definition |
+| Two or more definitions with another linkage, or ODR definitions that differ | Error |
+| A declaration with a less complete type: `extern T a[];` against `T a[N]`, or a C declaration without a prototype (`int f();`) against a prototype with the same return type | Adapt the declaration's uses (see below) |
+| A function and a global | Error |
+| Different function types, no-prototype flags or calling conventions | Error |
+| Globals with different types, constness, TLS models or address spaces | Error |
+| A symbol with internal or private linkage | Renamed before the merge (see below), so it does not collide |
+| A definition that is not `external`, `common`, `linkonce_odr`, `weak_odr` or `available_externally`, or a declaration that is not `external` | Error |
+
+A function is a definition when it has a body or is an alias (`alias(@...)`).
+A global is a definition when it has an initial value, a constructor region, a
+destructor region or an alias.
+
+**The attribute policy.** When a symbol is in more than one input,
+`cir-merge` keeps one operation and drops the others with their attributes.
+Each attribute that a dropped operation can have is in one class. An attribute
+that is in no class is an error.
+
+| Class | Function attributes | Global attributes | Rule |
+|---|---|---|---|
+| Checked | `sym_name`, `function_type`, `no_proto`, `calling_conv`, `linkage` | `sym_name`, `sym_type`, `constant`, `tls_model`, `addr_space`, `linkage`, `initial_value` | Compared by the rules above |
+| From the kept operation | `sym_visibility`, `global_visibility`, `comdat`, `dso_local`, `arg_attrs`, `res_attrs`, `inline_kind`, `builtin`, `lambda`, `personality`, `side_effect`, `aliasee`, `cir.target-cpu`, `cir.target-features`, `cir.tune-cpu`, `nothrow`, `nobuiltin`, `noreturn`, `nocallback`, `allocsize` | `sym_visibility`, `global_visibility`, `comdat`, `dso_local`, `ast`, `tls_refs`, `static_local_info`, `static_local_guard`, `aliasee`, `init_priority` | The value of the dropped operation is not necessary. These are properties of the definition, or hints for code generation that the call sites of the dropped declaration already contain. |
+| Equal | `func_info`, `coroutine`, `global_ctor_priority`, `global_dtor_priority`, `annotations` | `annotations`, `strictfp` | Must have the same value on the kept operation |
+| Alignment | | `alignment` | The kept symbol must be aligned at least as much as the dropped declaration says |
+| Section | | `section` | The kept symbol must be in the section that the dropped declaration gives |
+
+The module attributes:
+
+| Attribute | Rule |
+|---|---|
+| `cir.triple`, `dlti.dl_spec`, `cir.lang`, `cir.int_type_width`, `cir.size_type_width`, `cir.default_tls_model` | Must be equal in all inputs. Different targets, ABIs or languages are an error. |
+| `cir.module_asm` | Must be empty. |
+| `cir.record_layouts` | Merged. A record in more than one input must have the same layout. |
+| `cir.global_ctors`, `cir.global_dtors` | Concatenated in input order. Each entry must name a function of the merged module. |
+| Another attribute | Error |
+
+**The translation-unit-local symbols.** A symbol with internal or private
+linkage belongs to its translation unit: a `static` function or variable, a
+string literal (`.str`, `.str.1`, ...), a C++ static initializer
+(`__cxx_global_var_init`), a guard variable or a `thread_local` helper. If
+another input uses the same name, `cir-merge` gives the local symbol the new
+name `NAME.tuN`. `N` is the position of the input on the command line. If that
+name is in use, `cir-merge` adds `.1`, `.2`, ... An input uses a name when it
+defines or declares the symbol, or refers to it by a string (see below).
+
+`cir-merge` then changes all references to the symbol in its input. MLIR
+changes the symbol references (`@name`), also inside other attributes such as
+`#cir.global_view`. CIR also refers to symbols with plain strings, which MLIR
+does not see. `cir-merge` changes these too:
+
+| String reference | Where |
+|---|---|
+| `#cir.global_ctor<"fn", priority>`, `#cir.global_dtor<...>` | The `cir.global_ctors` and `cir.global_dtors` module attributes |
+| `static_local_guard<"guard">` | A `cir.global` of a function-local `static` |
+| `tls_refs = <"wrapper", "init">` | A `thread_local` `cir.global` |
+
+After the merge, `cir-merge` checks that each of these names a symbol of the
+correct kind. Only the `thread_local` initializer can be absent: clang refers
+to the initializer of an `extern thread_local` variable weakly. The CUDA
+attributes also name kernels with strings. `cir-merge` does not change them,
+so it rejects an input that has one.
+
+**The declarations with a less complete type.** An input that declares
+`extern int a[];` or `int f();` refers to the symbol only with
+`cir.get_global` and with `#cir.global_view` initializers. `cir-merge` gives
+each `cir.get_global` of the declaration the type of the kept symbol and adds a
+`bitcast` to the type that the input expects. The C compiler and the linker do
+the same. The `#cir.global_view` initializers do not change. Another use of
+such a declaration is an error.
+
+Two tentative definitions (`int x;` in two files) are an error without
+`-fcommon`, as they are for the linker. With `-fcommon`, clang gives them
+`common` linkage, and `cir-merge` merges them.
+
+**The ODR definitions.** In C++, each translation unit that uses an inline
+function, a template instance, a vtable or a typeinfo object emits its own
+definition, with `linkonce_odr` linkage (`weak_odr` for an explicit
+instantiation, `available_externally` for an `extern template` such as the
+members of `std::string`). The One Definition Rule says that all of them are
+the same, and the linker keeps one. `cir-merge` keeps one only if it can see
+that they are the same:
+
+- The definitions must be equal, operation by operation. The source locations,
+  the linkage, the COMDAT flag and the `dso_local` flag do not count.
+- A reference to a translation-unit-local symbol matches a reference to a local
+  symbol of the other input if the two local symbols are equivalent in turn.
+  Thus an inline function that returns `"hello"` matches in two translation
+  units, also if the literal is `.str.1` in one unit and `.str` in the other.
+  Mutually recursive local functions are compared coinductively.
+- If the definitions differ, `cir-merge` stops with an error. The program
+  breaks the ODR, or the translation units were compiled with different
+  options.
+
+`cir-merge` keeps a `weak_odr` definition if there is one, else a
+`linkonce_odr` definition, else an `available_externally` definition.
+
+**The records.** CIR identifies a named record by its name in an MLIR context.
+If two inputs define the same name differently, the MLIR parser uses the first
+definition for both inputs and gives no error. Thus `cir-merge` compares the
+definitions before the inputs share a context. Two different definitions are
+an error. A record that is incomplete in one input and complete in another
+input is correct.
+
+**The anonymous records.** Clang names a record without a name `anon.N`, with
+a counter in each translation unit. Thus `anon.0` of one input and `anon.0` of
+another input are not related. `cir-merge` identifies these records by their
+structure: two anonymous records with the same structure get one name, two
+different ones get different names. The first input keeps its names. An input
+whose names change is rebuilt before it joins the shared context. A record
+cannot change its name in an MLIR context, so the rebuild goes through
+temporary names and a second context. When `cir-merge` compares two named
+records, it compares their anonymous members by structure too.
+
+#### Known limits
+
+These usual programs are errors at the moment:
+
+- C programs that use the same struct name for different structs in two files.
+- Declarations whose type is different from the definition, for example
+  `extern int a[];` and `int a[10];`.
 
 ---
+
+### 5.7 Operational models of the standard library
+
+`libcxx-om/c++/v1` holds small replacements for the parts of libc++ that are heavy
+or that live in its compiled library. Give it with `--include libcxx-om/c++/v1
+--no-externalize-std`. All other headers stay libc++'s. See
+[OM_DESIGN.md](OM_DESIGN.md) for what each model does and what it does not preserve.
 
 ## 6. The LLVM toolchain
 
@@ -570,12 +792,10 @@ issue when a better pin becomes available.
   CIR module (MLIR text)
      |  preprocessing of the qualifiers
      v
-  CIR module        --optional-->  cir-opt -cir-flatten-cfg  -->  flat CIR
-     |                                                              |
-     v                                                              v
-  cir2c: structured output                            cir2c: goto output
-     |                                                              |
-     +---------------------->  output.c  <--------------------------+
+  CIR module
+     |  cir2c
+     v
+  output.c
 ```
 
 Each step is a different process. Each intermediate result is text that you can
@@ -596,6 +816,7 @@ an examination of `mlir::Operation` objects.
 | `ConstantEmitter` | CIR constant attributes to C initializers, and this includes arrays and records |
 | `Traceability` | The map from operations to C lines for the `--monitor-json` option |
 | `handlers/` | One file for each group of CIR operations |
+| `models/` | C++ headers for the parts of libc++ that libc++ keeps in its compiled library. They are not part of the cir2c binary. See [8.2](#82-the-standard-library). |
 
 ### 7.3 The handlers
 
@@ -639,6 +860,15 @@ fixed sequence:
    `__VERIFIER_nondet_*` declarations that it finds during this step can go to
    the top of the file.
 
+The output does not contain an inline definition that nothing uses. Before the
+first step, `computeReachableDefs` starts at `main` and at each function and
+global that does not have a linkonce or weak linkage. It follows the references
+from function bodies and from initializers. A linkonce, weak or
+available-externally function that it does not reach is not in the output. A
+linkonce or available-externally global that it does not reach is also not in
+the output. An example is the vtable of a class whose key function is inline,
+which clang emits also when nothing creates an object of the class.
+
 ### 7.5 The C models of the C++ constructions
 
 **Virtual dispatch.** cir2c writes the vtables as `void*` arrays. A virtual call
@@ -646,9 +876,10 @@ becomes a call to a wrapper function:
 
 ```c
 /* The vtable pointer of obj is at offset 0. The function is vtable[slot]. */
-int __VERIFIER_virtual_call_i_pv(void* __obj, int __slot) {
+int __VERIFIER_virtual_call_i_pv(void* __obj, int __slot, void* __first) {
   void* __fn = ((void**)*(void**)__obj)[__slot];
-  return ((int(*)(void*))__fn)(__obj);
+  int (*__f)(void*) = (int (*)(void*))__fn;
+  return __f(__first);
 }
 ```
 
@@ -656,6 +887,57 @@ There is one wrapper for each different signature. Each wrapper has one
 definition in each output file. A tool that models indirect calls exactly gets
 exact dispatch. A different tool sees a call through a pointer from a real
 array.
+
+Each call through a function pointer goes through a variable of the
+function-pointer type, also at an indirect call of the program and at the
+destructor call of an exception (`void (*__dtor)(void*) = …; __dtor(…);`).
+A verifier frontend can know the targets of a call only from a declared
+function pointer: Theta rejects a call whose callee is a cast expression.
+
+A method has a `struct T*` receiver, but the wrapper calls through a pointer
+with a `void*` receiver. In C, a call through a pointer of an incompatible type
+is undefined behavior. Thus a vtable slot does not hold the method itself. It
+holds a small function with a `void*` receiver that calls the method:
+
+```c
+static int __cir2c_vt_Derived__f(void *p0) { return Derived__f((struct Derived*)p0); }
+```
+
+A pointer result of this function is `void*`, and the wrapper converts it to
+the type of the call. Thus a covariant override agrees with the slot of its
+base. The destructor of a thrown object uses the same type of function.
+
+**Virtual bases.** The position of a virtual base subobject depends on the
+most-derived class, so the object finds it through its vtable. The entries
+before the address point are integers: the virtual-base offsets, the vcall
+offsets of the virtual thunks, and offset-to-top. cir2c writes them into the
+`void*` array as integer constants (C11 6.6p9):
+
+```c
+void *_ZTV1D[] = { (void*)16UL, (void*)0, (void*)0, (void*)8UL, (void*)0xfffffffffffffff8UL /* -8 */, (void*)0 };
+```
+
+The CIR reads such an entry through casts and constant strides from the vtable
+pointer, as bytes or as 64-bit integers. cir2c writes no C for these steps, only
+the read of the `void*` element, converted back to an integer (C11 6.3.2.3p5 and
+p6, implementation-defined):
+
+```c
+long vt12 = (long)(unsigned long)((void**)v10)[-3];
+```
+
+Any other use of a pointer into a vtable stops cir2c with an error. For a local
+or global variable of a class type, the object is complete, so its vtable
+pointer holds the primary address point of the vtable of its class. The entry
+is then a constant, and the output does not read the vtable pointer. The
+`_ZTT…` array (the VTT) holds the address points that the complete-object
+constructor gives to the base constructors (`&_ZTT1D[1]`), also from the
+construction vtables `_ZTC…`.
+
+**Pointer arithmetic.** C++ defines a null pointer plus 0, and a null pointer
+minus a null pointer. C does not, and libc++ does both with an empty container.
+Where the offset is not a constant and the pointer can be null, cir2c writes
+`(n == 0) ? p : &p[n]` and `(p == q) ? 0 : p - q`.
 
 **Exceptions.** There is no `setjmp`, no `longjmp` and no unwinder. Four global
 variables hold the exception state:
@@ -667,8 +949,11 @@ static unsigned    __cir_exc_type_id;  /* The numeric tag */
 static int         __cir_exc_active;   /* 1 while an exception is active */
 ```
 
-A `throw` statement sets these variables and returns. After each call that can
-throw, cir2c writes a test of `__cir_exc_active`. Each `catch` clause becomes a
+A `throw` statement sets these variables and returns. Each `throw` statement
+has a static variable of the thrown type, and the exception object is in that
+variable. Thus the object has its correct type and alignment, and it is
+available after the function returns. After each call that can throw, cir2c
+writes a test of `__cir_exc_active`. Each `catch` clause becomes a
 comparison with the RTTI tag. Each `typeinfo` symbol becomes a
 `static const char __cir_eh_type_<sym>[]` array. Thus the address of the array is
 a unique tag.
@@ -682,13 +967,110 @@ sequence. cir2c writes the destructor calls before each `return` in `main`.
 name, cir2c adds a suffix that a person can read. Plain C names do not change.
 cir2c uses the demangler only for symbols with the `_Z` prefix.
 
-`operator new` and `operator delete` have no body in CIR. cir2c writes small
-functions that call `malloc` and `free`.
+A C++ function can have the name of a C library function, for example
+`memcpy(void*, const void*, int)`. In C++, it is a different overload. In C, it
+would replace the library function, so cir2c adds the suffix to its name:
+`memcpy_2`.
+
+Clang names an unnamed class, for example a lambda, by its source location.
+cir2c keeps only the file name of that location, not the directory. Thus the
+output contains no path of the local machine: `lambda_at_list_1276_48`.
+
+Two different records always get two different C names. A C++ name can give
+the C name of a different record, for example `ns::X` and `ns__X`, or two
+lambdas at the same position of two files with the same name. Before the
+translation, cir2c finds such records and gives them different names. For
+source locations, it adds directories from the end of the path until the names
+differ: `lambda_at_a_util_h_100_36` and `lambda_at_b_util_h_100_36`. For other
+names, it adds a numeric suffix: `ns__X_2`. The names depend only on the set of
+records in the module. A name without such a conflict does not change. If two
+records still get one name, cir2c stops with an error. With `--tu-part`, cir2c
+stops with an error when a record needs a suffix or more directories: another
+unit, with other records, could give the same record another name, and C11
+6.2.7 makes two struct types of different units compatible only with the same
+tag.
+
+`operator new` and `operator delete` have no body in CIR, because libc++ keeps
+them in its compiled library. With `--no-externalize-std`, the
+libcxx-out-of-line model defines them (8.2, issue #17), so a throwing `new`
+throws `std::bad_alloc` when `malloc` fails. With `--externalize-std`, cir2c
+writes small functions that call `malloc` and `free`. A throwing `new` there
+calls `abort()` when `malloc` fails, so a program that catches `std::bad_alloc`
+loses that path.
 
 **Trivial assignment.** CIR marks a trivial default copy operator or move
 operator with `func_info<#cir.cxx_assign<…, trivial true>>`. The body is almost
 empty. The mark holds the "copy the object" behavior. cir2c finds the mark and
 writes `*dst = *src`. Without this rule, each such assignment does nothing.
+
+C++ copies only the data of the class, not its padding. Thus, when the record
+has a `pad` member or an empty member, cir2c copies the data members one by
+one. Two cases need this rule:
+
+- An empty class, for example `std::less<int>`, has no data. libc++ stores it
+  with `[[no_unique_address]]`, so it shares its address with another member,
+  for example the size of a `std::set`. A copy of the whole C struct changes a
+  byte of that member.
+- The tail padding of a base can hold a member of a derived class (see 8.7).
+
+**Calling convention.** Clang applies the calling convention of the target
+already in the CIR. A trivially copyable record of 16 bytes or less travels in
+registers. The CIR then passes it as one or two integer, pointer or
+floating-point values, or as an anonymous struct of these values. To convert
+between the record and these values, the CIR stores one type into a local
+variable and reads the other type from the same address. In C, that read is
+undefined behavior (C11 6.5p7).
+
+Usually, each value of the other type is exactly one scalar member of the
+record: the same offset, the same size and the same kind. Examples are an
+iterator `{ int *p; }` that travels as one pointer, and a
+`{ const char *p; unsigned long n; }` that travels as a pointer and an integer.
+Then the variable keeps its type, and cir2c converts the values one by one. The
+CIR has only an untyped pointer, so a pointer member travels as `void *`:
+
+```c
+struct Iter coerce61;
+/* ... */
+void* t62 = (void*)coerce61.p;     /* the read as the other type */
+int r63 = f(t62);
+```
+
+The kinds are an object pointer (converted through `void *`, C11 6.3.2.3p1),
+an integer or a `bool` (converted to the integer of the same size), and `float`
+and `double` (the same type). These conversions do not change the value.
+cir2c makes this check on the two CIR types of the variable. It does not use
+the signature of the function, which the CIR does not keep. A member that is
+an array, a union, a bit-field or a vector, and a type of another kind, for
+example `long double`, prevent the conversion.
+
+Otherwise, for example when one integer holds two members, cir2c declares such
+a variable as a union of all the types that the CIR reads it as. Each read as another type becomes a read of the member of that
+type. For a `struct P { char c; int i; }` that a function returns:
+
+```c
+union { struct P v0; unsigned long v1; } coerce74;
+memset(&coerce74, 0, sizeof coerce74);
+coerce74.v0.c = t80.c;
+coerce74.v0.i = t80.i;
+unsigned long t81 = coerce74.v1;
+return t81;
+```
+
+C11 6.5.2.3 (note 95) defines the read of another member: the bytes get the
+new type. The union is zero at its declaration, and a record goes into and out
+of the union member by member. Two causes make this necessary:
+
+- A copy of the whole record also copies its padding, which nothing wrote. The
+  integer then contains uninitialized bytes.
+- After a copy of the whole record, the TypeSanitizer of clang gives the copy
+  the type of the source member, and it reports each later read of the copy. C
+  permits these reads, but the reports would hide real ones.
+
+cir2c does not make a union where C permits the access: through a character
+type, through the other signedness of an integer type, to the first member of a
+record, or through a record that is not larger and has the variable as its
+first member. A variable of an array type or a vector type does not become a
+union. The code of the union slots is in `src/Reinterpretation.cpp`.
 
 ### 7.6 Add a CIR operation
 
@@ -729,16 +1111,21 @@ Two words have an exact meaning in this section:
 ### 8.1 Constructions that cir2c does not translate
 
 For these constructions, cir2c stops with an error. cir2c does not write
-incorrect code. The corpus tests ignore these constructions. The
-`BLOCKLIST_OPS` list in `test/run_tests.sh` contains them.
+incorrect code. The corpus tests skip the programs with the CIR operations of
+the `BLOCKLIST_OPS` list in `test/run_tests.sh`. That list is only for the
+tests: `run-cir2c.sh` itself stops with the error.
 
 | Construction | CIR operation | Cause |
 |---|---|---|
 | Inline assembly | `cir.asm` | There is no C equivalent. |
 | SIMD vectors | `cir.vec.*`, `!cir.vector<…>` | There is no portable C model. |
-| Floating-point classification | `cir.is_fp_class` | There is no portable C function. |
-| 128-bit integers | `cir.int<s,128>`, `cir.int<u,128>` | Not supported. This also stops cir2c. |
+| A floating-point class test that tells a quiet NaN from a signaling NaN | `cir.is_fp_class` with only one of the two NaN flags (`__builtin_issignaling`, `__builtin_isfpclass`) | The output tests the classes with comparisons (`x != x` for a NaN), and no comparison tells the two kinds apart. The other class tests (`isnan`, `isinf`, `isfinite`, `isnormal`, `fpclassify`) translate into comparisons with the smallest normal and the largest finite value of `float`, `double` and `long double` (the 80-bit format). A class test on another type, for example `_Float16`, stops cir2c. |
+| Integers wider than 64 bits | `cir.int<s,128>`, `cir.int<u,100>` (`__int128`, `_BitInt(100)`) | C has no such type. |
+| Arithmetic on an integer of another width than 8, 16, 32 or 64 bits | for example `cir.add` on `!cir.int<u,24>` (`_BitInt(24)`) | Such a value travels in the next wider type. That keeps its bits when the output only stores, loads or passes it, for example a record of 3 bytes that the calling convention coerces to `!cir.int<u,24>`. The arithmetic of the wider type would not wrap at the width. |
+| Other types without a C type | for example a vector member outside the vector operations, or a half-precision MLIR float | `mapTypeToC` writes a marker for the type. cir2c stops when the finished output contains a marker, so a type in a function that the output does not contain does not stop it. A pointer to such a type becomes a pointer to an incomplete struct: the output can store and pass it, but not read through it. |
 | MSVC SEH | `cir.eh.setjmp`, `cir.eh.longjmp` | This control flow has no model here. |
+| A handler that matches through a virtual base | a `catch` of a virtual base class of the thrown class | The handler selection decides each pair during the translation (8.3), but the offset of a virtual base is in the vtable of the object, at run time. |
+| A vtable entry of a library object, with `--externalize-std` | a read of a virtual-base offset or offset-to-top through the vtable pointer of a `std::` object | The constructor of the object is unknown, so its vtable pointer is unknown. libc++ instantiates its streams in its compiled library, so their vtables are not in the module either. |
 | Computed goto | `cir.indirect_br` | The GNU `&&label` and `goto *p` extensions have no ISO C equivalent. A sound translation must change the function into a switch statement on a label number. cir2c does not do this yet. |
 
 Clang cannot make CIR for some other constructions. In this condition,
@@ -791,16 +1178,199 @@ bodies. The `run-cir2c.sh` script always gives the `-stdlib=libc++` option.
 There is no option to prevent this. The toolchain build installs libc++ with
 clang for this cause.
 
+**The models.** libc++ also keeps some parts in its compiled library and not in
+its headers. Examples are `std::cout`, the output functions of
+`basic_ostream<char>` and the constructor of `std::logic_error`. ClangIR sees
+only a declaration of these parts. With the `--no-externalize-std` option, the
+`run-cir2c.sh` script compiles C++ input together with the models in the
+`models/` directory. A model is C++ source code. Thus clang calculates the
+names, the layouts and the vtables, and cir2c translates the model like the
+program. The cir2c binary contains no model.
+
+A model directory has one or two of these parts:
+
+- `include/`: the script gives clang the `-I models/<name>/include` option.
+  clang searches this directory before the libc++ headers. Thus a header in it
+  replaces the libc++ header with the same name.
+- `prelude.h`: the script gives clang the `-include models/<name>/prelude.h`
+  option. clang reads this file before the first line of the program.
+
+The `MODELS` list in `run-cir2c.sh` selects the models. To use a different
+model, change the list. If two models have a header with the same name, the
+script stops.
+
+| Model | Function | Relation to libc++ |
+|---|---|---|
+| `ostream-sink` | `std::cout`, `std::cerr` and `std::clog` discard all output. | An abstraction. The model uses only names from the C++ standard. |
+| `istream-nondet` | `std::cin` gives an unknown value for each arithmetic extraction. | An abstraction. The model uses only names from the C++ standard and the SV-COMP functions `__VERIFIER_nondet_*`. |
+| `libcxx-out-of-line` | The members of six exception classes, `std::nothrow` and the replaceable allocation functions (`operator new`, `operator delete`), that libc++ keeps in its compiled library. The libc++ headers use them, for example in `vector::at` and `std::stable_sort`, and each `new` expression calls an allocation function. | The same behavior and the same `what()` texts as libc++. The model uses two private libc++ names. |
+
+**The ostream-sink model.** The model replaces the `<ios>`, `<ostream>` and
+`<iostream>` headers. The library's `<iosfwd>` declares `ios_base`,
+`basic_ios` and `basic_ostream`. The model completes these declarations with
+qualified definitions, for example `class std::ios_base { ... };`. Thus the
+model does not name the internal namespace of libc++.
+
+| Part | libc++ | The model |
+|---|---|---|
+| `std::cout`, `std::cerr`, `std::clog` | They write to `stdout` and `stderr`. `std::cerr` is tied to `std::cout` and flushes after each output. | They have no stream buffer and no tie. They are constant-initialized, so a program can use them at any time. |
+| `<<` for the arithmetic types, `char`, `const char*`, `const void*`, `nullptr`, `std::string` and `std::string_view` | Formats the value and writes it. Reads the characters of a `char*` up to `'\0'`. | Returns the stream and does nothing else. |
+| `std::endl`, `std::ends`, `std::flush`, `put()`, `flush()` | Write a character or flush the stream buffer. | Do nothing. |
+| `good()`, `eof()`, `fail()`, `bad()`, `rdstate()`, `operator bool`, `operator!`, `clear()`, `setstate()` | Read or change the state. `clear()` and `setstate()` throw `ios_base::failure` for a state that `exceptions()` selects. That mask is empty by default. | The same, without the exception mask. The values of the state bits are those of libc++. |
+| The class structure | `basic_ostream` has the virtual base `basic_ios` and a virtual destructor. | No virtual base and no virtual function. The class is `final`. |
+
+The ostream-sink model has these limits:
+
+- The output is lost. A verification tool cannot examine the text that the
+  program writes.
+- A write never fails. In libc++, a write to a closed `stdout` sets `badbit`.
+  In the model, only `clear()` and `setstate()` change the state.
+- The model does not read the data that it gets. libc++ reads the characters of
+  a `char*`. If the pointer is not valid, that read is undefined behavior. A
+  verification tool cannot find this undefined behavior in the model. The
+  program evaluates the operands as usual: `std::cout << f()` calls `f()`.
+- The model does not include string streams, file streams, stream buffers,
+  locales or format manipulators. For each of `<sstream>`, `<fstream>`,
+  `<streambuf>`, `<strstream>`, `<syncstream>`, `<iomanip>`, `<locale>` and
+  `<print>`, the model has a header that stops the compilation with an
+  `#error` message. The input (`<istream>` and `std::cin`) is in the
+  istream-nondet model. `<iostream>` needs that model.
+- Some libc++ headers use the libc++ stream code internally. `<chrono>`,
+  `<complex>`, `<filesystem>`, `<format>` and `<thread>` do not compile with the
+  model.
+
+**The istream-nondet model.** The model replaces the `<istream>` header and
+completes the declaration of `basic_istream` from `<iosfwd>`, as the
+ostream-sink model does. The `<iostream>` header of the ostream-sink model
+defines `std::cin`. The input of a verification task is unknown. Thus each
+extraction of an arithmetic value succeeds, and the variable gets the value of
+`__VERIFIER_nondet_<type>()`. The input never ends.
+
+| Part | libc++ | The model |
+|---|---|---|
+| `>>` for `bool`, `short`, `int`, `long`, `long long`, their unsigned forms, `float` and `double` | Reads and converts the text. At the end of the input or for text that is not a number, sets `failbit`. | Gives the variable an unknown value. Never fails. |
+| `std::ws`, `ignore()` | Skip input. | Do nothing. The next values stay unknown. |
+| `>>` for `char`, `char*`, `std::string`, `long double` and `void*`; `get()`, `getline()`, `read()`, `peek()` | Read characters or a value. | No definition. cir2c rejects the program. |
+| `good()`, `eof()`, `fail()`, `bad()`, `rdstate()`, `operator bool`, `operator!` of the input stream | Read the state. | No definition. cir2c rejects the program. |
+
+The model rejects these parts on purpose:
+
+- The input of characters and strings. A model of such input needs a bound on
+  the length of the input.
+- The state of the input stream. In the model, an extraction never fails. A
+  loop like `while (std::cin >> x)` would never end, and the code after it would
+  not be accessible. In the program, the loop ends at the end of the input. A
+  proof for the model would not be true for the program.
+- `long double` and `void*`. SV-COMP has no `__VERIFIER_nondet` function for
+  them.
+
+**The libcxx-out-of-line model.** The `prelude.h` file defines these members
+and objects as libc++ does. clang emits only the members and objects that the
+program uses.
+
+| Member or object | Behavior in libc++ and in the model |
+|---|---|
+| `std::nothrow` | An empty object. `new (std::nothrow) T` gives it to `operator new`. |
+| `~exception()`, `exception::what()` | Empty. `what()` returns `"std::exception"`. |
+| The constructor, the destructor and `what()` of `bad_alloc` | Empty. `what()` returns `"std::bad_alloc"`. |
+| The constructor, the destructor and `what()` of `bad_array_new_length` | Empty. `what()` returns `"bad_array_new_length"`. |
+| `logic_error(const char*)`, `~logic_error()`, `logic_error::what()` | The constructor copies the message, `what()` returns the copy, and the destructor releases it. |
+| `~length_error()`, `~out_of_range()` | Empty. |
+| `operator new`, `operator new[]` | `malloc` of the size, or of 1 byte for 0 bytes. When `malloc` gives a null pointer, `throw std::bad_alloc()`. |
+| The `std::nothrow_t` forms of `new` | The result of `malloc`, also a null pointer. |
+| The `std::align_val_t` forms of `new` | `aligned_alloc`, with the size rounded up to a multiple of the alignment (C11 7.22.3.1). |
+| All forms of `operator delete` | `free`. |
+
+The libcxx-out-of-line model has these limits:
+
+- libc++ keeps the message in the private member `__imp_`, of the private type
+  `__libcpp_refstring`. No standard name gives access to the message, so the
+  model uses these two names. A different library needs a different model.
+- In libc++, the copies of an exception share the message through a reference
+  count. The model defines no copy constructor and no assignment for
+  `logic_error`. Thus each message has one owner.
+- When `malloc` fails during the copy of a message, the model throws
+  `std::bad_alloc`, as the `operator new` of libc++ does.
+- libc++ calls the new handler of `std::set_new_handler` before it throws
+  `bad_alloc`. The model does not. `set_new_handler` is in the compiled
+  library, so cir2c rejects a program that uses it (an undefined symbol).
+- The allocation functions of the model are `inline`, so that each translation
+  unit has one definition that `cir-merge` can merge, and the output contains
+  only the forms that the program uses. C++ forbids `inline` replacements
+  ([replacement.functions]/3, no diagnostic required). clang accepts them with
+  a warning, and the model turns the warning off.
+- A program that defines its own `operator new` does not compile with the
+  model: two definitions of one function.
+- Other members are not in the model, for example the constructors of
+  `std::runtime_error` and `logic_error(const std::string&)`. cir2c rejects a
+  program that uses one of them (see the next paragraph).
+
+**Undefined symbols.** With the `--no-externalize-std` option, cir2c stops with
+an error when the output of a C++ program uses a function or an object that has
+no definition. These symbols are permitted, because a verification tool knows
+them:
+
+- The functions of the C standard library, and `stdin`, `stdout` and `stderr`.
+- The `__VERIFIER_*` functions, `reach_error()` and `__assert_fail()`.
+
+For any other undefined symbol, a verification tool chooses a behavior, and the
+result does not belong to the program. A destructor without a body is also
+undefined. Before this rule, cir2c gave it an empty body. cir2c lists the
+symbols and writes no output:
+
+```
+cir2c: error: with --no-externalize-std, the output must define each function and object that it uses, outside the C standard library (README 8.2). These have no definition:
+  helper(int)  [_Z6helperi]
+  nondet_int
+```
+
+These conditions apply:
+
+- The rule is for a C++ program, that is a module from C++ source with a
+  `main()` function. A module without `main()` is a part of a program, and the
+  other parts can define its symbols. A module that cir2c translates with
+  `--tu-part` is also a part, also when it has `main()`. A C program has no models, and it can
+  use POSIX functions, which the link of its output supplies.
+- A use counts only if it is in the output. A call in a function that the
+  output does not contain does not count. A function attribute, for example
+  the personality function of the exception handling, does not count.
+
+To correct the error, add a model of the missing part, or use the
+`--externalize-std` option.
+
 ### 8.3 Exceptions
 
-**The catch selection does not use inheritance.** cir2c compares the RTTI tag by
-exact pointer equality. Thus a `catch (Base&)` clause does not operate for a
-`Derived` exception. In the model, the handler is not accessible. In the
-program, the handler operates.
+**The selection of a handler.** A handler of type `H` matches an exception of
+type `E` as in C++ ([except.handle]/3): when `E` is `H`, when `H` is an
+unambiguous public base class of `E`, or when `H` and `E` are pointers and `E`
+converts to `H` (more qualifiers, `void *`, or a pointer to an unambiguous
+public base class). cir2c decides each pair during the translation, from the
+RTTI objects of the CIR, and writes one function for each handler type:
 
-This is conservative. The model examines fewer handler paths. A proof that an
-error is not accessible is true. But you cannot show that the program catches an
-exception.
+```c
+static int __cir_eh_match__ZTI4Base(void) {
+  if (__cir_exc_type == (const void*)__cir_eh_type__ZTI4Base) { __cir_exc_adj = __cir_exc_ptr; return 1; }
+  if (__cir_exc_type == (const void*)__cir_eh_type__ZTI5Multi) { __cir_exc_adj = (void*)((char*)__cir_exc_ptr + 4); return 1; }
+  return 0;
+}
+```
+
+The handler binds `__cir_exc_adj`, the address of the base subobject. A pointer
+handler binds `__cir_exc_pval`, the converted pointer; a null pointer stays
+null. `__cir_exc_ptr` and `__cir_exc_type` keep the exception object and its
+type, for a rethrow and for the destructor at the end of the handler.
+
+These limits apply:
+
+- In a whole program, the candidates are the types that the module throws. A
+  module without `main()`, or with `--tu-part`, can also get an exception from
+  another part of the program. Then each class whose RTTI is in the module is
+  also a candidate. An exception of a class that the module does not know
+  matches only a handler of its own type, and a pointer that the module does
+  not throw matches only a handler of its own pointer type.
+- The offset of a virtual base class is in the vtable of the object. cir2c
+  stops with an error when a handler can match a thrown type through a virtual
+  base class (see 8.1).
 
 The global-variable model has these other effects:
 
@@ -808,6 +1378,18 @@ The global-variable model has these other effects:
   throw. If a `throw` statement leaves a construction that cir2c does not model,
   the exception does not continue.
 - The `std::terminate` function and the trap code become `abort()`.
+- An exception that leaves `main()` or a static initializer calls `abort()`,
+  as `std::terminate` does. The destructors between the `throw` and `main()`
+  operate before the `abort()`. C++ permits this: whether the stack unwinds
+  before `std::terminate` is implementation-defined.
+- An exception that leaves a `noexcept` function, for example a destructor, also
+  calls `abort()`. The test is after the call: the destructors in the
+  `noexcept` function operate before the `abort()`. cir2c writes the test only
+  after a call to a function that can throw, or after an indirect call. A
+  destructor that operates during the unwinding of an exception starts with
+  `__cir_exc_active` set. Thus only a new exception from the call calls
+  `abort()`, and a new exception during the unwinding continues as the first
+  exception.
 - cir2c writes the global destructor calls before each `return` in `main`. They
   do not operate on the `exit()`, `abort()` or `_exit` paths. These paths have no
   one text position.
@@ -862,11 +1444,19 @@ rounding, thus cir2c keeps the call: `fma(a, b, c)`.
 The default structured output keeps the `for`, `while` and `if` statements and
 the scopes. Most verification tools examine this form more efficiently.
 
-The two modes do not accept the same programs. A construction that fails in one
-mode can operate in the other mode. This is a limit. But it is also a useful
-test. Try the two modes when a translation fails.
+`run-cir2c.sh` makes only the structured output. The flat output of the cir2c
+binary is not correct for exceptions (issue #21, see 5.2).
 
 ### 8.7 Types
+
+**Wide floating-point constants.** clang writes a `long double` constant into
+the CIR as the shortest decimal for the 80-bit format, for example
+`#cir.fp<1.000000e-01>` for `0.1L`. The CIR parser reads a decimal as a
+`double`, which loses the extra bits of the mantissa and each value outside the
+range of `double` (`LDBL_MAX` becomes an infinity, `LDBL_TRUE_MIN` becomes 0).
+Before the parse, cir2c replaces each such decimal (80-bit and 128-bit types)
+with its exact bit pattern, which the parser reads without loss
+(`src/main.cpp`).
 
 - The `long double` type becomes the nearest C type on the host. The
   `x86_fp80`, `bf16` and `fp16` types are in the output. But the bits are not
@@ -874,17 +1464,48 @@ test. Try the two modes when a translation fails.
 - cir2c writes bit fields with explicit get and set operations and not with C
   bit-field syntax. Thus the layout is the layout of CIR and not the layout of
   the C compiler.
+- A derived class can place its members in the tail padding of a base class
+  that is not POD (Itanium C++ ABI), for example the value of a `std::set<int>`
+  node. CIR then has two records for the base: `X` for a complete object and
+  `X.base` for a base subobject, without the tail padding. cir2c writes
+  `X.base` as its own struct, `<tag of X>__base`. A record that CIR marks as
+  packed gets `__attribute__((packed))`, and a verification tool must honor it.
+- In C, a packed struct has the alignment 1, but its C++ objects have the
+  alignment of the class, for example 8. The address of a member, for example
+  `&node->right`, is aligned only when the object is aligned (C11 6.3.2.3p7).
+  Thus a local or global variable gets the alignment of the CIR, for example
+  `struct Node node2 __attribute__((aligned(8)));`, when it is larger than the
+  alignment of its C type. An object from `malloc` is always aligned. clang
+  still warns (`-Waddress-of-packed-member`), because it cannot see the object
+  at the address operation. gcc-5 and clang-3.9 do not have this warning.
 - The output uses the target of the pinned toolchain. Do not give the output to a
   tool with a different data model, for example a 32-bit model or a different
   byte sequence.
+- The output can access an object through a pointer cast to another type, which
+  C forbids (C11 6.5p7). cir2c removes these accesses for the calling
+  convention (see 7.5), but not all others. An example is a copy of a complete
+  object into a base subobject, which is an `X.base` record. After the
+  translation, cir2c counts the accesses that remain. If there is one or more,
+  cir2c writes a warning with the number and the first example:
+  `cir2c: warning: the output accesses an object through a pointer cast to
+  another type at 1 places, ...`. Such an output is not free of undefined
+  behavior.
 
 ### 8.8 Other information
 
 - The output is not for a person to read in place of the source. The output is
   not for production use. The tests compile the output only to make sure that it
   is correct C code.
-- The tests do not link the output. The C++ library symbols stay unresolved. This
-  is correct.
+- With the `--externalize-std` option, a declaration of a C++ library symbol can
+  stay in the output without a definition. cir2c replaces the calls, so this is
+  correct. With the `--no-externalize-std` option, the models of
+  [8.2](#82-the-standard-library) define the library parts that the program
+  uses, and cir2c rejects a program that uses an undefined symbol.
+- C does not permit a null pointer argument to `memcpy`, `memmove`, `memset`,
+  `memcmp`, `memchr` and their `wmem` forms, also when the size is zero. libc++
+  calls them so for an empty range. Thus cir2c writes such a call as
+  `n ? memcpy(d, s, n) : d`. When the size is zero, the result is the value
+  that the call returns: `d`, `0` or a null pointer.
 - The `cir2c --version` command prints the commit of the build. The releases
   include the `llvm-version.txt` file. Record the two values with each result.
 
@@ -903,6 +1524,7 @@ higher priority than missing functions. Write this in the title.
 ```
 test/
 ├── run_tests.sh                # The test runner for the three suites
+├── cir-merge/                  # The cir-merge tests (one directory for each case)
 ├── integration/input/          # Small test programs (the default suite)
 ├── sources/llvm-test-suite/    # The LLVM SingleSource corpus (2600 programs)
 ├── benchmark_mapper.py         # The runner for SV-COMP .yml tasks
@@ -916,7 +1538,8 @@ toolchain.
 ### 9.2 Run the tests
 
 ```bash
-ctest --test-dir build --output-on-failure     # The integration suite
+ctest --test-dir build --output-on-failure     # The integration suite and the cir-merge tests
+bash test/cir-merge/run_tests.sh               # The cir-merge tests, directly
 bash test/run_tests.sh                         # The same suite, directly
 RUN_LLVM=1 RUN_INTEGRATION=0 bash test/run_tests.sh
 JOBS=8 bash test/run_tests.sh --json-out /tmp/summary.json
@@ -926,8 +1549,10 @@ JOBS=8 bash test/run_tests.sh --json-out /tmp/summary.json
 |---|---|---|
 | `RUN_INTEGRATION` | `1` | Run the integration tests |
 | `RUN_LLVM` | `0` | Run the LLVM SingleSource tests (large and slow) |
+| `RUN_LLVM_MULTI` | `0` | Run the LLVM MultiSource tests |
 | `RUN_ESBMC` | `0` | Run the esbmc-eval tests (the corpus is not in this repository) |
 | `JOBS` | `nproc` | The number of parallel jobs |
+| `MULTI_MERGE` | `c` | The merge strategy of the LLVM MultiSource tests: `c` or `cir` (see [5.6](#56-merge-translation-units)) |
 | `LLVM_EVAL_DIR` | `test/sources/llvm-test-suite/` | The LLVM corpus |
 | `ESBMC_EVAL_DIR` | `test/sources/esbmc-eval/` | The esbmc-eval corpus |
 | `CIR2C_LLVM_PREFIX` | Found automatically | The toolchain prefix |
@@ -940,6 +1565,31 @@ to make the results table. The `--externalize-std` option and the
 **Note: A run with no tests is an error.** The runner prints `No tests ran` and
 returns a non-zero exit code. CI counts an empty suite as a problem. Thus an
 incorrect environment cannot show a good result.
+
+**The cir-merge tests.** Each directory in `test/cir-merge/cases/` is one
+merge. The `.c` and `.cpp` files are compiled to CIR with the toolchain clang.
+The `.cir` files are used directly. The `expect` file gives the result:
+
+| Line | Meaning |
+|---|---|
+| `ok` or `error` (first line) | The merge must succeed or must fail |
+| a text (after `error`) | The messages must contain this text |
+| `output-count N TEXT` | The merged CIR must contain `TEXT` `N` times |
+| `run CODE` | Translate the merged CIR, compile it, run it, and expect the exit code `CODE` |
+| `reference FILE` | Like `run`, but compare the output and the exit code with an LLVM test-suite reference file |
+
+A `sources` file in a case directory lists the inputs by their path in the
+repository. The cases use it for programs of the LLVM MultiSource corpus. A
+`// cir-merge-cflags: FLAGS` line in a source adds compiler flags for that
+source. A `cflags` file in the case directory adds compiler flags for all its
+sources.
+
+The result must not depend on the order of the inputs. Thus the runner merges a
+case with up to three inputs in all orders, and a larger case in sorted order
+and in reverse order. A successful merge must also pass `cir-opt`. After the
+cases, the runner checks the command line (a missing input, an old output that
+a failed merge must not change, `--dump-symbols`, `--verbose`) and
+`run-cir2c.sh --merge cir` (a successful merge and exit code 5).
 
 ### 9.3 Suite 1: the integration tests
 
@@ -955,6 +1605,14 @@ The reference is the native run of the original program, not the exit code 0.
 Some tests in this suite stop with an error on purpose, and some give a computed
 value. Only the original program can say what is correct.
 
+The native run uses the default C++ library of the toolchain image, and that is
+libstdc++. Thus a test must not depend on a text that only libc++ gives, for
+example the `what()` text of an exception that the library throws. With the
+`--no-externalize-std` option (the default of the runner), the `ostream-sink`
+model of [8.2](#82-the-standard-library) discards the output of `std::cout`,
+`std::cerr` and `std::clog`. For a C++ test that names one of them, the runner
+compares only the exit code.
+
 The second level is what finds a wrong result. A lost destructor or an incorrect
 arithmetic operation makes correct C code, and thus a syntax examination cannot
 see it.
@@ -963,6 +1621,34 @@ Add your tests to this suite. Put a small test program in `integration/input/`
 with the name `test_<subject>.<c|cpp>`. The runner finds it automatically. No
 registration is necessary. Give the program a `main()` that examines its own
 result, if you can.
+
+A C++ test can also require a rejection. Write the expected text of the error
+in a line that starts with `// cir2c-test-expect-error: `. The test passes when
+the translation fails and its log contains each of these texts. The
+`test_reject_*.cpp` tests examine the rejections of
+[8.2](#82-the-standard-library) in this way. These rejections occur only with
+the `--no-externalize-std` option. With the `--externalize-std` option, the
+runner skips such a test. A line that starts with
+`// cir2c-test-expect-error-externalize-std: ` gives an error that only the
+`--externalize-std` option causes. Without that option, the test runs as usual.
+
+A test can also forbid a text in the log of the translation, for example a
+warning of cir2c. Write the text in a line that starts with
+`// cir2c-test-log-lacks: `. The test fails when the log contains the text.
+
+A test can also forbid a text in the output C code. Write the text in a line
+that starts with `// cir2c-test-output-lacks: `. The test fails when the output
+contains the text.
+
+A test can also require a text in the output C code. Write the text in a line
+that starts with `// cir2c-test-output-contains: `. The test fails when the
+output does not contain the text.
+
+A test can also require that the output C code compiles with more compiler
+options, for example `-Werror=uninitialized`. Write the options in a line that
+starts with `// cir2c-test-cflags: `. The test fails when the
+`clang -fsyntax-only` command with these options fails. Use this to find
+undefined behavior that clang can report.
 
 The tests examine arithmetic, casts, comparisons, control flow, arrays, records,
 globals, floating-point numbers, pointers, integer promotion and bit operations.
@@ -976,7 +1662,9 @@ ignores this directory.
 
 This suite uses the `sources/llvm-test-suite/` corpus. For each source with a
 `.reference_output` file, the runner translates it, compiles it, links it, runs
-it and compares the output and the exit code.
+it and compares the output and the exit code. With the `--no-externalize-std`
+option, the runner compares only the exit code of a C++ program that names
+`std::cout`, `std::cerr` or `std::clog`, as in [9.3](#93-suite-1-the-integration-tests).
 
 If a difference also occurs with the `clang -fclangir` command, the cause is in
 ClangIR. The runner ignores such a test. cir2c cannot be more correct than its
@@ -984,6 +1672,28 @@ input.
 
 The `generate-reference-outputs.py` script makes the missing `.reference_output`
 files. The script compiles and runs each program with the system compiler.
+
+The SingleSource suite does not include the `MultiSource/` directory.
+
+**The LLVM MultiSource tests** (`RUN_LLVM_MULTI=1`) use the programs in
+`sources/llvm-test-suite/MultiSource/`. Each program has more than one source
+file. The runner translates all files of a program into one C file, with the
+merge strategy that `MULTI_MERGE` selects (`c` or `cir`, see
+[5.6](#56-merge-translation-units)). Then it compiles, links and runs the
+program, and compares the output and the exit code with the reference. CI runs
+the suite two times, one time with each strategy.
+
+The reference outputs come from the LLVM test-suite, which builds and runs each
+program with its own settings. `test/llvm-multisource-options.sh` contains
+these settings, taken from the `CMakeLists.txt` file of each program: the
+language standard, the `-D` flags, the program arguments, the file for stdin
+and the numeric tolerance. The runner runs each program in its directory,
+where the input files are. It compares stdout and stderr together, as the
+reference outputs contain both. With a tolerance, `test/fpcmp.py` compares the
+numbers like the `fpcmp -r` tool of the LLVM test-suite.
+
+The vendored sources and input files are the same as in the LLVM test-suite,
+except for the license header.
 
 ### 9.5 Suite 3: the esbmc-eval tests
 
@@ -1011,7 +1721,7 @@ in agreement.
 | Output mismatch | The program ran and gave an incorrect result. **This is an error.** |
 | Mapper failed | cir2c made no C code. |
 | Compile failed | cir2c made incorrect C code. **This is an error.** |
-| Skipped | A blocklisted operation, a Clang failure, or a known ClangIR difference. |
+| Skipped | A blocklisted operation, a Clang failure, or a known ClangIR difference. Two reasons have their own counter: "several TUs", an esbmc-eval task with more than one source file, which the suite does not translate (one translation unit for each task), and "C++ model limit", the `#error` of a header that the models of [8.2](#82-the-standard-library) do not cover (only with `--no-externalize-std`). |
 | Timed out | The test used more than 60 seconds. |
 
 Always examine the "Output mismatch" category and the "Compile failed" category.
@@ -1027,7 +1737,6 @@ python3 test/benchmark_mapper.py <input-dir> [set-file-or-glob ...]
 | Option | Function |
 |---|---|
 | `-c`, `--c-mode` | Use C mode (`clang -x c`) and not the default C++ mode |
-| `-f`, `--flatten` | Do the `cir-opt -cir-flatten-cfg` step first |
 | `-o DIR`, `--output-dir DIR` | Keep the `.mlir` file and the `output.c` file for each task |
 
 The script writes the results to `output.txt` in the current directory.

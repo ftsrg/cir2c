@@ -69,6 +69,12 @@ std::string indentText(const std::string &text, llvm::StringRef indent) {
   return indented.str();
 }
 
+bool isInMain(mlir::Operation *op) {
+  auto func = op->getParentOfType<cir::FuncOp>();
+  auto sym = func ? symbolNameAttr(func.getOperation()) : mlir::StringAttr();
+  return sym && sym.getValue() == "main";
+}
+
 std::string pointerOperandExpr(mlir::Value v, Mapper &m) {
   std::string n = m.getOrCreateName(v);
   if (!m.isDirectAccess(v) || !mlir::isa<cir::PointerType>(v.getType()))

@@ -25,12 +25,16 @@
 #include <mlir/IR/AsmState.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/MemoryBuffer.h>
+#include <llvm/ADT/APFloat.h>
+#include <llvm/ADT/SmallString.h>
 #include <mlir/IR/DialectRegistry.h>
 #include <mlir/IR/ExtensibleDialect.h>
 #include <mlir/Support/LogicalResult.h>
 
 #include <clang/CIR/Dialect/IR/CIROpsDialect.h.inc>
 
+#include <algorithm>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <vector>
@@ -44,10 +48,11 @@ int main(int argc, char **argv) {
   std::vector<std::string> positional;
   // Issue #7: externalize all std:: calls (I/O and containers) by default.
   bool externalizeStd = true;
+  bool tuPart = false;
 
   const char *usage =
       "Usage: cir2c [--monitor-json <trace.json>] "
-      "[--[no-]externalize-std] "
+      "[--[no-]externalize-std] [--tu-part] "
       "<input.mlir> <output.c>\n";
 
   for (int i = 1; i < argc; ++i) {
@@ -58,6 +63,7 @@ int main(int argc, char **argv) {
     }
     if (arg == "--externalize-std") { externalizeStd = true; continue; }
     if (arg == "--no-externalize-std") { externalizeStd = false; continue; }
+    if (arg == "--tu-part") { tuPart = true; continue; }
     if (arg == "--monitor-json") {
       if (i + 1 >= argc) {
         llvm::errs() << usage;
@@ -104,10 +110,70 @@ int main(int argc, char **argv) {
   // no-op on CIR from a supported toolchain; it is kept only so text captured
   // from an older ClangIR still parses. The C emitter never inspects these
   // flags, so dropping them is safe either way.
+  // Only on allocas: the same text can be in a string literal of the program.
   for (const std::string pattern : {", cleanup_dest_slot", ", const"}) {
     std::string::size_type pos = 0;
-    while ((pos = input.find(pattern, pos)) != std::string::npos)
-      input.erase(pos, pattern.size());
+    while ((pos = input.find(pattern, pos)) != std::string::npos) {
+      std::string::size_type lineStart = input.rfind('\n', pos);
+      lineStart = lineStart == std::string::npos ? 0 : lineStart + 1;
+      if (input.compare(pos + pattern.size(), 1, "]") == 0 &&
+          input.find("cir.alloca", lineStart) < pos)
+        input.erase(pos, pattern.size());
+      else
+        pos += pattern.size();
+    }
+  }
+
+  // A floating-point literal of a type wider than double. clang writes the
+  // shortest decimal that gives the value in the type's own format, for example
+  // `#cir.fp<1.000000e-01> : !cir.long_double<!cir.f80>` for 0.1L, but the
+  // attribute parser reads a decimal as a double. That loses the extra bits of
+  // the 80-bit format, and each value outside the range of double becomes 0 or
+  // an infinity. The parser reads a hexadecimal literal as the bit pattern of
+  // the type, so each such decimal becomes its exact bit pattern here.
+  {
+    struct Wide { const char *suffix; const llvm::fltSemantics &semantics; };
+    const Wide wides[] = {
+        {"> : !cir.long_double<!cir.f80>", llvm::APFloat::x87DoubleExtended()},
+        {"> : !cir.f80", llvm::APFloat::x87DoubleExtended()},
+        {"> : !cir.long_double<!cir.f128>", llvm::APFloat::IEEEquad()},
+        {"> : !cir.f128", llvm::APFloat::IEEEquad()},
+    };
+    const std::string open = "#cir.fp<";
+    std::string out;
+    out.reserve(input.size());
+    std::string::size_type pos = 0;
+    while (true) {
+      std::string::size_type at = input.find(open, pos);
+      if (at == std::string::npos) break;
+      std::string::size_type begin = at + open.size();
+      std::string::size_type end = input.find('>', begin);
+      if (end == std::string::npos) break;
+      std::string literal = input.substr(begin, end - begin);
+      std::string replacement = literal;
+      for (const Wide &wide : wides) {
+        if (input.compare(end, std::strlen(wide.suffix), wide.suffix) != 0) continue;
+        if (literal.rfind("0x", 0) == 0) break;
+        llvm::APFloat value(wide.semantics);
+        auto status = value.convertFromString(literal, llvm::APFloat::rmNearestTiesToEven);
+        if (!status) {
+          llvm::consumeError(status.takeError());
+          break;
+        }
+        llvm::APInt bits = value.bitcastToAPInt();
+        llvm::SmallString<40> hex;
+        bits.toString(hex, 16, /*Signed=*/false);
+        std::string digits = hex.str().upper();
+        digits.insert(0, bits.getBitWidth() / 4 - std::min<size_t>(digits.size(), bits.getBitWidth() / 4), '0');
+        replacement = "0x" + digits;
+        break;
+      }
+      out.append(input, pos, begin - pos);
+      out += replacement;
+      pos = end;
+    }
+    out.append(input, pos, std::string::npos);
+    input = std::move(out);
   }
 
   llvm::SourceMgr sourceMgr;
@@ -123,6 +189,7 @@ int main(int argc, char **argv) {
 
   Mapper mapper;
   mapper.setExternalizeStd(externalizeStd);
+  mapper.setTuPart(tuPart);
   registerBuiltinHandlers(mapper);
 
   std::ofstream ofs(outFile);

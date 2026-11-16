@@ -38,10 +38,34 @@ public:
   }
 
 private:
+  static bool passesAsVoidPointer(cir::CastOp op) {
+    if (op.getKind() != cir::CastKind::bitcast) return false;
+    auto to = mlir::dyn_cast<cir::PointerType>(op.getResult().getType());
+    auto from = mlir::dyn_cast<cir::PointerType>(op.getSrc().getType());
+    if (!to || !from || !mlir::isa<cir::VoidType>(to.getPointee()) ||
+        mlir::isa<cir::FuncType>(from.getPointee()))
+      return false;
+    if (op.getResult().use_empty()) return false;
+    for (mlir::OpOperand &use : op.getResult().getUses()) {
+      auto call = mlir::dyn_cast<cir::CallOp>(use.getOwner());
+      if (!call || !call.getCallee()) return false;
+      auto fn = mlir::SymbolTable::lookupNearestSymbolFrom<cir::FuncOp>(
+          call, call.getCalleeAttr());
+      if (!fn || fn.getFunctionType().isVarArg()) return false;
+    }
+    return true;
+  }
+
   static bool handleCast(cir::CastOp op, Mapper &m, std::ostream &out) {
     Operation *o = op.getOperation();
     if (o->getNumOperands() < 1) return false;
     Value operand = o->getOperand(0);
+
+    // A cast of a vtable pointer: the start of a read of a vtable entry (issue #3).
+    if (m.startsVtableView(o)) return m.mapVtableViewCast(o);
+
+    // A read of a local variable as another type (issue #11).
+    if (m.mapUnionSlotView(o)) return true;
 
     // A vtable dispatch chain emits no C of its own: everything from
     // cir.vtable.get_vptr through the function-pointer load is suppressed, and
@@ -102,6 +126,14 @@ private:
               return true;
             }
           }
+    }
+
+    // A `void*` argument of a direct, non-variadic call keeps the operand's own
+    // pointer type: C converts it implicitly, and a verifier reads the element
+    // type of a memcpy or memset argument from it.
+    if (passesAsVoidPointer(op)) {
+      m.setName(o->getResult(0), opnd);
+      return true;
     }
 
     std::string tmp = m.freshName("cast");

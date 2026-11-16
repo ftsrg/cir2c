@@ -1,0 +1,166 @@
+/*
+ * Copyright 2025 Budapest University of Technology and Economics
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+
+// cir2c model "istream-nondet": <istream>, input from std::cin (README 8.2).
+//
+// The input of a verification task is unknown. Each extraction of an
+// arithmetic value succeeds and gives the variable an unknown value of its
+// type, from the SV-COMP function __VERIFIER_nondet_<type>. Thus the input
+// never ends and an extraction never fails.
+//
+// The model declares some members and functions without a definition. With
+// --no-externalize-std, cir2c rejects a program that uses one of them
+// (README 8.2):
+// - The input of characters and strings: operator>> for char and char *,
+//   get, getline, read, peek, and operator>> and getline for std::string,
+//   which <string> declares. A model of such input needs a bound on the length.
+// - The stream state: operator bool, operator!, good, eof, fail, bad, rdstate.
+//   In the model, an extraction never fails, so a loop like
+//   `while (cin >> x)` would not end, and the code after it would not be
+//   accessible. In the program, the loop ends at the end of the input.
+// - long double and void *: SV-COMP has no __VERIFIER_nondet function for them.
+
+#ifndef CIR2C_MODEL_ISTREAM_NONDET_ISTREAM
+#define CIR2C_MODEL_ISTREAM_NONDET_ISTREAM
+
+#include <ios>
+// <string> declares operator>> and getline for std::string. They have no
+// definition, so a program that uses them is rejected (see above).
+#include <string>
+
+extern "C" {
+bool __VERIFIER_nondet_bool(void);
+short __VERIFIER_nondet_short(void);
+unsigned short __VERIFIER_nondet_ushort(void);
+int __VERIFIER_nondet_int(void);
+unsigned int __VERIFIER_nondet_uint(void);
+long __VERIFIER_nondet_long(void);
+unsigned long __VERIFIER_nondet_ulong(void);
+long long __VERIFIER_nondet_longlong(void);
+unsigned long long __VERIFIER_nondet_ulonglong(void);
+float __VERIFIER_nondet_float(void);
+double __VERIFIER_nondet_double(void);
+}
+
+// As in <ostream>, the class has no virtual base and no virtual function.
+template <class CharT, class Traits>
+class std::basic_istream final : public std::basic_ios<CharT, Traits> {
+public:
+  typedef typename Traits::int_type int_type;
+
+  // Only the model makes a stream (cin). The input needs no stream buffer.
+  constexpr basic_istream() = default;
+  basic_istream(const basic_istream &) = delete;
+  basic_istream &operator=(const basic_istream &) = delete;
+
+  basic_istream &operator>>(bool &value) {
+    value = __VERIFIER_nondet_bool();
+    return *this;
+  }
+  basic_istream &operator>>(short &value) {
+    value = __VERIFIER_nondet_short();
+    return *this;
+  }
+  basic_istream &operator>>(unsigned short &value) {
+    value = __VERIFIER_nondet_ushort();
+    return *this;
+  }
+  basic_istream &operator>>(int &value) {
+    value = __VERIFIER_nondet_int();
+    return *this;
+  }
+  basic_istream &operator>>(unsigned int &value) {
+    value = __VERIFIER_nondet_uint();
+    return *this;
+  }
+  basic_istream &operator>>(long &value) {
+    value = __VERIFIER_nondet_long();
+    return *this;
+  }
+  basic_istream &operator>>(unsigned long &value) {
+    value = __VERIFIER_nondet_ulong();
+    return *this;
+  }
+  basic_istream &operator>>(long long &value) {
+    value = __VERIFIER_nondet_longlong();
+    return *this;
+  }
+  basic_istream &operator>>(unsigned long long &value) {
+    value = __VERIFIER_nondet_ulonglong();
+    return *this;
+  }
+  basic_istream &operator>>(float &value) {
+    value = __VERIFIER_nondet_float();
+    return *this;
+  }
+  basic_istream &operator>>(double &value) {
+    value = __VERIFIER_nondet_double();
+    return *this;
+  }
+  // A manipulator, for example std::ws.
+  basic_istream &operator>>(basic_istream &(*manipulator)(basic_istream &)) {
+    return manipulator(*this);
+  }
+
+  // Skips input. The input is unknown, so the next values stay unknown.
+  basic_istream &ignore(std::streamsize = 1, int_type = Traits::eof()) { return *this; }
+
+  // No definition: cir2c rejects a program that uses these (see above).
+  basic_istream &operator>>(long double &);
+  basic_istream &operator>>(void *&);
+  int_type get();
+  basic_istream &get(CharT &);
+  basic_istream &get(CharT *, std::streamsize);
+  basic_istream &get(CharT *, std::streamsize, CharT);
+  basic_istream &getline(CharT *, std::streamsize);
+  basic_istream &getline(CharT *, std::streamsize, CharT);
+  basic_istream &read(CharT *, std::streamsize);
+  int_type peek();
+  explicit operator bool() const;
+  bool operator!() const;
+  bool good() const;
+  bool eof() const;
+  bool fail() const;
+  bool bad() const;
+  typename std::basic_ios<CharT, Traits>::iostate rdstate() const;
+};
+
+namespace std {
+
+// Skips white space. The input is unknown, so the next values stay unknown.
+template <class CharT, class Traits>
+basic_istream<CharT, Traits> &ws(basic_istream<CharT, Traits> &is) {
+  return is;
+}
+
+// No definition: cir2c rejects a program that uses these (see above).
+template <class CharT, class Traits>
+basic_istream<CharT, Traits> &operator>>(basic_istream<CharT, Traits> &, CharT &);
+template <class CharT, class Traits>
+basic_istream<CharT, Traits> &operator>>(basic_istream<CharT, Traits> &, CharT *);
+template <class Traits>
+basic_istream<char, Traits> &operator>>(basic_istream<char, Traits> &, signed char &);
+template <class Traits>
+basic_istream<char, Traits> &operator>>(basic_istream<char, Traits> &, unsigned char &);
+template <class Traits>
+basic_istream<char, Traits> &operator>>(basic_istream<char, Traits> &, signed char *);
+template <class Traits>
+basic_istream<char, Traits> &operator>>(basic_istream<char, Traits> &, unsigned char *);
+
+} // namespace std
+
+#endif

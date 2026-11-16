@@ -82,7 +82,7 @@ Mapper::Mapper() : counter(0) {}
 static std::string oneLineOperationText(mlir::Operation &op) {
   std::string text;
   llvm::raw_string_ostream rso(text);
-  op.print(rso);
+  op.print(rso, mlir::OpPrintingFlags().assumeVerified().useLocalScope());
   rso.flush();
 
   std::replace(text.begin(), text.end(), '\n', ' ');
@@ -117,9 +117,9 @@ void Mapper::printMonitorReport(std::ostream &out) const {
 // fromDepth.  Each cleanup body is wrapped in a C block `{ ... }` to avoid
 // name collisions when a region is emitted more than once (e.g. early-return
 // and normal fall-through both need the same cleanup).
-void Mapper::emitPendingCleanups(std::ostream &out, int fromDepth, bool consume) {
+void Mapper::emitPendingCleanups(std::ostream &out, int fromDepth, bool consume, size_t fromIndex) {
   // Walk innermost → outermost (back → front).
-  for (int i = static_cast<int>(cleanupStack_.size()) - 1; i >= 0; --i) {
+  for (int i = static_cast<int>(cleanupStack_.size()) - 1; i >= static_cast<int>(fromIndex); --i) {
     if (cleanupStack_[i].loopDepth < fromDepth) break;
     mlir::Region *cleanupRegion = cleanupStack_[i].region;
     if (!cleanupRegion || cleanupRegion->empty()) continue;
@@ -178,7 +178,47 @@ std::string Mapper::freshName(llvm::StringRef base) {
   return s;
 }
 
+std::optional<std::string> Mapper::constantStringLiteral(mlir::Value v) const {
+  while (auto cast = v.getDefiningOp<cir::CastOp>()) v = cast.getSrc();
+  // The address of the global: cir.get_global, or a cir.const global view of
+  // its first byte (__FILE__).
+  mlir::Operation *use = v.getDefiningOp();
+  mlir::FlatSymbolRefAttr symbol;
+  if (auto get = v.getDefiningOp<cir::GetGlobalOp>()) {
+    symbol = get.getNameAttr();
+  } else if (auto c = v.getDefiningOp<cir::ConstantOp>()) {
+    auto view = mlir::dyn_cast<cir::GlobalViewAttr>(c.getValue());
+    if (!view) return std::nullopt;
+    if (auto indices = view.getIndices()) {
+      for (mlir::Attribute index : indices) {
+        auto i = mlir::dyn_cast<cir::IntAttr>(index);
+        auto j = mlir::dyn_cast<mlir::IntegerAttr>(index);
+        if (!(i && i.getValue().isZero()) && !(j && j.getInt() == 0)) return std::nullopt;
+      }
+    }
+    symbol = view.getSymbol();
+  }
+  if (!use || !symbol) return std::nullopt;
+  auto global = mlir::SymbolTable::lookupNearestSymbolFrom<cir::GlobalOp>(use, symbol);
+  if (!global || !global.getConstant()) return std::nullopt;
+  auto init = global.getInitialValue();
+  auto array = init ? mlir::dyn_cast<cir::ConstArrayAttr>(*init) : cir::ConstArrayAttr();
+  auto text = array ? mlir::dyn_cast<mlir::StringAttr>(array.getElts()) : mlir::StringAttr();
+  if (!text) return std::nullopt;
+  std::string bytes = text.getValue().str();
+  while (!bytes.empty() && bytes.back() == '\0') bytes.pop_back();
+  // A literal ends at its first null character; such text stays a variable.
+  if (bytes.find('\0') != std::string::npos) return std::nullopt;
+  return '"' + ConstantEmitter::escapeCString(bytes) + '"';
+}
+
 std::string Mapper::getOrCreateName(Value v) {
+  // A view of a vtable has no C value (src/VirtualBases.cpp). Only a load reads it.
+  if (vtableViews_.count(v) && !vtableViewMisused_) {
+    llvm::errs() << "cir2c: error: the output uses a pointer into a vtable other than for "
+                    "a read of an entry (issue #3)\n";
+    vtableViewMisused_ = true;
+  }
   auto it = valueNames.find(v);
   if (it != valueNames.end()) return it->second;
   std::string name = freshName("v");
@@ -229,8 +269,54 @@ std::string Mapper::lookupFieldName(const std::string &recordName, int index) co
 
 std::string Mapper::arrayBaseTypeAndDims(mlir::Type t, std::string &dimsOut) const { return typeMapper_.arrayBaseTypeAndDims(t, dimsOut); }
 
+namespace {
+
+// An integer of a width that C has no type for, which travels in the next
+// wider standard type (TypeMapper::mapTypeToC).
+bool hasOddWidth(mlir::Type t) {
+  auto integer = mlir::dyn_cast<cir::IntType>(t);
+  if (!integer) return false;
+  unsigned w = integer.getWidth();
+  return w != 8 && w != 16 && w != 32 && w != 64;
+}
+
+// Operations whose result in the wider type is that of the odd width: moves
+// of the value, the overflow builtins (they compute with the exact values),
+// and integral casts that keep the value when they go into an odd width.
+bool keepsOddWidthValue(mlir::Operation *op) {
+  if (mlir::isa<cir::LoadOp, cir::StoreOp, cir::AllocaOp, cir::CallOp, cir::TryCallOp,
+                cir::ReturnOp, cir::YieldOp, cir::AddOverflowOp, cir::SubOverflowOp,
+                cir::MulOverflowOp>(op))
+    return true;
+  auto cast = mlir::dyn_cast<cir::CastOp>(op);
+  if (!cast) return false;
+  if (cast.getKind() == cir::CastKind::bitcast) return true;
+  if (cast.getKind() != cir::CastKind::integral) return false;
+  auto from = mlir::dyn_cast<cir::IntType>(cast.getSrc().getType());
+  auto to = mlir::dyn_cast<cir::IntType>(cast.getType());
+  if (!from || !to) return false;
+  // Into a standard type, the C conversion of the exact value gives the
+  // result of the CIR cast (modulo 2^N for a narrower type).
+  if (!hasOddWidth(to)) return true;
+  // Into an odd width, only a cast that keeps each value.
+  return to.getWidth() > from.getWidth() && (to.isSigned() || !from.isSigned());
+}
+
+} // namespace
+
 bool Mapper::mapOperation(mlir::Operation *op, std::ostream &out) {
   auto opName = op->getName().getStringRef();
+  if (!keepsOddWidthValue(op)) {
+    std::vector<mlir::Type> types(op->getOperandTypes().begin(), op->getOperandTypes().end());
+    types.insert(types.end(), op->getResultTypes().begin(), op->getResultTypes().end());
+    for (mlir::Type t : types)
+      if (hasOddWidth(t)) {
+        llvm::errs() << "cir2c: error: " << opName << " computes with a "
+                     << mlir::cast<cir::IntType>(t).getWidth()
+                     << "-bit integer, which C has no type for (README 8.1)\n";
+        return false;
+      }
+  }
   std::string inputText = oneLineOperationText(*op);
   traceability.recordOperationVisit(opName);
 

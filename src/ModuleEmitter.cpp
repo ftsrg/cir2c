@@ -112,7 +112,7 @@ static std::string stripEmptyArgList(const std::string &s) {
 static std::string oneLineOperationText(mlir::Operation &op) {
   std::string text;
   llvm::raw_string_ostream rso(text);
-  op.print(rso);
+  op.print(rso, mlir::OpPrintingFlags().assumeVerified().useLocalScope());
   rso.flush();
 
   std::replace(text.begin(), text.end(), '\n', ' ');
@@ -139,6 +139,158 @@ static std::string oneLineOperationText(mlir::Operation &op) {
   return compact.substr(start, end - start + 1);
 }
 
+// The external names of the C standard library (C11 7.1.3 reserves them), and
+// the functions that SV-COMP and glibc give a meaning to. A C++ function with
+// one of these names is a separate overload in C++, but in C it would redefine
+// the library function, and the calls that the output makes to the library
+// function would reach it.
+static bool isCLibraryName(const std::string &name) {
+  static const std::set<std::string> names = {
+      // <assert.h> (glibc), SV-COMP
+      "__assert_fail", "reach_error", "abort",
+      // <ctype.h>, <wctype.h>
+      "isalnum", "isalpha", "isblank", "iscntrl", "isdigit", "isgraph",
+      "islower", "isprint", "ispunct", "isspace", "isupper", "isxdigit",
+      "tolower", "toupper", "iswalnum", "iswalpha", "iswblank", "iswcntrl",
+      "iswdigit", "iswgraph", "iswlower", "iswprint", "iswpunct", "iswspace",
+      "iswupper", "iswxdigit", "iswctype", "wctype", "towlower", "towupper",
+      "towctrans", "wctrans",
+      // <locale.h>, <setjmp.h>, <signal.h>
+      "setlocale", "localeconv", "setjmp", "longjmp", "signal", "raise",
+      // <math.h>; the f and l variants are checked below
+      "acos", "asin", "atan", "atan2", "cos", "sin", "tan", "acosh", "asinh",
+      "atanh", "cosh", "sinh", "tanh", "exp", "exp2", "expm1", "frexp",
+      "ilogb", "ldexp", "log", "log10", "log1p", "log2", "logb", "modf",
+      "scalbn", "scalbln", "cbrt", "fabs", "hypot", "pow", "sqrt", "erf",
+      "erfc", "lgamma", "tgamma", "ceil", "floor", "nearbyint", "rint",
+      "lrint", "llrint", "round", "lround", "llround", "trunc", "fmod",
+      "remainder", "remquo", "copysign", "nan", "nextafter", "nexttoward",
+      "fdim", "fmax", "fmin", "fma",
+      // <stdio.h>
+      "remove", "rename", "tmpfile", "tmpnam", "fclose", "fflush", "fopen",
+      "freopen", "setbuf", "setvbuf", "fprintf", "fscanf", "printf", "scanf",
+      "snprintf", "sprintf", "sscanf", "vfprintf", "vfscanf", "vprintf",
+      "vscanf", "vsnprintf", "vsprintf", "vsscanf", "fgetc", "fgets", "fputc",
+      "fputs", "getc", "getchar", "gets", "putc", "putchar", "puts", "ungetc",
+      "fread", "fwrite", "fgetpos", "fseek", "fsetpos", "ftell", "rewind",
+      "clearerr", "feof", "ferror", "perror",
+      // <stdlib.h>
+      "atof", "atoi", "atol", "atoll", "strtod", "strtof", "strtold", "strtol",
+      "strtoll", "strtoul", "strtoull", "rand", "srand", "aligned_alloc",
+      "calloc", "free", "malloc", "realloc", "atexit", "at_quick_exit", "exit",
+      "_Exit", "getenv", "quick_exit", "system", "bsearch", "qsort", "abs",
+      "labs", "llabs", "div", "ldiv", "lldiv", "mblen", "mbtowc", "wctomb",
+      "mbstowcs", "wcstombs",
+      // <string.h>, <wchar.h>
+      "memcpy", "memmove", "strcpy", "strncpy", "strcat", "strncat", "memcmp",
+      "strcmp", "strcoll", "strncmp", "strxfrm", "memchr", "strchr", "strcspn",
+      "strpbrk", "strrchr", "strspn", "strstr", "strtok", "memset", "strerror",
+      "strlen", "wmemcpy", "wmemmove", "wmemcmp", "wmemchr", "wmemset",
+      "wcscpy", "wcsncpy", "wcscat", "wcsncat", "wcscmp", "wcsncmp", "wcslen",
+      "wcschr", "wcsrchr", "wcsstr", "wcstok", "btowc", "wctob", "mbrtowc",
+      "wcrtomb", "mbsinit", "mbrlen", "mbsrtowcs", "wcsrtombs",
+      // <time.h>
+      "clock", "difftime", "mktime", "time", "asctime", "ctime", "gmtime",
+      "localtime", "strftime"};
+  if (names.count(name) || name.rfind("__VERIFIER_", 0) == 0) return true;
+  if (name.size() > 1 && (name.back() == 'f' || name.back() == 'l'))
+    return names.count(name.substr(0, name.size() - 1)) > 0;
+  return false;
+}
+
+// The parameters of a C library function whose standard prototype points to
+// const (C11 7.1.4 and the prototypes of each header), as a bit mask of the
+// parameter indexes. The CIR has no const, but a declaration of a library
+// function whose type is not compatible with the standard one is undefined
+// (C11 6.2.7p2). The table also has __assert_fail of glibc (<assert.h>), which
+// each assertion calls. This table is a temporary workaround: the CIR has no
+// const because CIR pointer types have no qualifiers (llvm/llvm-project#217687,
+// cir2c #8). mbsrtowcs and wcsrtombs are not in the table: their parameter is
+// `const char **`, and a call with a `char **` argument is not valid C.
+static unsigned cLibraryConstParams(const std::string &name) {
+  static const std::map<std::string, unsigned> masks = {
+      // <locale.h>, <wctype.h>
+      {"setlocale", 0x2}, {"wctype", 0x1}, {"wctrans", 0x1},
+      // <assert.h> of glibc: __assert_fail(assertion, file, line, function)
+      {"__assert_fail", 0xb},
+      // <math.h>
+      {"nan", 0x1}, {"nanf", 0x1}, {"nanl", 0x1},
+      // <stdio.h>
+      {"remove", 0x1}, {"rename", 0x3}, {"fopen", 0x3}, {"freopen", 0x3},
+      {"fprintf", 0x2}, {"fscanf", 0x2}, {"printf", 0x1}, {"scanf", 0x1},
+      {"snprintf", 0x4}, {"sprintf", 0x2}, {"sscanf", 0x3}, {"vfprintf", 0x2},
+      {"vfscanf", 0x2}, {"vprintf", 0x1}, {"vscanf", 0x1}, {"vsnprintf", 0x4},
+      {"vsprintf", 0x2}, {"vsscanf", 0x3}, {"fputs", 0x1}, {"puts", 0x1},
+      {"fwrite", 0x1}, {"fsetpos", 0x2}, {"perror", 0x1},
+      // <stdlib.h>
+      {"atof", 0x1}, {"atoi", 0x1}, {"atol", 0x1}, {"atoll", 0x1},
+      {"strtod", 0x1}, {"strtof", 0x1}, {"strtold", 0x1}, {"strtol", 0x1},
+      {"strtoll", 0x1}, {"strtoul", 0x1}, {"strtoull", 0x1}, {"getenv", 0x1},
+      {"system", 0x1}, {"bsearch", 0x3}, {"mblen", 0x1}, {"mbtowc", 0x2},
+      {"mbstowcs", 0x2}, {"wcstombs", 0x2},
+      // <string.h>
+      {"memcpy", 0x2}, {"memmove", 0x2}, {"strcpy", 0x2}, {"strncpy", 0x2},
+      {"strcat", 0x2}, {"strncat", 0x2}, {"memcmp", 0x3}, {"strcmp", 0x3},
+      {"strcoll", 0x3}, {"strncmp", 0x3}, {"strxfrm", 0x2}, {"memchr", 0x1},
+      {"strchr", 0x1}, {"strcspn", 0x3}, {"strpbrk", 0x3}, {"strrchr", 0x1},
+      {"strspn", 0x3}, {"strstr", 0x3}, {"strtok", 0x2}, {"strlen", 0x1},
+      // <wchar.h>
+      {"wmemcpy", 0x2}, {"wmemmove", 0x2}, {"wmemcmp", 0x3}, {"wmemchr", 0x1},
+      {"wcscpy", 0x2}, {"wcsncpy", 0x2}, {"wcscat", 0x2}, {"wcsncat", 0x2},
+      {"wcscmp", 0x3}, {"wcsncmp", 0x3}, {"wcslen", 0x1}, {"wcschr", 0x1},
+      {"wcsrchr", 0x1}, {"wcsstr", 0x3}, {"wcstok", 0x2}, {"mbrtowc", 0x2},
+      {"mbsinit", 0x1}, {"mbrlen", 0x1},
+      // <time.h>
+      {"asctime", 0x1}, {"ctime", 0x1}, {"gmtime", 0x1}, {"localtime", 0x1},
+      {"strftime", 0xc}};
+  auto it = masks.find(name);
+  return it == masks.end() ? 0 : it->second;
+}
+
+// With --no-externalize-std, a C++ program must define each function and
+// object that its output uses (README 8.2). Only the C standard library and SV-COMP
+// may stay undefined: a verification tool knows them. For any other undefined
+// symbol, a tool would choose a behavior, and the result would not belong to
+// the program. With --externalize-std, cir2c replaces the library calls
+// instead.
+void Mapper::requireDefinition(const std::string &symbol, bool isObject) {
+  if (externalizeStd_) return;
+  static const std::set<std::string> cObjects = {"stdin", "stdout", "stderr"};
+  if (isObject ? cObjects.count(symbol) > 0 : isCLibraryName(symbol)) return;
+  if (std::find(undefinedSymbols_.begin(), undefinedSymbols_.end(), symbol) ==
+      undefinedSymbols_.end())
+    undefinedSymbols_.push_back(symbol);
+}
+
+// Whether the output refers to the symbol of symbolOp: a use in a function body
+// that the output contains, or in the initializer of a global. Two uses do not
+// count, because they do not reach the output: an attribute of a function, for
+// example personality(@__gxx_personality_v0), and the initializer of an RTTI
+// object, which the output does not contain (see mapModule).
+bool Mapper::usedByOutput(mlir::Operation *symbolOp) const {
+  auto sym = symbolNameAttr(symbolOp);
+  auto module = symbolOp->getParentOfType<mlir::ModuleOp>();
+  if (!sym || !module) return true;
+  auto uses = mlir::SymbolTable::getSymbolUses(sym, module);
+  if (!uses) return true;
+  for (const mlir::SymbolTable::SymbolUse &use : *uses) {
+    mlir::Operation *user = use.getUser();
+    if (llvm::isa<cir::FuncOp>(user)) continue;
+    auto func = user->getParentOfType<cir::FuncOp>();
+    if (!func) {
+      auto global = llvm::dyn_cast<cir::GlobalOp>(user);
+      auto init = global ? global.getInitialValue() : std::nullopt;
+      if (init && mlir::isa<cir::TypeInfoAttr>(*init)) continue;
+      auto globalSym = global ? symbolNameAttr(global) : mlir::StringAttr();
+      if (globalSym && globalElided(globalSym.getValue())) continue;
+      return true;
+    }
+    auto funcSym = symbolNameAttr(func);
+    if (funcSym && !funcDefElided(funcSym.getValue())) return true;
+  }
+  return false;
+}
+
 void Mapper::prepareFunctionNames(mlir::ModuleOp module) {
   functionOutputNames.clear();
   // Collect candidate pairs (mangled -> demangled-sanitized).
@@ -151,6 +303,9 @@ void Mapper::prepareFunctionNames(mlir::ModuleOp module) {
       std::string dem = demangleSymbol(mangled);
       dem = stripEmptyArgList(dem);
       std::string san = mangleLabel(dem);
+      // The suffixes below number overloads per module, so across translation
+      // units the same readable name could be another function.
+      if (tuPart_) san = mangleLabel(mangled);
       list.emplace_back(mangled, san);
     }
   });
@@ -168,7 +323,10 @@ void Mapper::prepareFunctionNames(mlir::ModuleOp module) {
     const std::string &mangled = p.first;
     std::string base = p.second.empty() ? mangleLabel(mangled) : p.second;
     std::string chosen = base;
-    for (unsigned n = 2; used.count(chosen); ++n)
+    // A C++ function (a mangled symbol) never takes the name of a C library
+    // function (issue #8); a C function with that name is the library one.
+    bool reserved = mangled.rfind("_Z", 0) == 0 && isCLibraryName(base);
+    for (unsigned n = 2; used.count(chosen) || (reserved && chosen == base); ++n)
       chosen = base + "_" + std::to_string(n);
     used.insert(chosen);
     functionOutputNames[mangled] = chosen;
@@ -211,9 +369,8 @@ void Mapper::ensureMemcpyDeclared() {
   if (memcpyDeclared_) return;
   memcpyDeclared_ = true;
   // If the program already references memcpy, emitFuncForwardDecl has emitted a
-  // prototype for it (non-const, derived from the CIR type — CIR drops the
-  // const). Emitting our const-correct one too would be a conflicting
-  // redeclaration, so defer to the existing one.
+  // prototype for it (with the const of the standard prototype, see
+  // cLibraryConstParams), so do not declare it a second time.
   if (forwardDeclaredFuncNames_.count("memcpy")) return;
   verifierDeclsBuf_ << "extern void *memcpy(void*, const void*, unsigned long);\n";
 }
@@ -532,6 +689,11 @@ bool Mapper::funcDefElided(llvm::StringRef sym) const {
   return droppableDefs_.count(s) || declOnlyFuncs_.count(s);
 }
 
+bool Mapper::globalElided(llvm::StringRef sym) const {
+  std::string s = sym.str();
+  return droppableGlobals_.count(s) && !reachableDefs_.count(s);
+}
+
 void Mapper::computeReachableDefs(mlir::ModuleOp module) {
   if (reachabilityComputed_) return;
   reachabilityComputed_ = true;
@@ -591,9 +753,23 @@ void Mapper::computeReachableDefs(mlir::ModuleOp module) {
     if (sym.empty()) return;
     mlir::Operation *fop = f.getOperation();
     bool hasBody = fop->getNumRegions() > 0 && !fop->getRegion(0).empty();
-    if (!hasBody) { declOnlyFuncs_.insert(sym); return; }
+    if (!hasBody) {
+      declOnlyFuncs_.insert(sym);
+      // Another unit may call the alias clang made of a constructor (C1 of C2).
+      if (tuPart_ && f.getAliasee()) markRoot(sym);
+      // emitFuncForwardDecl gives a body-less complete-object constructor or
+      // destructor a stub that calls the base variant: that variant is used.
+      for (auto [from, to] : {std::pair<const char *, const char *>{"C1E", "C2E"}, {"D1E", "D2E"}}) {
+        size_t pos = sym.rfind(from);
+        if (pos != std::string::npos)
+          edges[sym].insert(sym.substr(0, pos) + to + sym.substr(pos + 3));
+      }
+      return;
+    }
     cir::GlobalLinkageKind lk = f.getLinkage();
-    bool droppable = cir::isLinkOnceLinkage(lk) || cir::isWeakLinkage(lk) ||
+    // With --tu-part, a weak definition is there for other units: an explicit
+    // template instantiation is only ever defined in its own unit.
+    bool droppable = cir::isLinkOnceLinkage(lk) || (cir::isWeakLinkage(lk) && !tuPart_) ||
                      cir::isAvailableExternallyLinkage(lk);
     if (droppable) droppableDefs_.insert(sym);
     else markRoot(sym);
@@ -608,13 +784,25 @@ void Mapper::computeReachableDefs(mlir::ModuleOp module) {
     }
   });
 
-  // `main` and any function referenced by a global initializer (vtables,
-  // function-pointer tables) are roots regardless of linkage.
+  // `main` and each global that the program must keep are roots. A linkonce
+  // global, for example the vtable of a class whose virtual functions are all
+  // inline, is kept only when a kept function or global refers to it. The
+  // models of issue #7 make clang emit the vtables of the exception classes in
+  // every program, and such a vtable would otherwise keep the virtual
+  // functions of its class.
   markRoot("main");
   module->walk([&](cir::GlobalOp g) {
+    std::string sym = symbolNameAttr(g) ? symbolNameAttr(g).getValue().str()
+                                        : std::string();
+    if (sym.empty()) return;
+    cir::GlobalLinkageKind lk = g.getLinkage();
+    if (cir::isLinkOnceLinkage(lk) || cir::isAvailableExternallyLinkage(lk))
+      droppableGlobals_.insert(sym);
+    else
+      markRoot(sym);
     if (auto uses = mlir::SymbolTable::getSymbolUses(g.getOperation()))
       for (const auto &u : *uses)
-        markRoot(u.getSymbolRef().getRootReference().str());
+        edges[sym].insert(u.getSymbolRef().getRootReference().str());
   });
 
   // Propagate reachability across the call graph.
@@ -627,32 +815,90 @@ void Mapper::computeReachableDefs(mlir::ModuleOp module) {
   }
 }
 
-bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
-  auto sym = symbolNameAttr(fop);
-  if (!sym) return true;
+// The body of a declaration-only operator new. A throwing new never returns
+// null: a failed allocation throws std::bad_alloc, modelled as the uncaught
+// exception's std::terminate, so a program that catches it loses that path.
+// Only --externalize-std uses this body: with --no-externalize-std, the model
+// libcxx-out-of-line defines the allocation functions (issue #17), and a
+// throwing operator new without a body is an undefined symbol (README 8.2).
+static const char *operatorNewBody(llvm::StringRef mangled) {
+  if (mangled.contains("nothrow")) return "{ return malloc(p0); }";
+  return "{ void *r = malloc(p0); if (!r) abort(); return r; }";
+}
 
+void Mapper::computeMayThrow(mlir::ModuleOp module) {
+  if (mayThrowComputed_) return;
+  mayThrowComputed_ = true;
+
+  std::unordered_map<std::string, std::set<std::string>> callers; // callee -> callers
+  std::vector<std::string> work;
+  auto mark = [&](const std::string &s) {
+    if (mayThrowFuncs_.insert(s).second) work.push_back(s);
+  };
+
+  module->walk([&](cir::FuncOp f) {
+    auto symAttr = symbolNameAttr(f);
+    mlir::Operation *fop = f.getOperation();
+    if (!symAttr || fop->getNumRegions() == 0 || fop->getRegion(0).empty())
+      return;
+    std::string sym = symAttr.getValue().str();
+    fop->walk([&](mlir::Operation *op) {
+      if (mlir::isa<cir::ThrowOp>(op)) {
+        mark(sym);
+        return;
+      }
+      // A call with the nothrow attribute cannot pass an exception on: the
+      // exception calls std::terminate at the call (see handleCall).
+      if (auto call = mlir::dyn_cast<cir::CallOp>(op))
+        if (call.getNothrow()) return;
+      if (!mlir::isa<cir::CallOp>(op) && !mlir::isa<cir::TryCallOp>(op)) return;
+      auto callee = op->getAttrOfType<mlir::FlatSymbolRefAttr>("callee");
+      if (!callee) mark(sym);  // an indirect call, for example a virtual call
+      else callers[callee.getValue().str()].insert(sym);
+    });
+  });
+
+  while (!work.empty()) {
+    std::string cur = work.back();
+    work.pop_back();
+    auto it = callers.find(cur);
+    if (it == callers.end()) continue;
+    for (const std::string &caller : it->second) mark(caller);
+  }
+}
+
+void Mapper::buildCPrototype(mlir::Operation *fop, std::string &retType,
+                             std::string &outName, std::string &params) const {
   auto cirFuncOp = mlir::cast<cir::FuncOp>(fop);
   cir::FuncType fty = cirFuncOp.getFunctionType();
   mlir::Type rty = fty.getReturnType();
 
-  std::string retType;
   if (mlir::isa<mlir::NoneType>(rty) || mlir::isa<cir::VoidType>(rty))
     retType = "void";
   else
     retType = mapTypeToC(rty);
 
-  std::string outName = getFunctionOutputName(sym.getValue().str());
+  std::string sym = symbolNameAttr(fop).getValue().str();
+  outName = getFunctionOutputName(sym);
 
-  // Emit parameter types only (no names) to avoid interfering with value-name
-  // assignments that happen during the real mapFunc pass later.
-  std::string params;
+  // A declaration of a C library function gets the const of the standard
+  // prototype back. A definition keeps the types of the CIR: there the program
+  // defines the function itself.
+  bool hasBody = fop->getNumRegions() > 0 && !fop->getRegion(0).empty();
+  unsigned constParams = (hasBody || sym != outName) ? 0 : cLibraryConstParams(sym);
+
+  // The parameters are named p0, p1, … here, not with the names that mapFunc
+  // assigns, so that this does not interfere with those assignments.
+  params.clear();
   bool first = true;
   unsigned paramIndex = 0;
   for (mlir::Type paramType : fty.getInputs()) {
     if (!first) params += ", ";
     first = false;
+    bool isConst = paramIndex < 32 && (constParams >> paramIndex & 1) &&
+                   mlir::isa<cir::PointerType>(paramType);
     std::string paramName = "p" + std::to_string(paramIndex++);
-    params += mapParamTypeToC(*this, paramType, paramName);
+    params += (isConst ? "const " : "") + mapParamTypeToC(*this, paramType, paramName);
   }
   if (fty.isVarArg()) {
     // C forbids a lone "..." with no preceding named parameter. For such
@@ -660,6 +906,17 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
     // declaration that accepts any arguments — instead of "(...)".
     if (!params.empty()) params += ", ...";
   }
+}
+
+bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
+  auto sym = symbolNameAttr(fop);
+  if (!sym) return true;
+
+  auto cirFuncOp = mlir::cast<cir::FuncOp>(fop);
+  cir::FuncType fty = cirFuncOp.getFunctionType();
+
+  std::string retType, outName, params;
+  buildCPrototype(fop, retType, outName, params);
 
   // Declaration-only operator new/delete: emit inline stubs that wrap
   // malloc/free so the linker finds a definition. We match both the demangled
@@ -675,14 +932,33 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
                     mangledSym.rfind("_Zdl", 0) == 0 || // operator delete
                     mangledSym.rfind("_Zda", 0) == 0;   // operator delete[]
   bool hasBodyCheck = (fop->getNumRegions() > 0 && !fop->getRegion(0).empty());
+  // Stubs written here exist in every unit that needs them.
+  const char *weakStub = tuPart_ ? "__attribute__((weak)) " : "";
   if (isNewOp && !hasBodyCheck) {
+    if (usedByOutput(fop)) requireDefinition(mangledSym, false);
     ensureMallocFreeDeclared(out);
-    out << retType << " " << outName << "(" << params << ") { return malloc(p0); }\n";
+    ensureAbortDeclared(out);
+    out << weakStub << retType << " " << outName << "(" << params << ") "
+        << operatorNewBody(mangledSym) << "\n";
     return true;
   }
   if (isDeleteOp && !hasBodyCheck) {
     ensureMallocFreeDeclared(out);
-    out << retType << " " << outName << "(" << params << ") { free(p0); }\n";
+    out << weakStub << retType << " " << outName << "(" << params << ") { free(p0); }\n";
+    return true;
+  }
+  // The guard of a function-local static comes from the C++ runtime. Without
+  // threads racing for the initialisation, this is all it does.
+  if (!hasBodyCheck && mangledSym == "__cxa_guard_acquire") {
+    out << weakStub << retType << " " << outName << "(" << params << ") { return *(char*)p0 == 0; }\n";
+    return true;
+  }
+  if (!hasBodyCheck && mangledSym == "__cxa_guard_release") {
+    out << weakStub << retType << " " << outName << "(" << params << ") { *(char*)p0 = 1; }\n";
+    return true;
+  }
+  if (!hasBodyCheck && mangledSym == "__cxa_guard_abort") {
+    out << weakStub << retType << " " << outName << "(" << params << ") {}\n";
     return true;
   }
   // __cxa_pure_virtual fills pure-virtual vtable slots (Itanium ABI). It is a
@@ -690,7 +966,7 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
   // reached if a pure virtual is actually invoked (a program bug) — abort.
   if (mangledSym == "__cxa_pure_virtual" || mangledSym == "__cxa_deleted_virtual") {
     ensureAbortDeclared(out);
-    out << "void " << outName << "(void) { abort(); }\n";
+    out << weakStub << "void " << outName << "(void) { abort(); }\n";
     return true;
   }
 
@@ -729,7 +1005,7 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
           if (i) args += ", ";
           args += "p" + std::to_string(i);
         }
-        out << retType << " " << outName << "(" << params << ") { "
+        out << weakStub << retType << " " << outName << "(" << params << ") { "
             << baseName << "(" << args << "); }\n";
         return true;
       }
@@ -740,9 +1016,12 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
     // D1/D2 destructor variants that are declaration-only in this module mean
     // the destructor body lives in an external library (e.g. libstdc++) that
     // we cannot link (we compile as plain C with -lm only).  Emit a noop stub.
-    if (mangled.find("D1E") != std::string::npos ||
-        mangled.find("D2E") != std::string::npos) {
-      out << retType << " " << outName << "(" << params << ") {}\n";
+    // The real destructor can do more, so --no-externalize-std rejects it.
+    // With --tu-part it may well be in another unit.
+    if (!tuPart_ && (mangled.find("D1E") != std::string::npos ||
+                     mangled.find("D2E") != std::string::npos)) {
+      if (usedByOutput(fop)) requireDefinition(mangled, false);
+      out << weakStub << retType << " " << outName << "(" << params << ") {}\n";
       return true;
     }
   }
@@ -776,14 +1055,62 @@ bool Mapper::emitFuncForwardDecl(mlir::Operation *fop, std::ostream &out) {
   // programs under --no-externalize-std is therefore out of scope here.  Under
   // the default --externalize-std these calls are over-approximated (havoc /
   // nondet) and the result stays sound.
-  if (!hasBody)
+  if (!hasBody) {
+    if (usedByOutput(fop)) requireDefinition(mangledSym, false);
     out << "extern ";
+  }
 
+  if (auto f = llvm::dyn_cast<cir::FuncOp>(fop); f && tuPart_ && cir::isLocalLinkage(f.getLinkage()))
+    out << "static ";
   out << retType << " " << outName << "(" << params << ");\n";
   // Record that a prototype for this C name now exists, so the injected libc
   // declarations (memcpy/memset/memchr) don't emit a conflicting second one.
   forwardDeclaredFuncNames_.insert(outName);
   return true;
+}
+
+// The copy of a trivial assignment operator. C++ copies only the data of a
+// class, not its padding: an empty class such as std::less has no data, and
+// it can share its address with another member ([[no_unique_address]]). The
+// tail padding of a base can hold a member of a derived class (issue #4). So
+// when the record has padding or empty members, the copy names its data
+// members one by one (issue #9, part 6).
+std::string Mapper::trivialAssignmentCopy(mlir::Type dstPointer, const std::string &dst,
+                                          const std::string &src) {
+  std::string whole = "  *" + dst + " = *" + src + ";\n";
+  auto pointer = mlir::dyn_cast<cir::PointerType>(dstPointer);
+  auto record = pointer ? mlir::dyn_cast<cir::RecordType>(pointer.getPointee())
+                        : cir::RecordType();
+  if (!record || !record.isComplete() || record.isUnion()) return whole;
+  llvm::ArrayRef<mlir::Type> members = record.getMembers();
+  llvm::ArrayRef<cir::RecordMemberKind> kinds = record.getMemberKinds();
+  auto isData = [&](size_t i) {
+    return i < kinds.size() &&
+           (kinds[i] == cir::RecordMemberKind::Data ||
+            kinds[i] == cir::RecordMemberKind::BitField) &&
+           !memberOccupiesNoStorage(members[i], kinds[i]);
+  };
+  bool onlyData = kinds.size() == members.size();
+  for (size_t i = 0; i < members.size() && onlyData; ++i) onlyData = isData(i);
+  if (onlyData) return whole;
+
+  std::string tag = (record.getName() && !record.getName().getValue().empty())
+                        ? recordCName(record.getName())
+                        : anonRecordCName(record);
+  std::string copy;
+  for (size_t i = 0; i < members.size(); ++i) {
+    if (!isData(i)) continue;
+    std::string field = lookupFieldName(tag, static_cast<int>(i));
+    if (field.empty()) field = "__field" + std::to_string(i);
+    if (mlir::isa<cir::ArrayType>(members[i])) {
+      ensureMemcpyDeclared();
+      copy += "  memcpy(" + dst + "->" + field + ", " + src + "->" + field + ", sizeof(" +
+              dst + "->" + field + "));\n";
+    } else {
+      copy += "  " + dst + "->" + field + " = " + src + "->" + field + ";\n";
+    }
+  }
+  return copy;
 }
 
 bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
@@ -893,6 +1220,9 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
   // (GCC otherwise packs functions onto odd addresses).
   if (usesMemberFnPtr_)
     ctorAttr += "__attribute__((aligned(2))) ";
+  if (auto f = llvm::dyn_cast<cir::FuncOp>(fop))
+    if (fop->getNumRegions() != 0 && !fop->getRegion(0).empty())
+      ctorAttr = tuPartLinkage(f.getLinkage()) + tuPartInitAttr(sym.getValue().str()) + ctorAttr;
   out << ctorAttr << retType << " " << outName << "(" << params << ")";
   std::string funcHeaderText = ctorAttr + retType + " " + outName + "(" + params + ")";
 
@@ -901,8 +1231,10 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
     // For C++ operator new/delete, emit inline stubs that wrap malloc/free
     // instead of bare declarations (which would be undefined at link time).
     if (outName.rfind("operator_new", 0) == 0) {
-      out << " { return malloc(p0); }\n\n";
-      traceability.recordOperationTrace(fop->getName().getStringRef(), funcInputText, funcHeaderText + " { return malloc(p0); }\n", true);
+      if (usedByOutput(fop)) requireDefinition(sym.getValue().str(), false);
+      std::string body = operatorNewBody(sym.getValue());
+      out << " " << body << "\n\n";
+      traceability.recordOperationTrace(fop->getName().getStringRef(), funcInputText, funcHeaderText + " " + body + "\n", true);
       return true;
     }
     if (outName.rfind("operator_delete", 0) == 0) {
@@ -938,9 +1270,8 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
           mlir::isa<cir::PointerType>(inputs[1])) {
         const std::string &dst = bodyParamNames[0];
         const std::string &src = bodyParamNames[1];
-        std::string body = returnsVoid
-            ? " {\n  *" + dst + " = *" + src + ";\n}\n\n"
-            : " {\n  *" + dst + " = *" + src + ";\n  return " + dst + ";\n}\n\n";
+        std::string body = " {\n" + trivialAssignmentCopy(inputs[0], dst, src) +
+                           (returnsVoid ? "" : "  return " + dst + ";\n") + "}\n\n";
         out << body;
         traceability.recordOperationTrace(fop->getName().getStringRef(), funcInputText,
                                           funcHeaderText + body, true);
@@ -958,10 +1289,13 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
   // constructors explicitly here, in the order the loader would. This assumes
   // main() is the program entry point.
   bool isMain = sym.getValue().str() == "main";
-  if (isMain && !globalCtorSymbols_.empty()) {
+  if (isMain && !tuPart_ && !globalCtorSymbols_.empty()) {
     out << "  // global constructors (C++ static init), normally run before main\n";
     for (const std::string &ctorSym : globalCtorSymbols_)
       out << "  " << getFunctionOutputName(ctorSym) << "();\n";
+    // An exception that leaves a static initializer calls std::terminate.
+    if (hasExceptions_)
+      out << "  if (__cir_exc_active) abort(); /* std::terminate */\n";
   }
   // While emitting main()'s body, handleReturn injects the global destructor
   // calls before each return (mirror of the constructor calls above).
@@ -1001,12 +1335,104 @@ bool Mapper::mapFunc(mlir::Operation *fop, std::ostream &out) {
   return true;
 }
 
+std::string Mapper::tuPartLinkage(cir::GlobalLinkageKind linkage) const {
+  if (!tuPart_) return "";
+  if (cir::isLocalLinkage(linkage)) return "static ";
+  if (cir::isLinkOnceLinkage(linkage) || cir::isWeakLinkage(linkage) ||
+      cir::isAvailableExternallyLinkage(linkage))
+    return "__attribute__((weak)) ";
+  return "";
+}
+
+std::string Mapper::tuPartInitAttr(const std::string &sym) const {
+  if (!tuPart_) return "";
+  if (std::find(globalCtorSymbols_.begin(), globalCtorSymbols_.end(), sym) !=
+      globalCtorSymbols_.end())
+    return "__attribute__((constructor)) ";
+  if (std::find(globalDtorSymbols_.begin(), globalDtorSymbols_.end(), sym) !=
+      globalDtorSymbols_.end())
+    return "__attribute__((destructor)) ";
+  return "";
+}
+
 void Mapper::emitGlobalDtorsAtMainReturn(std::ostream &out) {
-  if (!emittingMainBody_ || globalDtorSymbols_.empty()) return;
+  if (tuPart_ || !emittingMainBody_ || globalDtorSymbols_.empty()) return;
   out << "  // global destructors (__attribute__((destructor))), normally run at exit\n";
   // Reverse of constructor order: last-registered destructor runs first.
   for (auto it = globalDtorSymbols_.rbegin(); it != globalDtorSymbols_.rend(); ++it)
     out << "  " << getFunctionOutputName(*it) << "();\n";
+}
+
+// Virtual dispatch calls a vtable slot through `ret (*)(void *, args)`, and
+// cir.end_catch calls the destructor of the exception through
+// `void (*)(void *)`. A method takes `struct T *` as its receiver, so a call
+// through such a pointer has an incompatible type: undefined behavior in C
+// (C11 6.3.2.3p8), although common ABIs pass both alike. Each function that is
+// called in this way gets a wrapper with a `void *` receiver, which converts
+// the receiver and calls the function. A pointer result is `void *` in the
+// wrapper, so that a covariant override agrees with the slot of its base; the
+// virtual-call helpers read it back as `void *`.
+void Mapper::planReceiverWrappers(mlir::ModuleOp module) {
+  receiverWrappers_.clear();
+  std::set<std::string> candidates;
+  module->walk([&](mlir::Operation *op) {
+    if (auto g = mlir::dyn_cast<cir::GlobalOp>(op)) {
+      auto iv = g.getInitialValue();
+      auto vt = iv ? mlir::dyn_cast<cir::VTableAttr>(*iv) : cir::VTableAttr();
+      if (!vt) return;
+      for (mlir::Attribute comp : vt.getData())
+        if (auto ca = mlir::dyn_cast<cir::ConstArrayAttr>(comp))
+          if (auto elts = mlir::dyn_cast<mlir::ArrayAttr>(ca.getElts()))
+            for (mlir::Attribute e : elts)
+              if (auto gv = mlir::dyn_cast<cir::GlobalViewAttr>(e))
+                candidates.insert(gv.getSymbol().getValue().str());
+    } else if (auto t = mlir::dyn_cast<cir::ThrowOp>(op)) {
+      if (auto dtor = t.getDtorAttr()) candidates.insert(dtor.getValue().str());
+    }
+  });
+  for (const std::string &sym : candidates) {
+    auto f = mlir::dyn_cast_or_null<cir::FuncOp>(
+        mlir::SymbolTable::lookupSymbolIn(module, sym));
+    // A function without a prototype in the output needs no wrapper. A variadic
+    // function cannot forward its arguments, so it keeps the old call.
+    if (!f || funcDefElided(sym) || f.getFunctionType().isVarArg()) continue;
+    auto inputs = f.getFunctionType().getInputs();
+    if (!inputs.empty() && !mlir::isa<cir::PointerType>(inputs[0])) continue;
+    receiverWrappers_[sym] = f.getOperation();
+  }
+}
+
+std::string Mapper::receiverTarget(const std::string &sym) const {
+  std::string name = getFunctionOutputName(sym);
+  return receiverWrappers_.count(sym) ? "__cir2c_vt_" + name : name;
+}
+
+void Mapper::emitReceiverWrappers(std::ostream &out) {
+  if (receiverWrappers_.empty()) return;
+  out << "// Wrappers with a void* receiver, for the calls through vtables and\n"
+         "// the exception destructors.\n";
+  for (auto &[sym, op] : receiverWrappers_) {
+    cir::FuncType fty = mlir::cast<cir::FuncOp>(op).getFunctionType();
+    std::string retType, outName, params;
+    buildCPrototype(op, retType, outName, params);
+    bool pointerResult = !retType.empty() && retType.back() == '*';
+    auto inputs = fty.getInputs();
+    std::string wrapperParams = "void *p0", args;
+    for (unsigned i = 0; i < inputs.size(); ++i) {
+      if (i) {
+        wrapperParams += ", " + mapTypeToC(inputs[i]) + " p" + std::to_string(i);
+        args += ", ";
+      }
+      args += i ? "p" + std::to_string(i)
+                : "(" + mapTypeToC(inputs[0]) + ")p0";
+    }
+    out << "static " << (pointerResult ? "void*" : retType) << " "
+        << receiverTarget(sym) << "(" << wrapperParams << ") { ";
+    if (inputs.empty()) out << "(void)p0; ";
+    if (retType != "void") out << "return " << (pointerResult ? "(void*)" : "");
+    out << outName << "(" << args << "); }\n";
+  }
+  out << "\n";
 }
 
 bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
@@ -1017,7 +1443,7 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
   }
 
   // Sanitize the name to be a valid C identifier (replace dots, etc. with underscores)
-  std::string name = TypeMapper::recordCName(sym);
+  std::string name = TypeMapper::plainCName(sym.getValue());
   std::string rawSym = sym.getValue().str();
 
   // Reserve the global's C name so a function-local freshName temp can't reuse
@@ -1034,6 +1460,7 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
     // and the call argument is &__dso_handle (type int8_t*), matching the
     // int8_t* parameter of __cxa_atexit.  Declare it as int8_t so the C
     // compiler sees a complete type and &__dso_handle has the right type.
+    if (usedByOutput(gop)) requireDefinition(rawSym, true);
     out << "extern signed char __dso_handle;\n";
     return true;
   }
@@ -1045,11 +1472,43 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
   // <sym>[]` arrays so constructors can install address-points into vptr fields
   // and __VERIFIER_virtual_call can index them. `_ZTC*` construction vtables are
   // used with virtual inheritance and have the same VTableAttr structure.
+  // VTT (_ZTT*): the vtable pointers that the base constructors of a class
+  // with a virtual base install (issue #3). The constructors read it as
+  // `void *` elements, so it is a `void *` array like the vtables.
+  if (rawSym.rfind("_ZTT", 0) == 0) {
+    auto iv = globalOp.getInitialValue();
+    auto array = iv ? mlir::dyn_cast<cir::ConstArrayAttr>(*iv) : cir::ConstArrayAttr();
+    auto elements = array ? mlir::dyn_cast<mlir::ArrayAttr>(array.getElts()) : mlir::ArrayAttr();
+    if (!elements) {
+      if (usedByOutput(gop)) requireDefinition(rawSym, true);
+      out << "extern void *" << name << "[];\n";
+      return true;
+    }
+    std::string body;
+    for (mlir::Attribute e : elements) {
+      auto view = mlir::dyn_cast<cir::GlobalViewAttr>(e);
+      auto indices = view ? view.getIndices() : mlir::ArrayAttr();
+      if (!indices || indices.size() != 2) {
+        llvm::errs() << "cir2c: error: the VTT " << rawSym
+                     << " has an element that is not an address point (issue #3)\n";
+        return false;
+      }
+      std::string target = view.getSymbol().getValue().str();
+      auto index = mlir::cast<mlir::IntegerAttr>(indices[0]).getInt();
+      auto offset = mlir::cast<mlir::IntegerAttr>(indices[1]).getInt();
+      body += std::string(body.empty() ? "" : ", ") + "(void*)&" + sanitizeIdentifier(target) +
+              "[" + std::to_string(vtableFlatOffset(gop, target, index, offset)) + "]";
+    }
+    out << "void *" << name << "[] = { " << body << " };\n";
+    return true;
+  }
+
   bool isVtableSym = rawSym.rfind("_ZTV", 0) == 0 || rawSym.rfind("_ZTC", 0) == 0;
   if (isVtableSym) {
     auto iv = globalOp.getInitialValue();
     auto vt = iv ? mlir::dyn_cast<cir::VTableAttr>(*iv) : cir::VTableAttr();
     if (!vt) { // external/undefined vtable — declare so references link
+      if (usedByOutput(gop)) requireDefinition(rawSym, true);
       out << "extern void *" << name << "[];\n";
       return true;
     }
@@ -1063,10 +1522,11 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
         // address point skips the offset-to-top + RTTI header slots anyway.
         if (module && mlir::isa_and_nonnull<cir::FuncOp>(
                           mlir::SymbolTable::lookupSymbolIn(module, sym)))
-          return "(void*)&" + getFunctionOutputName(sym);
+          return "(void*)&" + receiverTarget(sym);
         return "(void*)0";
       }
-      return "(void*)0"; // null pointer / offset-to-top int
+      // Offset-to-top, a virtual-base or a vcall offset (issue #3).
+      return vtableIntegerEntry(e);
     };
     std::string body;
     bool first = true;
@@ -1081,7 +1541,7 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
           body += fmtElem(e);
         }
     }
-    out << "void *" << name << "[] = { " << body << " };\n";
+    out << tuPartLinkage(globalOp.getLinkage()) << "void *" << name << "[] = { " << body << " };\n";
     return true;
   }
 
@@ -1147,8 +1607,8 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
   std::string initExpr;
   if (auto initVal = globalOp.getInitialValue()) {
     mlir::Attribute attr = *initVal;
-    if (auto intAttr = mlir::dyn_cast<cir::IntAttr>(attr)) {
-      initExpr = std::to_string(intAttr.getValue().getSExtValue());
+    if (mlir::isa<cir::IntAttr>(attr)) {
+      initExpr = ConstantEmitter::formatIntLiteral(attr);
     } else if (auto fpAttr = mlir::dyn_cast<cir::FPAttr>(attr)) {
       // Floating-point constant initializer (e.g. `double d = 1.5;`). Without
       // this the initializer was dropped and the global defaulted to 0.
@@ -1211,7 +1671,7 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
               curType = at.getElementType();
             } else if (auto rt = mlir::dyn_cast_if_present<cir::RecordType>(curType)) {
               std::string recN = rt.getName() && !rt.getName().getValue().empty()
-                                     ? TypeMapper::recordCName(rt.getName()) : anonRecordCName(rt);
+                                     ? recordCName(rt.getName()) : anonRecordCName(rt);
               std::string fn = lookupFieldName(recN, (int)idx);
               access += "." + (fn.empty() ? ("__field" + std::to_string(idx)) : fn);
               curType = (idx >= 0 && (size_t)idx < rt.getMembers().size())
@@ -1251,7 +1711,14 @@ bool Mapper::mapGlobal(mlir::Operation *gop, std::ostream &out) {
   // creates a *separate*, zero-initialised object, so `stdout` would read back
   // NULL and any use of it crashes. (_ZTI* RTTI declarations are handled by the
   // stub special-case below and return before this prefix is used.)
-  if (globalOp.isDeclaration()) qualPrefix = "extern " + qualPrefix;
+  if (globalOp.isDeclaration()) {
+    // A declared _ZTI* object gets a stub definition below.
+    if (rawSym.rfind("_ZTI", 0) != 0 && usedByOutput(gop))
+      requireDefinition(rawSym, true);
+    qualPrefix = "extern " + qualPrefix;
+  } else {
+    qualPrefix = tuPartLinkage(globalOp.getLinkage()) + qualPrefix;
+  }
 
   // Over-alignment: a source `__attribute__((aligned(N)))` (or any ABI alignment
   // exceeding the natural one) is recorded on the CIR global. Some tests check
@@ -1316,6 +1783,21 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   const bool isTopLevelModule = !module->getParentOp();
   std::ostringstream topLevelBuf;
   std::ostream &out = isTopLevelModule ? topLevelBuf : realOut;
+  // The C tags of all records of the module tree, before any code asks for one.
+  if (isTopLevelModule) {
+    typeMapper_.planRecordNames(module);
+    // A unit of several must give each record the tag that the other units
+    // give it, or the types of a call between units are not compatible.
+    if (tuPart_ && !typeMapper_.moduleDependentRecordNames().empty()) {
+      llvm::errs() << "cir2c: error: with --tu-part, the C tag of each record must not "
+                      "depend on the other records of the unit (README 7.5). These "
+                      "records have such a tag:\n";
+      for (const std::string &name : typeMapper_.moduleDependentRecordNames())
+        llvm::errs() << "  " << name << " -> " << typeMapper_.recordCName(llvm::StringRef(name))
+                     << "\n";
+      return false;
+    }
+  }
   // Prepare function names (demangle where possible and unique) before
   // emitting any function declarations/definitions so we can avoid name
   // collisions when demangling.
@@ -1325,6 +1807,12 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   // weak definitions (e.g. the std I/O machinery left dead after I/O
   // externalization) can be elided. Computed once for the whole module tree.
   computeReachableDefs(module);
+  computeMayThrow(module);
+  if (isTopLevelModule) {
+    planExceptionTypes(module);
+    planPrimaryVtables(module);
+  }
+  planReceiverWrappers(module);
 
   // Visit \p root and every module nested inside it. A module-level attribute is
   // not always on the module handed to mapModule; see the constructor list below.
@@ -1485,6 +1973,8 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     for (auto &op : module.getOps())
       scanForQualifiers(op);
   }
+  // After the qualifier scan: a qualified variable does not become a union.
+  if (isTopLevelModule) planUnionSlots(module);
 
   // Auto-parse struct definitions by scanning member accesses.
   struct FieldInfo {
@@ -1500,6 +1990,14 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   // Stores the most complete RecordType seen for each record name; used for
   // the typed member-layout fallback when no cir.get_member ops were found.
   std::map<std::string, cir::RecordType> knownRecordTypes;
+  // Two different records with one C tag would share one struct definition,
+  // and one of them would get the wrong layout. TypeMapper::planRecordNames
+  // gives them different tags; this is the check that it did (issue #8).
+  std::string recordTagClash;
+  // "X.base" is a record of its own, with its own tag (issue #4).
+  auto recordIdentity = [](cir::RecordType rt) -> std::string {
+    return rt.getName() ? rt.getName().getValue().str() : "";
+  };
 
   // Ensure every referenced record type is tracked, even when there are no
   // explicit cir.get_member operations (e.g. empty/simple classes).
@@ -1514,13 +2012,17 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
       // collapse together. They are then collected like any named record so
       // their members are emitted.
       std::string recordName = (nameAttr && !nameAttr.getValue().empty())
-                                   ? TypeMapper::recordCName(nameAttr)
+                                   ? recordCName(nameAttr)
                                    : anonRecordCName(recordType);
 
       // Cycle guard: if we already have a complete type recorded for this name,
       // the field types have already been recursed; skip to avoid infinite loops.
       auto it = knownRecordTypes.find(recordName);
       bool alreadyComplete = (it != knownRecordTypes.end() && it->second.isComplete());
+      if (it != knownRecordTypes.end() && recordTagClash.empty() &&
+          recordIdentity(it->second) != recordIdentity(recordType))
+        recordTagClash = "'" + recordIdentity(it->second) + "' and '" +
+                         recordIdentity(recordType) + "' have one C tag, " + recordName;
 
       // Keep an entry even if there are no discovered fields yet.
       (void)structFields[recordName];
@@ -1588,7 +2090,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
       if (!recordType) return; // Not pointing to a record, skip
 
       // Get struct name using API
-      std::string structName = TypeMapper::recordCName(recordType.getName());
+      std::string structName = recordType.getName() && !recordType.getName().getValue().empty() ? recordCName(recordType.getName()) : anonRecordCName(recordType);
 
       // Track unions
       if (recordType.isUnion()) {
@@ -1605,7 +2107,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
         mlir::Type resPointee = resPtrType.getPointee();
 
         if (auto resRecordType = mlir::dyn_cast<cir::RecordType>(resPointee)) {
-          std::string fieldStructName = TypeMapper::recordCName(resRecordType.getName());
+          std::string fieldStructName = resRecordType.getName() && !resRecordType.getName().getValue().empty() ? recordCName(resRecordType.getName()) : anonRecordCName(resRecordType);
 
           if (resRecordType.isUnion()) {
             info.baseType = "union " + fieldStructName;
@@ -1627,7 +2129,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
 
           // Get the final element type
           if (auto elemRecordType = mlir::dyn_cast<cir::RecordType>(currentType)) {
-            std::string arrayStructName = TypeMapper::recordCName(elemRecordType.getName());
+            std::string arrayStructName = elemRecordType.getName() && !elemRecordType.getName().getValue().empty() ? recordCName(elemRecordType.getName()) : anonRecordCName(elemRecordType);
 
             if (elemRecordType.isUnion()) {
               info.baseType = "union " + arrayStructName;
@@ -1708,6 +2210,11 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
       globalSymbolTypes_[s.getValue().str()] = globalOp.getSymType();
   });
 
+  if (!recordTagClash.empty()) {
+    llvm::errs() << "cir2c: error: the records " << recordTagClash << ".\n";
+    return false;
+  }
+
   // Typed fallback: for records with no directly discovered members (e.g.
   // derived records only accessed through cir.base_class_addr casts), extract
   // member types directly from the complete RecordType definition.
@@ -1750,7 +2257,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
             // Anonymous nested records have no name; give them their stable
             // synthetic name so the field isn't dropped (empty baseType below).
             std::string fn = (recTy.getName() && !recTy.getName().getValue().empty())
-                                 ? TypeMapper::recordCName(recTy.getName())
+                                 ? recordCName(recTy.getName())
                                  : anonRecordCName(recTy);
             info.baseType = (recTy.isUnion() ? "union " : "struct ") + fn;
             info.isStruct = true;
@@ -1759,7 +2266,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
           }
         } else if (auto recTy = mlir::dyn_cast<cir::RecordType>(memberType)) {
           std::string fn = (recTy.getName() && !recTy.getName().getValue().empty())
-                               ? TypeMapper::recordCName(recTy.getName())
+                               ? recordCName(recTy.getName())
                                : anonRecordCName(recTy);
           info.baseType = (recTy.isUnion() ? "union " : "struct ") + fn;
           info.isStruct = true;
@@ -1818,7 +2325,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     if (!initArr || initArr.getSize() <= declaredArr.getSize()) return;
 
     std::string sname = (recTy.getName() && !recTy.getName().getValue().empty())
-                            ? TypeMapper::recordCName(recTy.getName())
+                            ? recordCName(recTy.getName())
                             : anonRecordCName(recTy);
     auto sit = structFields.find(sname);
     if (sit == structFields.end()) return;
@@ -1846,7 +2353,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
       }
       if (auto rt = mlir::dyn_cast<cir::RecordType>(t)) {
         if (!rt.getName()) return;
-        std::string cn = TypeMapper::recordCName(rt.getName());
+        std::string cn = rt.getName() && !rt.getName().getValue().empty() ? recordCName(rt.getName()) : anonRecordCName(rt);
         if (cn.rfind("std__", 0) != 0) return;
         if (isValue) stdStructValueUsed.insert(cn);
         stdStructAnyRef.insert(cn);
@@ -1856,6 +2363,11 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     classScan = [&](mlir::Operation &op) {
       if (auto al = mlir::dyn_cast<cir::AllocaOp>(&op))
         classifyType(al.getAllocaType(), true);
+      // A throw writes its object into a static variable of the thrown type.
+      else if (auto exc = mlir::dyn_cast<cir::AllocExceptionOp>(&op)) {
+        if (auto ptr = mlir::dyn_cast<cir::PointerType>(exc.getType()))
+          classifyType(ptr.getPointee(), true);
+      }
       else if (auto g = mlir::dyn_cast<cir::GlobalOp>(&op)) {
         // A global of non-pointer struct type needs a complete definition: even
         // an extern declaration may have sizeof applied to it (e.g. the void
@@ -2084,6 +2596,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
             ehScan(nestedOp);
     };
     for (auto &op : module.getOps()) ehScan(op);
+    registerForeignExceptionTypes();
   }
 
   // abort() is called by our synthesised EH-termination and trap code, not
@@ -2096,23 +2609,29 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
 
   if (hasExceptions_ && !ehPreambleEmitted) {
     out << "// Exception handling state (modelled in plain C)\n";
-    out << "static void *__cir_exc_ptr;\n";
-    out << "static const void *__cir_exc_type;\n";
+    // An exception can cross translation units, so with --tu-part they share it.
+    const char *ehStateLinkage = tuPart_ ? "__attribute__((weak)) " : "static ";
+    out << ehStateLinkage << "void *__cir_exc_ptr;\n";
+    out << ehStateLinkage << "const void *__cir_exc_type;\n";
     // uintptr_t: must be wide enough to hold a pointer value without truncation
     // on any platform (a plain 'unsigned' would lose the high 32 bits on LP64).
-    out << "static unsigned long __cir_exc_type_id;\n";
-    out << "static int __cir_exc_active;\n";
+    out << ehStateLinkage << "unsigned long __cir_exc_type_id;\n";
+    out << ehStateLinkage << "int __cir_exc_active;\n";
     // Destructor for the in-flight exception object (set by cir.throw from its
     // dtor operand); cir.end_catch runs it on the object, mirroring the Itanium
     // ABI where __cxa_end_catch destroys the exception when the last handler
-    // exits. Stored as void* and called through a (void(*)(void*)) cast.
-    out << "static void *__cir_exc_dtor;\n";
+    // exits. Stored as void*; a call converts it to void (*)(void *) first.
+    out << ehStateLinkage << "void *__cir_exc_dtor;\n";
+    // The address of the subobject that the selected handler binds, and the
+    // converted pointer for a pointer handler (see ExceptionTypes.cpp).
+    out << ehStateLinkage << "void *__cir_exc_adj;\n";
+    out << ehStateLinkage << "void *__cir_exc_pval;\n";
     if (!ehTypeSymbols_.empty()) {
       out << "// Per-RTTI address tags: each thrown/caught type symbol gets a\n"
           << "// distinct storage location so catch dispatch is a pointer compare.\n";
       for (const auto &sym : ehTypeSymbols_) {
         std::string san = sanitizeIdentifier(sym);
-        out << "static const char __cir_eh_type_" << san
+        out << ehStateLinkage << "const char __cir_eh_type_" << san
             << "[] = \"" << sym << "\";\n";
       }
     }
@@ -2207,24 +2726,34 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     // so no `weak` linkage is needed (and it would not be plain ISO C).
     if (!virtualCallSigs_.empty()) {
       out << "// Virtual dispatch: default implementations.\n"
-             "// __VERIFIER_virtual_call_<sig>(obj, slot, args): obj's vtable\n"
+             "// __VERIFIER_virtual_call_<sig>(obj, slot, first, args): obj's vtable\n"
              "// pointer is at offset 0; the function is vtable[slot].\n";
       for (const auto &kv : virtualCallSigs_) {
         const std::string &suffix = kv.first;
         const std::string &ret = kv.second.first;
         const std::vector<std::string> &args = kv.second.second;
         // Parameter list and forwarded-argument list.
-        std::string params, fwd, fnArgTypes = "void*";
+        std::string params = ", void* __first", fwd = "__first", fnArgTypes = "void*";
         for (size_t i = 0; i < args.size(); ++i) {
           params += ", " + args[i] + " __a" + std::to_string(i);
           fwd += ", __a" + std::to_string(i);
           fnArgTypes += ", " + args[i];
         }
+        // The slot holds a wrapper with a void* receiver, which gives a
+        // pointer result as void* (see Mapper::planReceiverWrappers). Thus the
+        // function type of the call is exactly that of the wrapper.
+        bool pointerResult = !ret.empty() && ret.back() == '*';
+        std::string fnRet = pointerResult ? "void*" : ret;
+        if (tuPart_) out << "__attribute__((weak)) ";
         out << ret << " __VERIFIER_virtual_call_"
             << suffix << "(void* __obj, int __slot" << params << ") {\n";
         out << "  void* __fn = ((void**)*(void**)__obj)[__slot];\n";
+        // A variable of the function-pointer type, as at an indirect call
+        // (see handleCallLikeOp): Theta rejects a cast expression as callee.
+        out << "  " << fnRet << " (*__f)(" << fnArgTypes << ") = (" << fnRet
+            << " (*)(" << fnArgTypes << "))__fn;\n";
         out << "  " << (ret == "void" ? "" : "return ")
-            << "((" << ret << "(*)(" << fnArgTypes << "))__fn)(__obj" << fwd << ");\n";
+            << (pointerResult ? "(" + ret + ")" : "") << "__f(" << fwd << ");\n";
         out << "}\n";
       }
       out << "\n";
@@ -2267,6 +2796,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     if (!sym) continue;
     std::string rs = sym.getValue().str();
     if (rs.rfind("_ZTV", 0) != 0 && rs.rfind("_ZTC", 0) != 0) continue;
+    if (globalElided(rs)) continue;
     auto iv = gop.getInitialValue();
     if (iv && mlir::isa<cir::VTableAttr>(*iv)) continue; // has a definition
     out << "extern void *" << sanitizeIdentifier(rs) << "[];\n";
@@ -2282,6 +2812,8 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   for (auto &op : module.getOps()) {
     auto globalOp = llvm::dyn_cast<cir::GlobalOp>(&op);
     if (!globalOp) continue;
+    if (auto sym = symbolNameAttr(&op))
+      if (globalElided(sym.getValue())) continue; // unreferenced linkonce global
     auto initVal = globalOp.getInitialValue();
     // Vtable and VTT globals reference functions (declared in the next pass) and
     // each other (vtables → functions, VTTs → vtables), so emit them all AFTER
@@ -2329,6 +2861,10 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     }
     if (anyDecl) out << "\n";
   }
+
+  // After the prototypes of the functions that they call, before the vtables
+  // that take their addresses.
+  emitReceiverWrappers(out);
 
   // Globals that take the address of functions / other globals: emitted after
   // the function-declaration pass so all references resolve.
@@ -2383,6 +2919,96 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   verifierDeclsBuf_.clear();
   if (!decls.empty()) out << decls;
   out << funcsBuf.str();
+  emitExceptionMatchers(out);
+
+  // Each function and global is processed now, so the list of undefined
+  // symbols is complete. Stop before any output (see requireDefinition). The
+  // rule is for a C++ program, which the models of README 8.2 complete. A
+  // module without main() is a part of a program, and the other parts can
+  // define its external symbols. A C program has no models, and it can use
+  // POSIX functions, which the link of its output supplies.
+  // main.cpp parses the input into a new module, so the module of the input,
+  // which has the language attribute, is a nested one.
+  bool isCxx = false;
+  module->walk([&](mlir::ModuleOp m) {
+    if (auto language = m->getAttrOfType<cir::SourceLanguageAttr>(
+            cir::CIRDialect::getSourceLanguageAttrName()))
+      isCxx = isCxx || language.isCXX();
+  });
+  // The output of a C++ program has one thread. The exception state
+  // (__cir_exc_*) is a set of plain globals, and run-cir2c.sh compiles C++
+  // with -fno-threadsafe-statics, so a static local variable has no lock
+  // (README 5.1). Thus a C++ program that starts a thread is not translated.
+  // std::thread and std::async start their threads with pthread_create.
+  if (isTopLevelModule && isCxx) {
+    std::vector<std::string> threadFns;
+    module.walk([&](cir::FuncOp f) {
+      auto sym = symbolNameAttr(f);
+      if (sym && (sym.getValue() == "pthread_create" ||
+                  sym.getValue() == "thrd_create") &&
+          usedByOutput(f))
+        threadFns.push_back(sym.getValue().str());
+    });
+    if (!threadFns.empty()) {
+      llvm::errs() << "cir2c: error: the program starts a thread ("
+                   << threadFns.front()
+                   << "). cir2c translates only C++ programs with one thread "
+                      "(README 5.1).\n";
+      return false;
+    }
+  }
+
+  bool definesMain = false;
+  module.walk([&](cir::FuncOp f) {
+    auto sym = symbolNameAttr(f);
+    if (sym && sym.getValue() == "main" && !f.getRegion().empty())
+      definesMain = true;
+  });
+  // A unit of several (--tu-part) is a part of a program, also with main():
+  // the other units can define its symbols.
+  if (vtableViewMisused_) return false;
+  if (isTopLevelModule && isCxx && definesMain && !tuPart_ && !undefinedSymbols_.empty()) {
+    llvm::errs() << "cir2c: error: with --no-externalize-std, the output must "
+                    "define each function and object that it uses, outside the "
+                    "C standard library (README 8.2). These have no "
+                    "definition:\n";
+    for (const std::string &symbol : undefinedSymbols_) {
+      std::string demangled = demangleSymbol(symbol);
+      llvm::errs() << "  " << demangled;
+      if (demangled != symbol) llvm::errs() << "  [" << symbol << "]";
+      llvm::errs() << "\n";
+    }
+    return false;
+  }
+
+  // A type without a C type, in the part of the module that the output contains
+  // (TypeMapper::unsupportedTypes).
+  if (isTopLevelModule) {
+    std::string body = topLevelBuf.str();
+    const std::vector<std::string> &unsupported = typeMapper_.unsupportedTypes();
+    std::vector<std::string> used;
+    for (size_t i = 0; i < unsupported.size(); ++i) {
+      std::string marker = TypeMapper::kUnsupportedTypeMarker + std::to_string(i);
+      for (size_t at = body.find(marker); at != std::string::npos; at = body.find(marker, at + 1)) {
+        char next = at + marker.size() < body.size() ? body[at + marker.size()] : ' ';
+        if (!std::isdigit(static_cast<unsigned char>(next))) {
+          size_t begin = body.rfind('\n', at);
+          begin = begin == std::string::npos ? 0 : begin + 1;
+          size_t end = body.find('\n', at);
+          std::string line = body.substr(begin, end == std::string::npos ? std::string::npos
+                                                                          : end - begin);
+          used.push_back(unsupported[i] + ", first in: " + line.substr(0, 160));
+          break;
+        }
+      }
+    }
+    if (!used.empty()) {
+      llvm::errs() << "cir2c: error: the output uses a type that C has no type for "
+                      "(README 8.1):\n";
+      for (const std::string &type : used) llvm::errs() << "  " << type << "\n";
+      return false;
+    }
+  }
 
   // Top-level module: the body is now fully buffered (so every emission-time
   // flag is set). Emit the header/manifest, then flush the body after it.
@@ -2400,6 +3026,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     if (usesMemberFnPtr_)
       llvm::errs() << "xcfa-mapper: warning: output uses __attribute__((aligned(2))) "
                       "for pointer-to-member dispatch; functions must stay 2-byte aligned.\n";
+    reportReinterpretations(module);
   }
   return true;
 }

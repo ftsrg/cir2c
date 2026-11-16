@@ -1,0 +1,3 @@
+module {
+  cir.func @f( {
+}

@@ -1,0 +1,5 @@
+module attributes {cir.triple = "x86_64-unknown-linux-gnu", dlti.dl_spec = #dlti.dl_spec<"dlti.endianness" = "big">} {
+  cir.func @g() {
+    cir.return
+  }
+}

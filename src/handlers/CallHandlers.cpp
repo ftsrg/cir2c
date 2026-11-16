@@ -26,8 +26,10 @@
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 
 #include <limits>
+#include <map>
 #include <sstream>
 #include <string>
+#include <vector>
 
 using namespace mlir;
 
@@ -96,10 +98,13 @@ private:
       std::string intrinsic = "__VERIFIER_virtual_call_" + suffix;
       m.setHasVirtualCalls();
 
-      // Argument list: this-ptr, slot index, then the remaining call arguments.
-      std::string args = pointerOperandExpr(o->getOperand(1), m) + ", " +
-                         std::to_string(slot);
-      for (unsigned i = 2; i < o->getNumOperands(); ++i)
+      // Argument list: object, slot index, then the call arguments.
+      // The object is named apart from the arguments: the first argument is not
+      // `this` when the function returns its result through a hidden pointer.
+      Value object = m.getVtableDispatchObject(fnptr);
+      if (!object) object = o->getOperand(1);
+      std::string args = pointerOperandExpr(object, m) + ", " + std::to_string(slot);
+      for (unsigned i = 1; i < o->getNumOperands(); ++i)
         args += ", " + pointerOperandExpr(o->getOperand(i), m);
 
       if (o->getNumResults() > 0) {
@@ -184,7 +189,7 @@ private:
             if (auto rt = mlir::dyn_cast<cir::RecordType>(pointee)) {
               if (!rt.isComplete()) continue;
               if (rt.getName()) {
-                std::string cn = TypeMapper::recordCName(rt.getName());
+                std::string cn = rt.getName() && !rt.getName().getValue().empty() ? m.recordCName(rt.getName()) : m.anonRecordCName(rt);
                 if (!m.isStdStructFullyDefined(cn)) continue;
               }
             }
@@ -208,6 +213,7 @@ private:
 
     // Build argument list with address-of adjustment for direct access allocas
     std::string args;
+    std::vector<std::string> argList;
     unsigned startIdx = isIndirectCall ? 1 : 0; // Skip first operand if it's the function pointer
     // A record too large for registers is passed in memory. The ABI models that
     // as a POINTER argument marked `llvm.byval`, meaning "the callee receives a
@@ -244,14 +250,62 @@ private:
       }
       if (isByVal) {
         std::string n = m.getOrCreateName(argV);
-        args += m.isDirectAccess(argV) ? n : ("*(" + n + ")");
+        argList.push_back(m.isDirectAccess(argV) ? n : ("*(" + n + ")"));
+        args += argList.back();
         continue;
+      }
+
+      // CBMC's goto-cc needs string constants as the text arguments of
+      // __assert_fail (invariant "expected string constant"). assert() passes
+      // literals, which the CIR loads from constant string globals.
+      if (!isIndirectCall && callee == "__assert_fail") {
+        if (auto literal = m.constantStringLiteral(argV)) {
+          argList.push_back(*literal);
+          args += argList.back();
+          continue;
+        }
       }
 
       // pointerOperandExpr takes the address of a direct-access scalar lvalue but
       // leaves an array/VLA name to decay (a VLA alloca is CIR ptr<scalar>, so a
       // naive pointee-array check would wrongly emit `&v` = pointer-to-VLA).
-      args += pointerOperandExpr(argV, m);
+      argList.push_back(pointerOperandExpr(argV, m));
+      args += argList.back();
+    }
+
+    // A null pointer argument of memcpy and the other functions of this group
+    // is undefined also when the size is zero (C11 7.24.1p2, 7.29.4p2). libc++
+    // calls them so for an empty range, for example memmove from the data of an
+    // empty vector. With a size of zero, a call does nothing and its result is
+    // known, so the output makes no call then.
+    if (!isIndirectCall && argList.size() == 3) {
+      static const std::map<std::string, int> zeroSizeResult = {
+          // 0: the first argument, 1: zero, 2: a null pointer
+          {"memcpy", 0}, {"memmove", 0}, {"memset", 0}, {"memcmp", 1},
+          {"memchr", 2}, {"wmemcpy", 0}, {"wmemmove", 0}, {"wmemset", 0},
+          {"wmemcmp", 1}, {"wmemchr", 2}};
+      auto it = zeroSizeResult.find(callee);
+      auto fn = mlir::SymbolTable::lookupNearestSymbolFrom<cir::FuncOp>(
+          o, mlir::StringAttr::get(o->getContext(), callee));
+      bool libraryDecl = fn && fn.getOperation()->getRegion(0).empty() &&
+                         outCallee == callee;
+      if (it != zeroSizeResult.end() && libraryDecl) {
+        const std::string &size = argList[2];
+        std::string call = outCallee + "(" + args + ")";
+        if (o->getNumResults() > 0) {
+          std::string tmp = m.freshName("r");
+          std::string ctype = m.mapTypeToC(o->getResult(0).getType());
+          std::string zero = it->second == 0   ? "(" + ctype + ")(" + argList[0] + ")"
+                             : it->second == 1 ? std::string("0")
+                                               : "(" + ctype + ")0";
+          out << "  " << ctype << " " << tmp << " = (" << size << ") ? " << call
+              << " : " << zero << ";\n";
+          m.setName(o->getResult(0), tmp);
+        } else {
+          out << "  if (" << size << ") " << call << ";\n";
+        }
+        return true;
+      }
     }
 
     // For indirect calls, we need to cast the void* back to a function pointer
@@ -286,7 +340,15 @@ private:
         if (!firstParam) paramTypes += ", ";
         paramTypes += "...";
       }
-      callExpr = "((" + retType + " (*)(" + paramTypes + "))" + outCallee + ")";
+      // The converted pointer goes into a variable of the function-pointer
+      // type, and the call goes through that variable. A verifier frontend
+      // can know the target set of a call only from a declared function
+      // pointer: Theta rejects a call whose callee is a cast expression.
+      std::string fnPtrType = retType + " (*)(" + paramTypes + ")";
+      std::string fnPtr = m.freshName("fp");
+      out << "  " << retType << " (*" << fnPtr << ")(" << paramTypes << ") = ("
+          << fnPtrType << ")" << outCallee << ";\n";
+      callExpr = fnPtr;
     } else {
       callExpr = outCallee;
     }
@@ -304,7 +366,25 @@ private:
 
   static bool handleCall(cir::CallOp op, Mapper &m, std::ostream &out) {
     Operation *o = op.getOperation();
+
+    // A call with the nothrow attribute calls a noexcept function. An
+    // exception that leaves such a function calls std::terminate
+    // ([except.spec]p5), but in the output the callee returns with the
+    // exception in flight, and the caller continues. A destructor call during
+    // the unwinding of another exception starts with __cir_exc_active set, so
+    // only a new exception terminates.
+    std::string excBefore;
+    if (op.getNothrow() && m.hasExceptions()) {
+      auto callee = o->getAttrOfType<mlir::FlatSymbolRefAttr>("callee");
+      if (!callee || m.mayThrow(callee.getValue())) {
+        excBefore = m.freshName("exc_before");
+        out << "  int " << excBefore << " = __cir_exc_active;\n";
+      }
+    }
     if (!handleCallLikeOp(o, m, out)) return false;
+    if (!excBefore.empty())
+      out << "  if (__cir_exc_active && !" << excBefore
+          << ") abort(); /* std::terminate: an exception leaves a noexcept function */\n";
 
     // A regular cir.call without the `nothrow` attribute may have left an
     // exception in flight in the callee.  C has no implicit unwind, so we
@@ -326,7 +406,7 @@ private:
       // (no-exception) fall-through still needs handleCleanupScope to emit the
       // same destructors at scope exit.
       std::ostringstream cleanupOut;
-      m.emitPendingCleanups(cleanupOut, 0, /*consume=*/false);
+      m.emitPendingCleanups(cleanupOut, 0, /*consume=*/false, m.currentTryCleanupBase());
       // Re-indent: the cleanups were produced at "  " indent; inside the if-block
       // we want one extra level.
       {
@@ -340,6 +420,8 @@ private:
       const std::string &pad = m.currentTryLandingPad();
       if (!pad.empty()) {
         out << "    goto " << pad << ";\n";
+      } else if (isInMain(o)) {
+        out << "    abort(); /* uncaught exception: std::terminate */\n";
       } else {
         auto func = o->getParentOfType<cir::FuncOp>();
         mlir::Type rty = func ? func.getFunctionType().getReturnType()
@@ -387,7 +469,7 @@ private:
     // evaluated but before control leaves the function.
     if (o->getNumOperands() == 0) {
       // No return value — emit cleanups, run global destructors, then return.
-      m.emitPendingCleanups(out, 0);
+      m.emitPendingCleanups(out, 0, /*consume=*/false);
       m.emitGlobalDtorsAtMainReturn(out);
       out << "  return;\n";
       return true;
@@ -401,12 +483,12 @@ private:
       std::string retTmp = m.freshName("ret_val");
       std::string ctype = m.mapTypeToC(o->getOperand(0).getType());
       out << "  " << ctype << " " << retTmp << " = " << rv << ";\n";
-      m.emitPendingCleanups(out, 0);
+      m.emitPendingCleanups(out, 0, /*consume=*/false);
       m.emitGlobalDtorsAtMainReturn(out);
       out << "  return " << retTmp << ";\n";
     } else {
       // No cleanups pending — direct return.
-      m.emitPendingCleanups(out, 0);
+      m.emitPendingCleanups(out, 0, /*consume=*/false);
       m.emitGlobalDtorsAtMainReturn(out);
       out << "  return " << rv << ";\n";
     }

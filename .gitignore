@@ -18,3 +18,4 @@ test/output.txt
 .cache/
 compile_commands.json
 .claude/
+test/multi-tu-output/
