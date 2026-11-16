@@ -56,6 +56,16 @@ trap 'rm -rf "$WORK"' EXIT
 pass=0
 fail=0
 
+# The cases run cir2c with --no-externalize-std, so the C++ units need the models
+# of run-cir2c.sh (README 8.2): without them, the definition check rejects the
+# libc++ functions that libc++ defines out of line (operator new, std::logic_error).
+MODEL_FLAGS=()
+for model in libcxx-out-of-line ostream-sink istream-nondet; do
+    dir="$CIR2C_REPO_ROOT/models/$model"
+    [[ -d "$dir/include" ]] && MODEL_FLAGS+=(-I "$dir/include")
+    [[ -f "$dir/prelude.h" ]] && MODEL_FLAGS+=(-include "$dir/prelude.h")
+done
+
 emit_cir() {
     local src="$1" out="$2"
     local -a extra=()
@@ -65,8 +75,9 @@ emit_cir() {
     # shellcheck disable=SC2206 # the flags are meant to be split
     [[ -n "$flags" ]] && extra=($flags)
     case "$src" in
-        *.cpp) "$CIR_CLANGXX" -std=c++23 -stdlib=libc++ -nostdinc++ -isystem "$CIR_LIBCXX" \
-                   ${extra[@]+"${extra[@]}"} -S -emit-cir "$src" -o "$out" 2>/dev/null ;;
+        *.cpp) "$CIR_CLANGXX" -std=c++23 -stdlib=libc++ -nostdinc++ "${MODEL_FLAGS[@]}" \
+                   -isystem "$CIR_LIBCXX" ${extra[@]+"${extra[@]}"} \
+                   -S -emit-cir "$src" -o "$out" 2>/dev/null ;;
         *.c)   "$CIR_CLANG" -std=c23 ${extra[@]+"${extra[@]}"} \
                    -S -emit-cir "$src" -o "$out" 2>/dev/null ;;
     esac
