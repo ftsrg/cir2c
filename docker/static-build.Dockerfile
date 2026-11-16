@@ -13,6 +13,8 @@ WORKDIR /app
 COPY CMakeLists.txt /app/CMakeLists.txt
 COPY cmake /app/cmake
 COPY src /app/src
+# CMakeLists.txt also defines cir-merge, so the configure step needs its source.
+COPY tools /app/tools
 # .git is only read by cmake/GenerateVersion.cmake, to stamp the binary with the
 # commit it was built from.
 COPY .git /app/.git

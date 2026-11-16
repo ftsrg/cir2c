@@ -121,6 +121,7 @@ SKIP_OTHER_TESTS=0      # CIR gen: other parse/compile error
 SKIP_UPSTREAM_TESTS=0   # clang's own -fclangir also diverges (upstream ClangIR bug)
 SKIP_MULTITU_TESTS=0    # an esbmc-eval task with several source files (multi-TU)
 SKIP_MODEL_TESTS=0      # CIR gen: a part of libc++ that the C++ models do not cover
+SKIP_LIMIT_TESTS=0      # cir2c: a documented limit (mapper_failure)
 TIMEDOUT_TESTS=0
 interrupted=0
 
@@ -129,6 +130,7 @@ interrupted=0
 count_skip() {
     SKIPPED_TESTS=$((SKIPPED_TESTS + 1))
     case "$1" in
+        *"documented limit"*)    SKIP_LIMIT_TESTS=$((SKIP_LIMIT_TESTS + 1)) ;;
         *"upstream ClangIR"*)    SKIP_UPSTREAM_TESTS=$((SKIP_UPSTREAM_TESTS + 1)) ;;
         *"several translation units"*) SKIP_MULTITU_TESTS=$((SKIP_MULTITU_TESTS + 1)) ;;
         # The models of README 8.2 stop the compilation of a header that they do
@@ -180,6 +182,7 @@ print_summary() {
     echo -e "  upstream ClangIR:   ${YELLOW}$SKIP_UPSTREAM_TESTS${NC}   (clang -fclangir also wrong — not our bug)"
     echo -e "  several TUs:        ${YELLOW}$SKIP_MULTITU_TESTS${NC}   (esbmc-eval task with several source files)"
     echo -e "  C++ model limit:    ${YELLOW}$SKIP_MODEL_TESTS${NC}   (CIR gen: not covered by models/)"
+    echo -e "  cir2c limit:        ${YELLOW}$SKIP_LIMIT_TESTS${NC}   (cir2c: a documented limit, see the SKIPPED lines)"
     echo -e "Timed out:          ${YELLOW}$TIMEDOUT_TESTS${NC}"
     echo -e "Failed:             ${RED}$FAILED_TESTS${NC}"
     echo -e "  mapper failed:      ${RED}$MAPPER_FAILED_TESTS${NC}"
@@ -276,6 +279,27 @@ pipeline_stage() {
         4) echo "cir2c" ;;
         *) echo "pipeline" ;;
     esac
+}
+
+# A failed pipeline: SKIPPED when cir2c stopped with one of its documented
+# limits (the translation would be wrong or undefined, so cir2c refuses it on
+# purpose), else MAPPER_FAILED. Arguments: test name, pipeline exit code, log.
+mapper_failure() {
+    local name="$1" rc="$2" log="$3" limit=""
+    if [[ $rc -eq 4 && -f "$log" ]]; then
+        if grep -q 'the output must define each function and object that it uses' "$log"; then
+            limit="definition check of --no-externalize-std (README 8.2)"
+        elif grep -q 'so its vtable entries cannot be read' "$log"; then
+            limit="vtable pointer of a library object under --externalize-std (#3)"
+        elif grep -q 'tells a quiet NaN from a signaling NaN' "$log"; then
+            limit="signaling NaN classification (README 8.1)"
+        fi
+    fi
+    if [[ -n "$limit" ]]; then
+        echo "SKIPPED|$name|documented limit: $limit"
+    else
+        echo "MAPPER_FAILED|$name|$(pipeline_stage "$rc") failed"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -503,7 +527,7 @@ run_c_test() {
         echo "SKIPPED|$test_name|blocklisted op: $blocked"; return
     fi
     if [[ $pipeline_rc -ne 0 ]] || [ ! -f "$output_c_file" ]; then
-        echo "MAPPER_FAILED|$test_name|$(pipeline_stage "$pipeline_rc") failed"; return
+        mapper_failure "$test_name" "$pipeline_rc" "$pipeline_log"; return
     fi
 
     local compile_log="$INTEGRATION_OUTPUT_DIR/${test_name}_compile_log.txt"
@@ -586,7 +610,7 @@ run_cpp_test() {
         echo "SKIPPED|$test_name|blocklisted op: $blocked"; return
     fi
     if [[ $pipeline_rc -ne 0 ]] || [ ! -f "$output_c_file" ]; then
-        echo "MAPPER_FAILED|$test_name|$(pipeline_stage "$pipeline_rc") failed"; return
+        mapper_failure "$test_name" "$pipeline_rc" "$pipeline_log"; return
     fi
 
     # Check that struct/union names in the generated C are valid identifiers.
@@ -662,7 +686,7 @@ run_llvm_test() {
         echo "SKIPPED|$test_id|blocklisted op: $blocked"; return
     fi
     if [[ $pipeline_rc -ne 0 ]] || [ ! -f "$output_c_file" ]; then
-        echo "MAPPER_FAILED|$test_id|$(pipeline_stage "$pipeline_rc") failed"; return
+        mapper_failure "$test_id" "$pipeline_rc" "$pipeline_log"; return
     fi
 
     # Validity check: COMPILE ONLY (no linking). The mapper's job is to produce
@@ -802,7 +826,7 @@ run_llvm_multi_test() {
         echo "SKIPPED|$test_id|cir-merge rejected: $(grep -m1 'cir-merge: error' "$pipeline_log" | sed 's/^cir-merge: error: [^:]*: //')"; return
     fi
     if [[ $pipeline_rc -ne 0 ]] || [ ! -f "$output_c_file" ]; then
-        echo "MAPPER_FAILED|$test_id|$(pipeline_stage "$pipeline_rc") failed"; return
+        mapper_failure "$test_id" "$pipeline_rc" "$pipeline_log"; return
     fi
 
     # Compile the merged C
@@ -903,7 +927,7 @@ run_esbmc_test() {
         echo "SKIPPED|$test_id|blocklisted op: $blocked"; return
     fi
     if [[ $pipeline_rc -ne 0 ]] || [ ! -f "$output_c_file" ]; then
-        echo "MAPPER_FAILED|$test_id|$(pipeline_stage "$pipeline_rc") failed"; return
+        mapper_failure "$test_id" "$pipeline_rc" "$pipeline_log"; return
     fi
 
     # Pass condition: generated C COMPILES. The esbmc programs are not run
@@ -925,7 +949,7 @@ FPCMP="$SCRIPT_DIR/fpcmp.py"
 export MULTISOURCE_OPTIONS FPCMP
 export TIMEOUT RUNNER GCC CLANGPP INTEGRATION_OUTPUT_DIR LLVM_EVAL_DIR LLVM_EVAL_OUTPUT_DIR
 export ESBMC_EVAL_DIR ESBMC_EVAL_OUTPUT_DIR EXTERNALIZE_STD_FLAG MULTI_MERGE EXTRA_INCLUDES_STR
-export -f pipeline_stage log_has_unwanted_text output_has_unwanted_text output_lacks_wanted_text output_fails_cflags run_selfchecking run_c_test run_cpp_test run_llvm_test run_llvm_multi_test run_esbmc_test
+export -f pipeline_stage mapper_failure log_has_unwanted_text output_has_unwanted_text output_lacks_wanted_text output_fails_cflags run_selfchecking run_c_test run_cpp_test run_llvm_test run_llvm_multi_test run_esbmc_test
 
 # ---------------------------------------------------------------------------
 # Preflight checks

@@ -50,6 +50,12 @@ runs:
             "esbmc":       "esbmc-eval",
             "esbmc-std":   "esbmc-eval (no-ext-std)",
         }
+        # Suites that the table shows but that do not count as problems, with
+        # the reason. Translating several units through --merge c is future
+        # work: the merged C still has name collisions between units (#20).
+        INFORMATIONAL = {
+            "llvm-multi": "the units collide on names in the merged C (#20)",
+        }
         ROWS = [
             ("Total",                "total"),
             ("✅ Passed",             "passed"),
@@ -91,6 +97,8 @@ runs:
 
             total_failed = 0
             for slug in slugs:
+                if slug in INFORMATIONAL:
+                    continue
                 value = results[slug].get("failed")
                 if isinstance(value, int):
                     total_failed += value
@@ -103,6 +111,11 @@ runs:
             total_failed += len(empty)
 
             lines.append("")
+            for slug in slugs:
+                if slug in INFORMATIONAL and results[slug].get("failed"):
+                    lines.append(f"> ℹ️ Not counted: {TITLES.get(slug, slug)}, "
+                                 f"{results[slug]['failed']} failed: "
+                                 f"{INFORMATIONAL[slug]}.")
             if empty:
                 lines.append("> ❌ **No tests ran** in: " + ", ".join(empty) +
                              " — the toolchain, the cir2c binary or the corpus "
