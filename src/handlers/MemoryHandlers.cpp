@@ -144,8 +144,11 @@ private:
       // its uninitialized temporary. In C, a copy of an uninitialized local
       // whose address is not taken is undefined (C11 6.3.2.1p2), so the
       // variable starts as zero.
+      // A record of size 0 (only a zero-length array, a GNU extension) has
+      // nothing to zero, and clang rejects `{0}` for it.
       bool noData = recordTy.isComplete() && !recordTy.isUnion() &&
-                    !recordHoldsDataForABI(recordTy);
+                    !recordHoldsDataForABI(recordTy) &&
+                    mlir::DataLayout::closest(o).getTypeSize(recordTy) != 0;
       std::string init = (noData && qualPrefix.find("_Atomic") == std::string::npos)
                              ? " = {0}"
                              : "";

@@ -217,6 +217,15 @@ private:
       return true;
     }
 
+    // A record of size 0 (only a zero-length array, a GNU extension) has no
+    // value, and clang rejects `{0}` for it.
+    if (literal == "{0}" && resultType && mlir::isa<cir::RecordType>(resultType) &&
+        mlir::DataLayout::closest(o).getTypeSize(resultType) == 0) {
+      out << "  " << ctype << " " << tmp << ";\n";
+      if (o->getNumResults() > 0) m.setName(o->getResult(0), tmp);
+      return true;
+    }
+
     out << "  " << ctype << " " << tmp << " = " << literal << ";\n";
     if (o->getNumResults() > 0) m.setName(o->getResult(0), tmp);
     return true;
