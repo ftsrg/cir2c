@@ -446,7 +446,12 @@ private:
   std::set<std::string> ehMatchersPlanned_;
   std::vector<std::string> ehMatchersPending_;
   void planExceptionTypes(mlir::ModuleOp module);
-  EhMatch matchClass(const std::string &thrown, const std::string &handler) const;
+  /// complete: the thrown object is a complete object of the thrown class (a
+  /// class exception), so a virtual base is at a constant offset (issue #30).
+  EhMatch matchClass(const std::string &thrown, const std::string &handler, bool complete) const;
+  /// The offset of the virtual base class `base` (an RTTI symbol) in a
+  /// complete object of the thrown class `thrown`, from its record layout.
+  std::optional<int64_t> virtualBaseOffset(const std::string &thrown, const std::string &base) const;
   EhMatch matchHandler(const std::string &thrown, const std::string &handler) const;
   // Alloca result Values that are accessed atomically / volatilely.
   llvm::DenseSet<mlir::Value> atomicAllocaValues_;
@@ -513,6 +518,10 @@ private:
   // Record name -> its vtable and the flat index of its primary address point,
   // from the constructors that store that address point into `this`.
   std::map<std::string, std::pair<std::string, uint64_t>> primaryVtables_;
+  mlir::ModuleOp vtableModule_;  // the module of primaryVtables_
+  /// The integer entry `slot` entries from the primary address point of the
+  /// vtable of class `className` (negative: before the address point).
+  std::optional<int64_t> primaryVtableInteger(const std::string &className, int64_t slot) const;
   // Set of SSA values that are final virtual function pointers (loaded from
   // get_virtual_fn_addr result) and should trigger __VERIFIER_virtual_call
   // when used as a callee in cir.call.
