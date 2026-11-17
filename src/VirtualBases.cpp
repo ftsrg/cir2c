@@ -35,9 +35,10 @@
 // class. The entry is then a constant, and the vtable pointer is not read.
 // This also holds when the constructor of the variable is unknown
 // (--externalize-std), which sets the vtable pointer to an unknown value. A
-// read through the vtable pointer of a library object is not possible then:
-// libc++ instantiates its streams in its compiled library, so their vtables are
-// not in the module, and cir2c stops with an error.
+// read through the vtable pointer of an object of a library class whose vtable
+// is not in the module is not possible, in either mode: libc++ instantiates its
+// streams in its compiled library, so no code of the output sets their vtable
+// pointers, and cir2c stops with an error (issue #32).
 
 #include "Mapper.h"
 
@@ -105,6 +106,15 @@ std::string Mapper::vtableIntegerEntry(mlir::Attribute entry) {
 
 void Mapper::planPrimaryVtables(mlir::ModuleOp module) {
   primaryVtables_.clear();
+  definedVtableClasses_.clear();
+  // The classes whose vtable the module defines ("vtable for X").
+  module->walk([&](cir::GlobalOp global) {
+    auto sym = symbolNameAttr(global);
+    if (!sym || !sym.getValue().starts_with("_ZTV") || !global.getInitialValue()) return;
+    std::string dem = demangle(sym.getValue().str());
+    const std::string prefix = "vtable for ";
+    if (dem.rfind(prefix, 0) == 0) definedVtableClasses_.insert(dem.substr(prefix.size()));
+  });
   std::set<std::string> ambiguous;
   module->walk([&](cir::StoreOp store) {
     auto point = store.getValue().getDefiningOp<cir::VTableAddrPointOp>();
@@ -197,17 +207,21 @@ bool Mapper::mapVtableViewLoad(mlir::Operation *loadOp, std::ostream &out) {
         }
       }
     }
-    // With --externalize-std, the constructor of a library object is unknown,
-    // and so is the vtable pointer that it would have installed.
-    if (externalizeStd_ && slotOp) {
+    // A library class whose vtable is not in the module (issue #32): libc++
+    // instantiates its streams in its compiled library. No code of the output
+    // sets the vptr of such an object, in either mode, so its entries cannot
+    // be read. In --externalize-std, a read whose only use is a replaced call
+    // emits nothing (planReplacedCallArguments) and does not come here.
+    if (slotOp) {
       auto pointer = mlir::dyn_cast<cir::PointerType>(slotOp.getSrc().getType());
       auto record = pointer ? mlir::dyn_cast<cir::RecordType>(pointer.getPointee())
                             : cir::RecordType();
-      if (record && record.getName() && record.getName().getValue().starts_with("std::")) {
-        llvm::errs() << "cir2c: error: with --externalize-std, the vtable pointer of the "
-                        "library object of type "
+      if (record && record.getName() && record.getName().getValue().starts_with("std::") &&
+          !definedVtableClasses_.count(record.getName().getValue().str())) {
+        llvm::errs() << "cir2c: error: the vtable of the library class "
                      << record.getName().getValue()
-                     << " is unknown, so its vtable entries cannot be read (issue #3)\n";
+                     << " is not in the module, so no code of the output sets the vtable pointer "
+                        "of this object, and its vtable entries cannot be read (issue #32)\n";
         return false;
       }
     }
