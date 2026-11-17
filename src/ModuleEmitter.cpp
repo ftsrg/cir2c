@@ -2968,17 +2968,18 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   // the other units can define its symbols.
   if (vtableViewMisused_) return false;
   if (isTopLevelModule && isCxx && definesMain && !tuPart_ && !undefinedSymbols_.empty()) {
-    llvm::errs() << "cir2c: error: with --no-externalize-std, the output must "
-                    "define each function and object that it uses, outside the "
-                    "C standard library (README 8.2). These have no "
-                    "definition:\n";
+    // The ICSE 2027 camera-ready version reports the undefined symbols and
+    // translates (main stops here): a verification tool chooses their behavior.
+    llvm::errs() << "cir2c: warning: with --no-externalize-std, the output uses "
+                    "functions and objects outside the C standard library that it "
+                    "does not define (README 8.2); a verification tool chooses "
+                    "their behavior. These have no definition:\n";
     for (const std::string &symbol : undefinedSymbols_) {
       std::string demangled = demangleSymbol(symbol);
       llvm::errs() << "  " << demangled;
       if (demangled != symbol) llvm::errs() << "  [" << symbol << "]";
       llvm::errs() << "\n";
     }
-    return false;
   }
 
   // A type without a C type, in the part of the module that the output contains

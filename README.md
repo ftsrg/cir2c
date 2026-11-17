@@ -16,6 +16,19 @@ limitations under the License.
 
 # cir2c
 
+> **This is the branch `icse27-camera-ready`:** the version of cir2c for the
+> evaluation of the ICSE 2027 camera-ready paper. It has the fixes of `main`, but
+> it keeps the scope of the submission version. It differs from `main` in four
+> points, and the rest of this README describes `main`:
+>
+> - `run-cir2c.sh` compiles no models (8.2): `MODELS=()`.
+> - With `--no-externalize-std`, an undefined function or object is a warning, not
+>   an error (8.2). A verification tool chooses its behavior.
+> - A vtable read of a library object (8.1, issue #32) is a warning, not an error.
+> - Floating-point classification (`cir.is_fp_class`) stops cir2c, and
+>   `test/run_tests.sh` skips it, as in the submission. The runner also skips the
+>   programs that start a thread (`pthread_create`, `thrd_create`).
+
 cir2c translates C and C++ programs into verifier-friendly C. Formal
 verification tools that read only C can then examine C++ programs. They can also
 examine C programs that their own front ends do not process correctly.

@@ -60,6 +60,10 @@ BLOCKLIST_OPS=(
     "cir.int<u, 128>"                  # 128-bit integers (__int128) — unsupported (also crashes the mapper)
     "cir.eh.setjmp"                    # MSVC-SEH / __builtin_setjmp — not modellable
     "cir.eh.longjmp"                   # MSVC-SEH / __builtin_longjmp — not modellable
+    # The ICSE 2027 camera-ready version:
+    "cir.is_fp_class"                  # FP classification — out of scope, as in the submission
+    "@pthread_create"                  # threads — the output has one thread (README 5.1)
+    "@thrd_create"                     # threads — the output has one thread (README 5.1)
     "cir.indirect_br"                  # computed goto (GNU &&label / goto *p) — no ISO C equivalent
     "cir.indirect_goto"                # computed goto, the form LLVM 24 emits — same reason
 )
