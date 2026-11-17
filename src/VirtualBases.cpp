@@ -234,11 +234,12 @@ bool Mapper::mapVtableViewLoad(mlir::Operation *loadOp, std::ostream &out) {
                             : cir::RecordType();
       if (record && record.getName() && record.getName().getValue().starts_with("std::") &&
           !definedVtableClasses_.count(record.getName().getValue().str())) {
-        llvm::errs() << "cir2c: error: the vtable of the library class "
+        // The ICSE 2027 camera-ready version warns and reads the entry, as the
+        // submission version did (main stops here).
+        llvm::errs() << "cir2c: warning: the vtable of the library class "
                      << record.getName().getValue()
                      << " is not in the module, so no code of the output sets the vtable pointer "
-                        "of this object, and its vtable entries cannot be read (issue #32)\n";
-        return false;
+                        "of this object, and the output reads an unset vtable pointer (issue #32)\n";
       }
     }
     out << "  " << ctype << " " << name << " = (" << ctype << ")(unsigned long)((void**)"

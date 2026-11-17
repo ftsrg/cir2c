@@ -28,6 +28,9 @@ limitations under the License.
 > - Floating-point classification (`cir.is_fp_class`) stops cir2c, and
 >   `test/run_tests.sh` skips it, as in the submission. The runner also skips the
 >   programs that start a thread (`pthread_create`, `thrd_create`).
+> - `test/run_tests.sh` skips the integration tests of the rejections that this
+>   version does not make (the `test_reject_*` tests of the definition check, the
+>   models, the signaling NaN and the library vtable read).
 
 cir2c translates C and C++ programs into verifier-friendly C. Formal
 verification tools that read only C can then examine C++ programs. They can also

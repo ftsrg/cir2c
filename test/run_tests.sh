@@ -582,6 +582,13 @@ run_cpp_test() {
     if [[ -n "$expected" && "$EXTERNALIZE_STD_FLAG" != "--no-externalize-std" ]]; then
         echo "SKIPPED|$test_name|the expected error is for --no-externalize-std"; return
     fi
+    # The ICSE 2027 camera-ready version reports these rejections of main as
+    # warnings (undefined symbols, library vtable reads) or skips them (no
+    # models, floating-point classification); see the README of this branch.
+    case "$test_name" in
+        test_reject_cin_state|test_reject_cin_string|test_reject_new_handler|test_reject_sstream|test_reject_undefined_function|test_reject_signaling_nan|test_reject_library_vptr_use)
+            echo "SKIPPED|$test_name|main only: a rejection that the camera-ready version does not make"; return ;;
+    esac
     # "cir2c-test-strict-only:" (a reason): the test checks behavior that
     # --externalize-std replaces with unknown values, for example the state of
     # a library object. With that option, the test is skipped.
