@@ -1138,7 +1138,7 @@ tests: `run-cir2c.sh` itself stops with the error.
 | Other types without a C type | for example a vector member outside the vector operations, or a half-precision MLIR float | `mapTypeToC` writes a marker for the type. cir2c stops when the finished output contains a marker, so a type in a function that the output does not contain does not stop it. A pointer to such a type becomes a pointer to an incomplete struct: the output can store and pass it, but not read through it. |
 | MSVC SEH | `cir.eh.setjmp`, `cir.eh.longjmp` | This control flow has no model here. |
 | A pointer handler that matches through a virtual base | a `catch` of a pointer to a virtual base class of the class that a thrown pointer points to | The handler selection decides each pair during the translation (8.3). The object behind a thrown pointer can be of a more derived class, so the offset of its virtual base is known only at run time. A class exception does not have this limit (8.3). |
-| A vtable entry of a library object, with `--externalize-std` | a read of a virtual-base offset or offset-to-top through the vtable pointer of a `std::` object | The constructor of the object is unknown, so its vtable pointer is unknown. libc++ instantiates its streams in its compiled library, so their vtables are not in the module either. |
+| A vtable entry of a library object | a read of a virtual-base offset or offset-to-top through the vtable pointer of an object of a `std::` class whose vtable is not in the module, in either mode | libc++ instantiates its streams in its compiled library, so no code of the output sets the vtable pointer of such an object. With `--externalize-std`, a read whose only use is a replaced call emits nothing (8.2), so this applies only to other uses. |
 | Computed goto | `cir.indirect_br` | The GNU `&&label` and `goto *p` extensions have no ISO C equivalent. A sound translation must change the function into a switch statement on a label number. cir2c does not do this yet. |
 
 Clang cannot make CIR for some other constructions. In this condition,
@@ -1164,6 +1164,20 @@ in the output file:
 The model permits more behavior than the program. A proof is true for the
 program. A counterexample can be false, because it can use a library result that
 the real library does not give.
+
+The option changes only the library calls (issue #32):
+
+- A replaced call with a result gives an unknown value of the result type. It
+  does not read its arguments.
+- A replaced call without a result writes unknown values through its pointer
+  arguments, except through a pointer to a function, to `void`, to an incomplete
+  record, to a `std::` struct that the output only declares, or into a library
+  object whose vtable is not in the module (for example the `std::basic_ios`
+  part of `std::cout`: only replaced calls use that memory).
+- An operation without side effects whose only uses are such unread arguments
+  emits nothing. For example, `std::cin.fail()` converts `std::cin` to its
+  virtual base `std::basic_ios` with a read of its vtable. The call is replaced,
+  so the conversion has no use, and the output does not read the vtable.
 
 **WARNING: The `--no-externalize-std` option is UNSOUND for STL containers.**
 
@@ -1647,6 +1661,9 @@ the `--no-externalize-std` option. With the `--externalize-std` option, the
 runner skips such a test. A line that starts with
 `// cir2c-test-expect-error-externalize-std: ` gives an error that only the
 `--externalize-std` option causes. Without that option, the test runs as usual.
+A line that starts with `// cir2c-test-strict-only: ` and a reason skips the
+test with the `--externalize-std` option, for a test of behavior that this
+option replaces with unknown values (for example the state of a stream).
 
 A test can also forbid a text in the log of the translation, for example a
 warning of cir2c. Write the text in a line that starts with

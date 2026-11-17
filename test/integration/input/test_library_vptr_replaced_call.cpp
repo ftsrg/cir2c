@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-// Issue #3 part 2: with --externalize-std, the constructor of a library object
-// is unknown, so its vtable pointer is unknown too. The conversion to the
-// virtual base std::basic_ios reads that pointer, and cir2c stops. Without
-// --externalize-std, the ostream-sink model has no <fstream>, and clang stops.
-
-// cir2c-test-expect-error-externalize-std: is unknown, so its vtable entries cannot be read
+// Issue #32: `!out` converts the stream to its virtual base std::basic_ios,
+// which reads the vptr of `out`. The vtable of std::ofstream is in the compiled
+// libc++, so no code of the output sets that vptr. With --externalize-std, the
+// call of operator! is replaced, so the conversion has no use and emits
+// nothing. Without --externalize-std, the ostream-sink model has no <fstream>,
+// and clang stops.
 
 #include <fstream>
 

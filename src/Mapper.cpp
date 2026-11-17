@@ -306,6 +306,12 @@ bool keepsOddWidthValue(mlir::Operation *op) {
 
 bool Mapper::mapOperation(mlir::Operation *op, std::ostream &out) {
   auto opName = op->getName().getStringRef();
+  // Issue #32: an argument of a replaced library call only; it emits nothing.
+  if (isReplacedCallArgument(op)) {
+    traceability.recordOperationVisit(opName);
+    traceability.recordOperationHandled(opName);
+    return true;
+  }
   if (!keepsOddWidthValue(op)) {
     std::vector<mlir::Type> types(op->getOperandTypes().begin(), op->getOperandTypes().end());
     types.insert(types.end(), op->getResultTypes().begin(), op->getResultTypes().end());

@@ -582,6 +582,14 @@ run_cpp_test() {
     if [[ -n "$expected" && "$EXTERNALIZE_STD_FLAG" != "--no-externalize-std" ]]; then
         echo "SKIPPED|$test_name|the expected error is for --no-externalize-std"; return
     fi
+    # "cir2c-test-strict-only:" (a reason): the test checks behavior that
+    # --externalize-std replaces with unknown values, for example the state of
+    # a library object. With that option, the test is skipped.
+    local strict_only
+    strict_only=$(sed -n 's|^// cir2c-test-strict-only: ||p' "$cpp_file" | head -1)
+    if [[ -n "$strict_only" && "$EXTERNALIZE_STD_FLAG" == "--externalize-std" ]]; then
+        echo "SKIPPED|$test_name|strict only: $strict_only"; return
+    fi
     # "cir2c-test-expect-error-externalize-std:" lines: an error that only
     # --externalize-std gives. Without that option, the test runs as usual.
     if [[ "$EXTERNALIZE_STD_FLAG" == "--externalize-std" ]]; then

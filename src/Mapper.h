@@ -183,6 +183,19 @@ public:
   /// a cir.throw, an indirect call that can throw, or a call that can throw to
   /// such a function. Computed once.
   void computeMayThrow(mlir::ModuleOp module);
+  /// Issue #32: the operations without side effects whose only uses are the
+  /// arguments of replaced library calls (directly or through other such
+  /// operations). They emit nothing: a replaced call with a result does not
+  /// read its arguments.
+  void planReplacedCallArguments(mlir::ModuleOp module);
+  bool isReplacedCallArgument(mlir::Operation *op) const {
+    return replacedCallArguments_.count(op) > 0;
+  }
+  llvm::DenseSet<mlir::Operation *> replacedCallArguments_;
+  /// Issue #32: the value is computed from the vptr of an object of a std::
+  /// class whose vtable is not in the module (through loads, casts, strides,
+  /// base and member addresses).
+  bool dependsOnLibraryVptr(mlir::Value value) const;
   /// True when the function with this symbol can leave an exception in flight.
   bool mayThrow(llvm::StringRef sym) const { return mayThrowFuncs_.count(sym.str()) > 0; }
 
@@ -522,6 +535,8 @@ private:
   /// The integer entry `slot` entries from the primary address point of the
   /// vtable of class `className` (negative: before the address point).
   std::optional<int64_t> primaryVtableInteger(const std::string &className, int64_t slot) const;
+  // Issue #32: the classes whose vtable the module defines, by demangled name.
+  std::set<std::string> definedVtableClasses_;
   // Set of SSA values that are final virtual function pointers (loaded from
   // get_virtual_fn_addr result) and should trigger __VERIFIER_virtual_call
   // when used as a callee in cir.call.
