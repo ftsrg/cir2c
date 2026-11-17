@@ -43,11 +43,20 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <functional>
+#include <vector>
+#include <map>
+#include <optional>
 #include <set>
 
 namespace cir2c {
 
 namespace {
+
+// The name of the class of an RTTI symbol, as the CIR record names it.
+std::string classNameOf(const std::string &demangled) {
+  const std::string prefix = "typeinfo for ";
+  return demangled.rfind(prefix, 0) == 0 ? demangled.substr(prefix.size()) : std::string();
+}
 
 // The RTTI of a fundamental pointer type is in the C++ runtime. Its mangled
 // name is `_ZTIP` followed by the qualifiers of the pointee (r, V, K) and the
@@ -153,7 +162,30 @@ void Mapper::planExceptionTypes(mlir::ModuleOp module) {
   });
 }
 
-Mapper::EhMatch Mapper::matchClass(const std::string &thrown, const std::string &handler) const {
+std::optional<int64_t> Mapper::virtualBaseOffset(const std::string &thrown,
+                                                  const std::string &base) const {
+  auto type = ehThrownTypes_.find(thrown);
+  auto record = type == ehThrownTypes_.end() ? cir::RecordType()
+                                             : mlir::dyn_cast<cir::RecordType>(type->second);
+  std::string name = classNameOf(demangle(base));
+  if (!record || !record.isComplete() || name.empty() || !dataLayout_) return std::nullopt;
+  // The complete object holds each virtual base once, as a member of its own
+  // record type (with `.base` when that class has virtual bases itself).
+  std::optional<int64_t> offset;
+  auto members = record.getMembers();
+  for (unsigned i = 0; i < members.size(); ++i) {
+    auto member = mlir::dyn_cast<cir::RecordType>(members[i]);
+    if (!member || !member.getName()) continue;
+    llvm::StringRef memberName = member.getName().getValue();
+    if (memberName != name && memberName != name + ".base") continue;
+    if (offset) return std::nullopt;  // two candidates: not decided here
+    offset = static_cast<int64_t>(record.getElementOffset(*dataLayout_, i));
+  }
+  return offset;
+}
+
+Mapper::EhMatch Mapper::matchClass(const std::string &thrown, const std::string &handler,
+                                   bool complete) const {
   EhMatch result;
   if (thrown == handler) {
     result.matches = true;
@@ -163,36 +195,76 @@ Mapper::EhMatch Mapper::matchClass(const std::string &thrown, const std::string 
   std::set<int64_t> offsets;
   std::set<int64_t> publicOffsets;
   bool throughVirtual = false;
-  std::function<void(const std::string &, int64_t, bool, int)> walk =
-      [&](const std::string &cls, int64_t offset, bool allPublic, int depth) {
-        auto it = ehTypeInfos_.find(cls);
-        if (it == ehTypeInfos_.end() || depth > 64) return;
-        for (const EhBase &base : it->second.bases) {
-          if (base.isVirtual) {
-            // The offset of a virtual base is in the vtable of the object.
-            std::function<bool(const std::string &, int)> reaches =
-                [&](const std::string &c, int d) {
-                  if (c == handler) return true;
-                  auto bi = ehTypeInfos_.find(c);
-                  if (bi == ehTypeInfos_.end() || d > 64) return false;
-                  for (const EhBase &b : bi->second.bases)
-                    if (reaches(b.sym, d + 1)) return true;
-                  return false;
-                };
-            if (reaches(base.sym, depth + 1)) throughVirtual = true;
-            continue;
-          }
-          int64_t at = offset + base.offset;
-          bool isPublic = allPublic && base.isPublic;
-          if (base.sym == handler) {
-            offsets.insert(at);
-            if (isPublic) publicOffsets.insert(at);
-            continue;
-          }
-          walk(base.sym, at, isPublic, depth + 1);
-        }
-      };
+  // A complete object holds each virtual base once, so one resolved path gives
+  // the offset of a virtual base for each other path to it.
+  std::map<std::string, int64_t> virtualAt;
+  struct Deferred {
+    std::string sym;
+    bool isPublic;
+    int depth;
+  };
+  std::vector<Deferred> deferred;
+  std::function<bool(const std::string &, int)> reaches = [&](const std::string &c, int d) {
+    if (c == handler) return true;
+    auto bi = ehTypeInfos_.find(c);
+    if (bi == ehTypeInfos_.end() || d > 64) return false;
+    for (const EhBase &b : bi->second.bases)
+      if (reaches(b.sym, d + 1)) return true;
+    return false;
+  };
+  std::function<void(const std::string &, int64_t, bool, int)> walk;
+  auto reachBase = [&](const std::string &sym, int64_t at, bool isPublic, int depth) {
+    if (sym == handler) {
+      offsets.insert(at);
+      if (isPublic) publicOffsets.insert(at);
+    } else {
+      walk(sym, at, isPublic, depth);
+    }
+  };
+  walk = [&](const std::string &cls, int64_t offset, bool allPublic, int depth) {
+    auto it = ehTypeInfos_.find(cls);
+    if (it == ehTypeInfos_.end() || depth > 64) return;
+    for (const EhBase &base : it->second.bases) {
+      bool isPublic = allPublic && base.isPublic;
+      if (!base.isVirtual) {
+        reachBase(base.sym, offset + base.offset, isPublic, depth + 1);
+        continue;
+      }
+      // In a complete object of the thrown class, a virtual base is at a
+      // constant offset from the start of the object (issue #30). In any other
+      // object, the offset is in the vtable of the object.
+      std::optional<int64_t> at = complete ? virtualBaseOffset(thrown, base.sym) : std::nullopt;
+      // An empty virtual base has no member in the record. When the class that
+      // names it is at offset 0, its vptr is the primary vptr of the complete
+      // object, and the RTTI gives the vtable slot of the offset.
+      if (!at && complete && offset == 0 && base.offset < 0 && base.offset % 8 == 0)
+        if (auto type = ehThrownTypes_.find(thrown); type != ehThrownTypes_.end())
+          if (auto record = mlir::dyn_cast<cir::RecordType>(type->second);
+              record && record.getName())
+            at = primaryVtableInteger(record.getName().getValue().str(), base.offset / 8);
+      if (!at) {
+        auto known = virtualAt.find(base.sym);
+        if (known != virtualAt.end()) at = known->second;
+      }
+      if (!at) {
+        deferred.push_back({base.sym, isPublic, depth + 1});
+        continue;
+      }
+      virtualAt[base.sym] = *at;
+      reachBase(base.sym, *at, isPublic, depth + 1);
+    }
+  };
   walk(thrown, 0, true, 0);
+  // A path that found no offset gets the offset of another path to the same
+  // virtual base; without one, the match is not decided here.
+  for (size_t i = 0; i < deferred.size(); ++i) {
+    Deferred d = deferred[i];
+    auto known = virtualAt.find(d.sym);
+    if (known != virtualAt.end())
+      reachBase(d.sym, known->second, d.isPublic, d.depth);
+    else if (reaches(d.sym, d.depth))
+      throughVirtual = true;
+  }
   if (throughVirtual) {
     result.unsupported = true;
     return result;
@@ -219,7 +291,7 @@ Mapper::EhMatch Mapper::matchHandler(const std::string &thrown, const std::strin
   const EhTypeInfo &hi = h->second;
   if (hi.kind == EhTypeInfo::Class) {
     if (e == ehTypeInfos_.end() || e->second.kind != EhTypeInfo::Class) return none;
-    return matchClass(thrown, handler);
+    return matchClass(thrown, handler, true);
   }
   if (hi.kind != EhTypeInfo::Pointer) return none;
   // std::nullptr_t converts to each pointer type.
@@ -248,7 +320,7 @@ Mapper::EhMatch Mapper::matchHandler(const std::string &thrown, const std::strin
   if (ep == ehTypeInfos_.end() || hp == ehTypeInfos_.end() ||
       ep->second.kind != EhTypeInfo::Class || hp->second.kind != EhTypeInfo::Class)
     return none;
-  EhMatch base = matchClass(ei.pointee, hi.pointee);
+  EhMatch base = matchClass(ei.pointee, hi.pointee, false);
   base.converts = true;
   return base;
 }
@@ -263,8 +335,8 @@ bool Mapper::exceptionMatchCall(const std::string &handler, std::string &call) {
     if (match.unsupported) {
       llvm::errs() << "cir2c: error: the handler of " << demangle(handler)
                    << " can match the exception " << demangle(thrown)
-                   << " through a virtual base class, which cir2c does not translate "
-                      "(issue #3)\n";
+                   << " through a virtual base class at an offset that is not known during "
+                      "the translation, which cir2c does not translate (issue #30)\n";
       return false;
     }
   }

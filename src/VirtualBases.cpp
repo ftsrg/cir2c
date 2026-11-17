@@ -45,6 +45,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <cstdio>
+#include <optional>
 
 namespace cir2c {
 
@@ -103,8 +104,20 @@ std::string Mapper::vtableIntegerEntry(mlir::Attribute entry) {
   return std::string("(void*)") + hex + " /* " + std::to_string(value) + " */";
 }
 
+std::optional<int64_t> Mapper::primaryVtableInteger(const std::string &className,
+                                                    int64_t slot) const {
+  auto it = primaryVtables_.find(className);
+  if (it == primaryVtables_.end() || !vtableModule_) return std::nullopt;
+  mlir::Attribute entry = vtableEntryAt(vtableModule_, it->second.first,
+                                        static_cast<int64_t>(it->second.second) + slot);
+  auto constant = mlir::dyn_cast_or_null<cir::ConstPtrAttr>(entry);
+  if (!constant) return std::nullopt;
+  return constant.isNullValue() ? 0 : constant.getValue().getInt();
+}
+
 void Mapper::planPrimaryVtables(mlir::ModuleOp module) {
   primaryVtables_.clear();
+  vtableModule_ = nullptr;
   std::set<std::string> ambiguous;
   module->walk([&](cir::StoreOp store) {
     auto point = store.getValue().getDefiningOp<cir::VTableAddrPointOp>();
@@ -125,6 +138,9 @@ void Mapper::planPrimaryVtables(mlir::ModuleOp module) {
     if (it != primaryVtables_.end() && it->second != std::make_pair(symbol, flat))
       ambiguous.insert(name);
     primaryVtables_[name] = {symbol, flat};
+    // The symbols are in the module of the operations, which can be nested in
+    // the module that mapModule gets.
+    if (!vtableModule_) vtableModule_ = store->getParentOfType<mlir::ModuleOp>();
   });
   for (const std::string &name : ambiguous) primaryVtables_.erase(name);
 }

@@ -1124,7 +1124,7 @@ tests: `run-cir2c.sh` itself stops with the error.
 | Arithmetic on an integer of another width than 8, 16, 32 or 64 bits | for example `cir.add` on `!cir.int<u,24>` (`_BitInt(24)`) | Such a value travels in the next wider type. That keeps its bits when the output only stores, loads or passes it, for example a record of 3 bytes that the calling convention coerces to `!cir.int<u,24>`. The arithmetic of the wider type would not wrap at the width. |
 | Other types without a C type | for example a vector member outside the vector operations, or a half-precision MLIR float | `mapTypeToC` writes a marker for the type. cir2c stops when the finished output contains a marker, so a type in a function that the output does not contain does not stop it. A pointer to such a type becomes a pointer to an incomplete struct: the output can store and pass it, but not read through it. |
 | MSVC SEH | `cir.eh.setjmp`, `cir.eh.longjmp` | This control flow has no model here. |
-| A handler that matches through a virtual base | a `catch` of a virtual base class of the thrown class | The handler selection decides each pair during the translation (8.3), but the offset of a virtual base is in the vtable of the object, at run time. |
+| A pointer handler that matches through a virtual base | a `catch` of a pointer to a virtual base class of the class that a thrown pointer points to | The handler selection decides each pair during the translation (8.3). The object behind a thrown pointer can be of a more derived class, so the offset of its virtual base is known only at run time. A class exception does not have this limit (8.3). |
 | A vtable entry of a library object, with `--externalize-std` | a read of a virtual-base offset or offset-to-top through the vtable pointer of a `std::` object | The constructor of the object is unknown, so its vtable pointer is unknown. libc++ instantiates its streams in its compiled library, so their vtables are not in the module either. |
 | Computed goto | `cir.indirect_br` | The GNU `&&label` and `goto *p` extensions have no ISO C equivalent. A sound translation must change the function into a switch statement on a label number. cir2c does not do this yet. |
 
@@ -1368,9 +1368,12 @@ These limits apply:
   also a candidate. An exception of a class that the module does not know
   matches only a handler of its own type, and a pointer that the module does
   not throw matches only a handler of its own pointer type.
-- The offset of a virtual base class is in the vtable of the object. cir2c
-  stops with an error when a handler can match a thrown type through a virtual
-  base class (see 8.1).
+- A class exception is a complete object of the thrown class, so a virtual
+  base class is at a constant offset in it: the offset of its member in the
+  record of the thrown class. A handler of the virtual base class gets this
+  offset. The object behind a thrown pointer can be of a more derived class.
+  cir2c stops with an error when a pointer handler can match a thrown pointer
+  through a virtual base class (see 8.1).
 
 The global-variable model has these other effects:
 
