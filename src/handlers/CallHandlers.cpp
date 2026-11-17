@@ -180,6 +180,9 @@ private:
             Value argV = o->getOperand(i);
             auto pt = mlir::dyn_cast<cir::PointerType>(argV.getType());
             if (!pt) continue;
+            // Issue #32: a pointer into a library object whose vtable is not in
+            // the module; the plan emits nothing for it (planReplacedCallArguments).
+            if (argV.getDefiningOp() && m.isReplacedCallArgument(argV.getDefiningOp())) continue;
             mlir::Type pointee = pt.getPointee();
             // Skip: function pointers (don't nondeterminize code), void*
             // (unknown size), incomplete record types, and std:: structs that
