@@ -14,20 +14,23 @@
  * limitations under the License.
  */
 
-// Issue #2 and #3: a handler of a virtual base class needs the offset of the
-// virtual base, which is in the vtable of the object at run time. The handler
-// selection decides each pair during the translation, so cir2c rejects it.
+// A pointer exception that a handler matches only through a virtual base class:
+// the object can be more derived than the pointer type, so the offset is not
+// known during the translation (issue #30).
 
-// cir2c-test-expect-error: through a virtual base class
+// cir2c-test-expect-error: through a virtual base class at an offset that is not known
 
-struct Base { int b; };
-struct Derived : virtual Base { int d; };
+struct Base { int id = 42; };
+struct Left : virtual Base {};
+struct Right : virtual Base {};
+struct Diamond : Left, Right {};
 
 int main() {
+  static Diamond d;
   try {
-    throw Derived();
-  } catch (Base &b) {
-    return b.b;
+    throw &d;
+  } catch (Base *b) {
+    return b->id == 42 ? 0 : 1;
   }
-  return 1;
+  return 2;
 }

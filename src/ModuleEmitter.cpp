@@ -826,6 +826,106 @@ static const char *operatorNewBody(llvm::StringRef mangled) {
   return "{ void *r = malloc(p0); if (!r) abort(); return r; }";
 }
 
+bool Mapper::dependsOnLibraryVptr(mlir::Value value) const {
+  llvm::SmallVector<mlir::Value, 16> work{value};
+  llvm::DenseSet<mlir::Value> seen;
+  while (!work.empty()) {
+    mlir::Value v = work.pop_back_val();
+    if (!seen.insert(v).second || seen.size() > 64) continue;
+    mlir::Operation *def = v.getDefiningOp();
+    if (!def) continue;
+    if (auto vptr = mlir::dyn_cast<cir::VTableGetVPtrOp>(def)) {
+      auto pointer = mlir::dyn_cast<cir::PointerType>(vptr.getSrc().getType());
+      auto record = pointer ? mlir::dyn_cast<cir::RecordType>(pointer.getPointee())
+                            : cir::RecordType();
+      if (record && record.getName() && record.getName().getValue().starts_with("std::") &&
+          !definedVtableClasses_.count(record.getName().getValue().str()))
+        return true;
+      continue;
+    }
+    if (!mlir::isa<cir::LoadOp, cir::CastOp, cir::PtrStrideOp, cir::BaseClassAddrOp,
+                   cir::GetMemberOp>(def))
+      continue;
+    for (mlir::Value operand : def->getOperands()) work.push_back(operand);
+  }
+  return false;
+}
+
+void Mapper::planReplacedCallArguments(mlir::ModuleOp module) {
+  replacedCallArguments_.clear();
+  // Whether a call that the call handler replaces (issue #7: a direct std::
+  // call under --externalize-std) reads its operand. A replaced call with a
+  // result reads none. A replaced void call writes unknown values through its
+  // pointer arguments, except through a pointer to a function, to void, to an
+  // incomplete record or to a std:: struct that the output only declares (the
+  // same tests as the call handler).
+  auto replacedCallReadsOperand = [&](mlir::OpOperand &use) -> std::optional<bool> {
+    mlir::Operation *op = use.getOwner();
+    if (!mlir::isa<cir::CallOp>(op) && !mlir::isa<cir::TryCallOp>(op)) return std::nullopt;
+    std::string callee;
+    if (auto sa = op->getAttrOfType<mlir::StringAttr>("callee")) callee = sa.getValue().str();
+    else if (auto sr = op->getAttrOfType<mlir::SymbolRefAttr>("callee"))
+      callee = sr.getRootReference().str();
+    if (callee.empty() || !externalizeStd_ || !isStdCallName(callee, demangle(callee)))
+      return std::nullopt;
+    if (op->getNumResults() > 0) return false;
+    // A pointer into a library object whose vtable is not in the module (for
+    // example the basic_ios part of std::cout): only replaced calls use that
+    // memory, and its address needs the vptr that no code of the output sets.
+    if (dependsOnLibraryVptr(use.get())) return false;
+    auto pointer = mlir::dyn_cast<cir::PointerType>(use.get().getType());
+    if (!pointer) return false;
+    mlir::Type pointee = pointer.getPointee();
+    if (mlir::isa<cir::FuncType>(pointee) || mlir::isa<cir::VoidType>(pointee)) return false;
+    if (auto record = mlir::dyn_cast<cir::RecordType>(pointee)) {
+      if (!record.isComplete()) return false;
+      if (record.getName()) {
+        std::string cname = record.getName().getValue().empty()
+                                ? anonRecordCName(record)
+                                : recordCName(record.getName());
+        if (!isStdStructFullyDefined(cname)) return false;
+      }
+    }
+    return true;
+  };
+  // Operations that only compute a value: no write, no call, no region.
+  auto computesOnly = [](mlir::Operation *op) {
+    if (op->getNumRegions() != 0 || op->getNumResults() != 1) return false;
+    if (mlir::isa<cir::LoadOp>(op))
+      return !op->hasAttr("is_volatile") && !op->hasAttr("mem_order");
+    return mlir::isa<cir::GetGlobalOp, cir::VTableGetVPtrOp, cir::CastOp, cir::PtrStrideOp,
+                     cir::ConstantOp, cir::BaseClassAddrOp, cir::GetMemberOp>(op);
+  };
+  module->walk([&](cir::FuncOp f) {
+    std::vector<mlir::Operation *> ops;
+    f->walk<mlir::WalkOrder::PreOrder>([&](mlir::Operation *op) { ops.push_back(op); });
+    // Users come after their operands in this order, so a reverse pass sees
+    // the users first; repeat until nothing changes.
+    for (bool changed = true; changed;) {
+      changed = false;
+      for (auto it = ops.rbegin(); it != ops.rend(); ++it) {
+        mlir::Operation *op = *it;
+        if (replacedCallArguments_.count(op) || !computesOnly(op)) continue;
+        mlir::Value result = op->getResult(0);
+        if (result.use_empty()) continue;
+        bool removed = true;
+        for (mlir::OpOperand &use : result.getUses()) {
+          if (replacedCallArguments_.count(use.getOwner())) continue;
+          std::optional<bool> reads = replacedCallReadsOperand(use);
+          if (!reads || *reads) {
+            removed = false;
+            break;
+          }
+        }
+        if (removed) {
+          replacedCallArguments_.insert(op);
+          changed = true;
+        }
+      }
+    }
+  });
+}
+
 void Mapper::computeMayThrow(mlir::ModuleOp module) {
   if (mayThrowComputed_) return;
   mayThrowComputed_ = true;
@@ -2438,6 +2538,9 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     // potentially-forward-declared std types (e.g. the void std:: call handler).
     stdValueUsedStructs_ = stdStructValueUsed;
   }
+  // After the classification above: a replaced void call reads a pointer
+  // argument only when the output defines the struct that it points to.
+  planReplacedCallArguments(module);
 
   // Order structs to satisfy dependencies: if a struct references another
   // struct in its fields, emit the dependency first. Simple fixed-point topo.
@@ -2968,17 +3071,18 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
   // the other units can define its symbols.
   if (vtableViewMisused_) return false;
   if (isTopLevelModule && isCxx && definesMain && !tuPart_ && !undefinedSymbols_.empty()) {
-    llvm::errs() << "cir2c: error: with --no-externalize-std, the output must "
-                    "define each function and object that it uses, outside the "
-                    "C standard library (README 8.2). These have no "
-                    "definition:\n";
+    // The ICSE 2027 camera-ready version reports the undefined symbols and
+    // translates (main stops here): a verification tool chooses their behavior.
+    llvm::errs() << "cir2c: warning: with --no-externalize-std, the output uses "
+                    "functions and objects outside the C standard library that it "
+                    "does not define (README 8.2); a verification tool chooses "
+                    "their behavior. These have no definition:\n";
     for (const std::string &symbol : undefinedSymbols_) {
       std::string demangled = demangleSymbol(symbol);
       llvm::errs() << "  " << demangled;
       if (demangled != symbol) llvm::errs() << "  [" << symbol << "]";
       llvm::errs() << "\n";
     }
-    return false;
   }
 
   // A type without a C type, in the part of the module that the output contains

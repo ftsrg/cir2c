@@ -60,6 +60,10 @@ BLOCKLIST_OPS=(
     "cir.int<u, 128>"                  # 128-bit integers (__int128) — unsupported (also crashes the mapper)
     "cir.eh.setjmp"                    # MSVC-SEH / __builtin_setjmp — not modellable
     "cir.eh.longjmp"                   # MSVC-SEH / __builtin_longjmp — not modellable
+    # The ICSE 2027 camera-ready version:
+    "cir.is_fp_class"                  # FP classification — out of scope, as in the submission
+    "@pthread_create"                  # threads — the output has one thread (README 5.1)
+    "@thrd_create"                     # threads — the output has one thread (README 5.1)
     "cir.indirect_br"                  # computed goto (GNU &&label / goto *p) — no ISO C equivalent
     "cir.indirect_goto"                # computed goto, the form LLVM 24 emits — same reason
 )
@@ -577,6 +581,21 @@ run_cpp_test() {
     expected=$(sed -n 's|^// cir2c-test-expect-error: ||p' "$cpp_file")
     if [[ -n "$expected" && "$EXTERNALIZE_STD_FLAG" != "--no-externalize-std" ]]; then
         echo "SKIPPED|$test_name|the expected error is for --no-externalize-std"; return
+    fi
+    # The ICSE 2027 camera-ready version reports these rejections of main as
+    # warnings (undefined symbols, library vtable reads) or skips them (no
+    # models, floating-point classification); see the README of this branch.
+    case "$test_name" in
+        test_reject_cin_state|test_reject_cin_string|test_reject_new_handler|test_reject_sstream|test_reject_undefined_function|test_reject_signaling_nan|test_reject_library_vptr_use)
+            echo "SKIPPED|$test_name|main only: a rejection that the camera-ready version does not make"; return ;;
+    esac
+    # "cir2c-test-strict-only:" (a reason): the test checks behavior that
+    # --externalize-std replaces with unknown values, for example the state of
+    # a library object. With that option, the test is skipped.
+    local strict_only
+    strict_only=$(sed -n 's|^// cir2c-test-strict-only: ||p' "$cpp_file" | head -1)
+    if [[ -n "$strict_only" && "$EXTERNALIZE_STD_FLAG" == "--externalize-std" ]]; then
+        echo "SKIPPED|$test_name|strict only: $strict_only"; return
     fi
     # "cir2c-test-expect-error-externalize-std:" lines: an error that only
     # --externalize-std gives. Without that option, the test runs as usual.

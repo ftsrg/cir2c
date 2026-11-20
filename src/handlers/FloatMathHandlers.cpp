@@ -18,6 +18,8 @@
 #include "handlers/HandlerSupport.h"
 #include "Mapper.h"
 
+#include <llvm/Support/raw_ostream.h>
+
 #include <mlir/IR/Operation.h>
 #include <llvm/Support/Casting.h>
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
@@ -224,6 +226,13 @@ private:
   // cir.is_fp_class (from __builtin_isnan, __builtin_isfinite, ...) as a
   // comparison per class, so verifiers need no classification builtin.
   static bool handleIsFPClass(cir::IsFPClassOp op, Mapper &m, std::ostream &out) {
+    // The ICSE 2027 camera-ready version keeps floating-point classification
+    // out of scope, as the submission version did (main translates it).
+    if (op) {
+      llvm::errs() << "cir2c: error: floating-point classification (cir.is_fp_class) "
+                      "is out of scope of this version (README 8.1)\n";
+      return false;
+    }
     Operation *o = op.getOperation();
     std::string x = m.getOrCreateName(o->getOperand(0));
     std::string ctype = m.mapTypeToC(o->getOperand(0).getType());

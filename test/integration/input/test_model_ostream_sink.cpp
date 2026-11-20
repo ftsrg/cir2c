@@ -20,11 +20,10 @@
 // The native run uses the real library, so equal exit codes show that the
 // model keeps the stream state and evaluates the operands as the library does.
 //
-// With --externalize-std, the model is not used. std::cout is then the object
-// of the compiled libc++, whose vtable pointer is unknown, so the conversion to
-// the virtual base std::basic_ios stops cir2c (issue #3).
+// With --externalize-std, the model is not used: the calls of the library are
+// replaced, and the stream state is unknown (issue #32).
 
-// cir2c-test-expect-error-externalize-std: is unknown, so its vtable entries cannot be read
+// cir2c-test-strict-only: the test checks the stream state, which --externalize-std replaces with unknown values
 
 #include <iostream>
 #include <string>

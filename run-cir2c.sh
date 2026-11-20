@@ -147,7 +147,10 @@ fi
 # header there replaces the libc++ header of the same name. clang reads
 # prelude.h before the first line of the program. To use other models, change
 # this list.
-MODELS=(libcxx-out-of-line ostream-sink istream-nondet)
+# The ICSE 2027 camera-ready version uses no models, as the submission version
+# did (CAMERA-READY.md of the paper artifact). main has:
+#   MODELS=(libcxx-out-of-line ostream-sink istream-nondet)
+MODELS=()
 MODEL_FLAGS=()
 if [[ "$LANG" == "c++" && "$EXTERNALIZE_STD" == false ]]; then
     declare -A MODEL_HEADERS=()
