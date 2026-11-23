@@ -534,8 +534,21 @@ private:
   // subsequent handler does not double-destroy.
   static bool handleEndCatch(cir::EndCatchOp op, Mapper &m, std::ostream &out) {
     m.setHasExceptions();
-    out << "  if (__cir_exc_dtor) { void (*__d)(void*) = (void(*)(void*))__cir_exc_dtor; "
-           "__d(__cir_exc_ptr); __cir_exc_dtor = (void*)0; }\n";
+    // A direct call of each destructor a throw of this module records, so the verifier needs no
+    // function pointer; another translation unit may throw too, which only the pointer covers.
+    out << "  if (__cir_exc_dtor) {\n";
+    const char *keyword = "if";
+    for (const auto &sym : m.getEhDtors()) {
+      std::string name = m.getFunctionOutputName(sym);
+      out << "    " << keyword << " (__cir_exc_dtor == (void*)&" << name << ") " << name
+          << "(__cir_exc_ptr);\n";
+      keyword = "else if";
+    }
+    std::string generic =
+        "{ void (*__d)(void*) = (void(*)(void*))__cir_exc_dtor; __d(__cir_exc_ptr); }";
+    if (m.getEhDtors().empty()) out << "    " << generic << "\n";
+    else if (m.isTuPart()) out << "    else " << generic << "\n";
+    out << "    __cir_exc_dtor = (void*)0;\n  }\n";
     return true;
   }
 
