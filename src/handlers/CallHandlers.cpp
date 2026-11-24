@@ -105,14 +105,54 @@ private:
       for (unsigned i = 1; i < o->getNumOperands(); ++i)
         args += ", " + pointerOperandExpr(o->getOperand(i), m);
 
+      // The functions the slot can hold for the object's static class: called directly, so the
+      // verifier needs no function pointer. The intrinsic remains for a set that may be incomplete.
+      std::vector<std::string> targets;
+      bool complete = false;
+      if (auto pt = mlir::dyn_cast<cir::PointerType>(object.getType()))
+        if (auto rt = mlir::dyn_cast<cir::RecordType>(pt.getPointee()))
+          if (rt.getName())
+            complete = m.virtualTargets(rt.getName().getValue().str(), slot, ft, targets);
+
+      std::string tmp;
       if (o->getNumResults() > 0) {
-        std::string tmp = m.freshName("vcall");
-        out << "  " << retType << " " << tmp
-            << " = (" << retType << ")" << intrinsic << "(" << args << ");\n";
+        tmp = m.freshName("vcall");
+        out << "  " << retType << " " << tmp << ";\n";
         m.setName(o->getResult(0), tmp);
-      } else {
-        out << "  " << intrinsic << "(" << args << ");\n";
       }
+      auto assign = [&](const std::string &call) {
+        return tmp.empty() ? call + ";" : tmp + " = (" + retType + ")" + call + ";";
+      };
+      std::string generic = assign(intrinsic + "(" + args + ")");
+      if (!complete) {
+        out << "  " << generic << "\n";
+        return true;
+      }
+      if (targets.empty()) {
+        // No object of the static class exists, so the call is never made.
+        out << "  abort();\n";
+        return true;
+      }
+      std::string fn = m.freshName("vfn");
+      out << "  void* " << fn << " = ((void**)*(void**)" << pointerOperandExpr(object, m)
+          << ")[" << slot << "];\n";
+      const char *keyword = "if";
+      for (const auto &target : targets) {
+        cir::FuncType tt = m.getFunctionType(target);
+        std::string name = m.getFunctionOutputName(target);
+        std::string call = name + "(";
+        for (unsigned i = 1; i < o->getNumOperands(); ++i) {
+          if (i > 1) call += ", ";
+          call += "(" + m.mapTypeToC(tt.getInputs()[i - 1]) + ")" +
+                  pointerOperandExpr(o->getOperand(i), m);
+        }
+        call += ")";
+        out << "  " << keyword << " (" << fn << " == (void*)&" << name << ") { "
+            << assign(call) << " }\n";
+        keyword = "else if";
+      }
+      // No class of this module puts another function in the slot.
+      out << "  else abort();\n";
       return true;
     }
     // ─────────────────────────────────────────────────────────────────────────

@@ -21,6 +21,7 @@
 #include "TypeMapper.h"
 
 #include <clang/CIR/Dialect/IR/CIROpsEnums.h>
+#include <clang/CIR/Dialect/IR/CIRTypes.h>
 #include <mlir/IR/Operation.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/Builders.h>
@@ -31,6 +32,7 @@
 #include <sstream>
 #include <memory>
 #include <set>
+#include <tuple>
 #include <string>
 #include <functional>
 #include <unordered_map>
@@ -119,6 +121,7 @@ public:
   /// needs: `static` for internal symbols, `weak` for the ones each unit may
   /// define, and constructors that main cannot call by name.
   void setTuPart(bool v) { tuPart_ = v; }
+  bool isTuPart() const { return tuPart_; }
   std::string tuPartLinkage(cir::GlobalLinkageKind linkage) const;
   std::string tuPartInitAttr(const std::string &sym) const;
   /// True when the named C struct will be emitted with a full definition
@@ -423,6 +426,23 @@ private:
   // Some base subobject is not at offset 0: handlers then record the offset
   // of the caught subobject in __cir_exc_adj.
   bool ehHasOffsetBases_ = false;
+  // Destructors that cir.throw records for its exception object, in a stable order.
+  std::set<std::string> ehDtorSymbols_;
+  // Virtual dispatch: the entries of each vtable defined here (per address-point group: a function
+  // or typeinfo symbol, or empty), vtables only declared, every address point a vptr is set to,
+  // the typeinfo symbol of each class by its qualified name, and the type of each function.
+  std::unordered_map<std::string, std::vector<std::vector<std::string>>> vtableGroups_;
+  std::set<std::string> externVtables_;
+  std::set<std::tuple<std::string, int, int>> vtableAddressPoints_;
+  std::unordered_map<std::string, std::string> typeinfoByClass_;
+  std::unordered_map<std::string, std::string> typeinfoByDemangledName_;
+  // Classes some object of which, or of a subclass, may exist: a vptr is stored through a pointer
+  // to it, or a pointer to a subclass is converted to one.
+  std::set<std::string> instantiableClasses_;
+  // An external function or global may hand over an object constructed outside this module.
+  bool objectsFromOutside_ = false;
+  std::unordered_map<std::string, cir::FuncType> functionTypes_;
+  bool usesConstructionVtables_ = false;
   // Stack of landing-pad labels for the currently open structured cir.try
   // bodies (innermost on top).  When a cir.throw fires inside a try body it
   // jumps to the top-of-stack label instead of returning, so the enclosing
@@ -547,6 +567,20 @@ public:
     ehBases_[sym] = std::move(bases);
   }
   bool ehHasOffsetBases() const { return ehHasOffsetBases_; }
+  void registerEhDtor(const std::string &sym) { ehDtorSymbols_.insert(sym); }
+  /// The type of a function of this module, by symbol (null if unknown).
+  cir::FuncType getFunctionType(const std::string &sym) const {
+    auto it = functionTypes_.find(sym);
+    return it == functionTypes_.end() ? cir::FuncType() : it->second;
+  }
+  /// Record the class hierarchy facts virtual dispatch relies on; see virtualTargets.
+  void collectVirtualDispatch(mlir::ModuleOp module);
+  /// The functions a virtual call through vtable slot \p slot, of type \p ft, on an object of
+  /// static class \p cls can reach: the slot's entry in each vtable of a class derived from it.
+  /// False if the set may be incomplete (a class outside this module could override the slot).
+  bool virtualTargets(const std::string &cls, int slot, cir::FuncType ft,
+                      std::vector<std::string> &targets) const;
+  const std::set<std::string> &getEhDtors() const { return ehDtorSymbols_; }
   /// Offset of the \p base subobject in a \p sym object: nullopt if \p sym
   /// does not publicly derive from \p base, -1 if the path has a virtual base.
   std::optional<long> ehBaseOffset(const std::string &sym,

@@ -18,6 +18,7 @@
 // that file small): top-level module/function/global emission, prototype
 // emission, and the pre-scans + preamble.
 
+#include <llvm/Demangle/Demangle.h>
 #include "RecordLayout.h"
 #include "Mapper.h"
 #include "ConstantEmitter.h"
@@ -2129,6 +2130,8 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
         setHasExceptions();
         if (auto ti = throwOp.getTypeInfoAttr())
           registerEhTypeSymbol(ti.getValue().str());
+        if (auto dtor = throwOp.getDtorAttr())
+          registerEhDtor(dtor.getValue().str());
       } else if (auto dispOp = llvm::dyn_cast<cir::EhDispatchOp>(&op)) {
         setHasExceptions();
         recordHandlerArray(dispOp.getCatchTypesAttr());
@@ -2187,6 +2190,7 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
         registerEhBases(global.getSymName().str(), std::move(bases));
     });
     if (hasExceptions_) registerDerivedEhTypes();
+    collectVirtualDispatch(module);
   }
 
   // abort() is called by our synthesised EH-termination and trap code, not
@@ -2511,6 +2515,125 @@ bool Mapper::mapModule(ModuleOp module, std::ostream &realOut) {
     if (usesMemberFnPtr_)
       llvm::errs() << "xcfa-mapper: warning: output uses __attribute__((aligned(2))) "
                       "for pointer-to-member dispatch; functions must stay 2-byte aligned.\n";
+  }
+  return true;
+}
+
+void Mapper::collectVirtualDispatch(mlir::ModuleOp module) {
+  module->walk([&](cir::GlobalOp global) {
+    std::string sym = global.getSymName().str();
+    if (sym.rfind("_ZTC", 0) == 0 || sym.rfind("_ZTT", 0) == 0) usesConstructionVtables_ = true;
+    if (sym.rfind("_ZTI", 0) == 0) {
+      std::string demangled = llvm::demangle(sym);
+      const std::string prefix = "typeinfo for ";
+      if (demangled.rfind(prefix, 0) == 0)
+        typeinfoByDemangledName_[demangled.substr(prefix.size())] = sym;
+    }
+    if (sym.rfind("_ZTV", 0) != 0) return;
+    auto init = global.getInitialValue();
+    auto vt = init ? mlir::dyn_cast<cir::VTableAttr>(*init) : nullptr;
+    if (!vt) {
+      externVtables_.insert(sym);
+      return;
+    }
+    auto &groups = vtableGroups_[sym];
+    for (auto group : vt.getData()) {
+      groups.emplace_back();
+      auto arr = mlir::dyn_cast<cir::ConstArrayAttr>(group);
+      auto elts = arr ? mlir::dyn_cast<mlir::ArrayAttr>(arr.getElts()) : nullptr;
+      if (!elts) continue;
+      for (auto e : elts) {
+        auto gv = mlir::dyn_cast<cir::GlobalViewAttr>(e);
+        groups.back().push_back(gv ? gv.getSymbol().getValue().str() : "");
+      }
+    }
+  });
+  module->walk([&](cir::FuncOp f) { functionTypes_[f.getSymName().str()] = f.getFunctionType(); });
+  module->walk([&](cir::VTableAddrPointOp op) {
+    auto ap = op.getAddressPoint();
+    vtableAddressPoints_.insert({op.getName().str(), ap.getIndex(), ap.getOffset()});
+  });
+  // A constructor stores its class's vtable into the object's vptr: the class's typeinfo is the
+  // one that vtable names. This also covers a class whose CIR name is no demangled typeinfo name.
+  module->walk([&](cir::StoreOp store) {
+    auto ap = store.getValue().getDefiningOp<cir::VTableAddrPointOp>();
+    auto vptr = store.getAddr().getDefiningOp<cir::VTableGetVPtrOp>();
+    if (!ap || !vptr) return;
+    auto pt = mlir::dyn_cast<cir::PointerType>(vptr.getSrc().getType());
+    auto rt = pt ? mlir::dyn_cast<cir::RecordType>(pt.getPointee()) : nullptr;
+    auto it = vtableGroups_.find(ap.getName().str());
+    if (rt && rt.getName()) instantiableClasses_.insert(rt.getName().getValue().str());
+    if (!rt || !rt.getName() || it == vtableGroups_.end()) return;
+    int group = ap.getAddressPoint().getIndex(), offset = ap.getAddressPoint().getOffset();
+    if (group < 0 || group >= (int)it->second.size() || offset < 1 ||
+        offset > (int)it->second[group].size())
+      return;
+    const std::string &ti = it->second[group][offset - 1];
+    if (ti.rfind("_ZTI", 0) == 0 && group == 0)
+      typeinfoByClass_.emplace(rt.getName().getValue().str(), ti);
+  });
+  auto involvesRecord = [](mlir::Type t) {
+    while (auto pt = mlir::dyn_cast<cir::PointerType>(t)) t = pt.getPointee();
+    return mlir::isa<cir::RecordType>(t);
+  };
+  module->walk([&](cir::FuncOp f) {
+    if (!f.isDeclaration()) return;
+    auto ft = f.getFunctionType();
+    if (involvesRecord(ft.getReturnType())) objectsFromOutside_ = true;
+    for (auto in : ft.getInputs())
+      if (involvesRecord(in)) objectsFromOutside_ = true;
+  });
+  module->walk([&](cir::GlobalOp g) {
+    std::string sym = g.getSymName().str();
+    if (g.getInitialValue() || sym.rfind("_ZT", 0) == 0) return;
+    if (involvesRecord(g.getSymType())) objectsFromOutside_ = true;
+  });
+  module->walk([&](cir::BaseClassAddrOp op) {
+    auto pt = mlir::dyn_cast<cir::PointerType>(op.getType());
+    auto rt = pt ? mlir::dyn_cast<cir::RecordType>(pt.getPointee()) : nullptr;
+    if (rt && rt.getName()) instantiableClasses_.insert(rt.getName().getValue().str());
+  });
+}
+
+bool Mapper::virtualTargets(const std::string &cls, int slot, cir::FuncType ft,
+                            std::vector<std::string> &targets) const {
+  // Closed world: every class whose vtable is defined in this module is known; one whose vtable
+  // is only declared belongs to a library and cannot derive from a class defined here.
+  if (tuPart_ || usesConstructionVtables_) return false;
+  // No object of the class exists: the call is never made.
+  // Operational-model classes exist only in the headers compiled into this module.
+  bool modelClass = cls.rfind("std::__1::__om_", 0) == 0;
+  if ((modelClass || !objectsFromOutside_) && !instantiableClasses_.count(cls)) return true;
+  std::string ti;
+  if (auto it = typeinfoByClass_.find(cls); it != typeinfoByClass_.end()) ti = it->second;
+  else if (auto it = typeinfoByDemangledName_.find(cls); it != typeinfoByDemangledName_.end())
+    ti = it->second;
+  else return false;
+  if (!vtableGroups_.count("_ZTV" + ti.substr(4))) return false;
+  auto sameSignature = [&](cir::FuncType other) {
+    auto a = ft.getInputs(), b = other.getInputs();
+    if (a.size() != b.size() || ft.getReturnType() != other.getReturnType()) return false;
+    for (size_t i = 1; i < a.size(); ++i)
+      if (a[i] != b[i]) return false;
+    return true;
+  };
+  std::set<std::string> seen;
+  for (const auto &[vtable, group, offset] : vtableAddressPoints_) {
+    auto it = vtableGroups_.find(vtable);
+    if (it == vtableGroups_.end()) {
+      if (externVtables_.count(vtable)) continue;
+      return false;
+    }
+    if (group < 0 || group >= (int)it->second.size()) return false;
+    const auto &entries = it->second[group];
+    if (offset < 1 || offset > (int)entries.size()) return false;
+    if (!ehBaseOffset(entries[offset - 1], ti)) continue;
+    if (offset + slot >= (int)entries.size()) return false;
+    const std::string &fn = entries[offset + slot];
+    if (fn.empty() || fn == "__cxa_pure_virtual") continue;
+    auto type = functionTypes_.find(fn);
+    if (type == functionTypes_.end() || !sameSignature(type->second)) return false;
+    if (seen.insert(fn).second) targets.push_back(fn);
   }
   return true;
 }
